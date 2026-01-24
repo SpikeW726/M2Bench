@@ -229,8 +229,10 @@ class MASUPEnv(EventDrivenEnv):
         if self.obs_timer < self.T_time:
             self.worst_idleness_fromT = 0.0
         else:
-            if self.instant_worst_idleness > self.worst_idleness_fromT:
-                self.worst_idleness_fromT = self.instant_worst_idleness
+            # 使用 metrics_tracker 中的 iwi (Instantaneous Worst Idleness)
+            current_iwi = self.world.current_metrics.iwi
+            if current_iwi > self.worst_idleness_fromT:
+                self.worst_idleness_fromT = current_iwi
     
     def _update_timers(self, dt: float):
         """更新 obs_timer"""
@@ -260,6 +262,15 @@ class MASUPEnv(EventDrivenEnv):
         """构建所有智能体的观测"""
         obs = {}
         weighted_idleness = [self.world.graph.phi[node] * self.world.node_idleness[node] for node in self.world.graph.nodes]
+        agent_positions = [
+            val
+            for aid in range(self.world.num_agents)
+            for val in [
+                self.world.agents[aid].last_position,
+                self.world.agents[aid].target_node,
+                self.world.agents[aid].action_remaining
+            ]
+        ]
 
         for agent_id in range(self.world.num_agents):
             agent_status = self.world.agents[agent_id]
@@ -268,14 +279,14 @@ class MASUPEnv(EventDrivenEnv):
 
             if self.role_ifm == "agent-index":
                 single_obs = (
-                    [agent_status.last_position, agent_status.target_node, agent_status.action_remaining]
+                    agent_positions
                     + weighted_idleness
                     + [ready_flag, self.worst_idleness_fromT, self.obs_timer]
                     + agent_id_one_hot
                 )
             elif self.role_ifm == "position":
                 single_obs = (
-                    [agent_status.last_position, agent_status.target_node, agent_status.action_remaining]
+                    agent_positions
                     + weighted_idleness
                     + [ready_flag, self.worst_idleness_fromT, self.obs_timer, agent_status.position]
                 )
@@ -365,3 +376,83 @@ class MASUPEnv(EventDrivenEnv):
         """返回有效动作索引列表"""
         mask = self.get_action_mask(agent_str)
         return [int(x) for x in np.where(mask)[0]]
+
+    # ==================== 启发式采样接口 ====================
+    
+    def get_heuristic_obs(self) -> Dict[str, Dict]:
+        """
+        返回启发式算法需要的观测格式,目前只适配ERPolicy
+        
+        Returns:
+            {agent_str: {
+                'current_node': int,      # 当前节点
+                'neighbors': List[int],   # 邻居节点列表
+                'on_edge': bool           # 是否在边上移动中
+            }}
+        """
+        obs_dict = {}
+        for agent_id in range(self.world.num_agents):
+            agent_status = self.world.agents[agent_id]
+            current_pos = agent_status.position
+            neighbors = self.world.graph.get_neighbors(current_pos)
+            on_edge = agent_status.state == AgentState.ON_EDGE
+            
+            obs_dict[f"agent_{agent_id}"] = {
+                'current_node': current_pos,
+                'neighbors': neighbors,
+                'on_edge': on_edge,
+            }
+        return obs_dict
+    
+    def get_global_state_for_heuristic(self) -> Dict:
+        """
+        返回启发式算法需要的全局状态,目前只适配ERPolicy
+        
+        Returns:
+            {
+                'graph': Graph,                       # 图结构对象
+                'agent_positions': Dict[int, int],    # 智能体位置
+                'agents_on_edge': Dict[int, bool],    # 智能体是否在边上
+                'current_time': float,                # 当前仿真时间
+                'node_last_visit': Dict[int, float],  # 节点上次访问时间
+                'agent_speeds': List[float],          # 智能体速度
+                'er_avg_edge_len': float,             # 平均边长
+            }
+        """
+        # 从 idleness 反推 last_visit_time: last_visit[n] = current_time - idleness[n]
+        node_last_visit = {
+            n: self.world.current_time - self.world.node_idleness[n]
+            for n in self.world.graph.nodes
+        }
+        
+        return {
+            'graph': self.world.graph,
+            'agent_positions': {
+                i: self.world.agents[i].position 
+                for i in range(self.world.num_agents)
+            },
+            'agents_on_edge': {
+                i: self.world.agents[i].state == AgentState.ON_EDGE
+                for i in range(self.world.num_agents)
+            },
+            'current_time': self.world.current_time,
+            'node_last_visit': node_last_visit,
+            'agent_speeds': self.world.speeds,
+            'er_avg_edge_len': self.world.graph.get_average_edge_length() if hasattr(self.world.graph, 'get_average_edge_length') else 1.0,
+        }
+    
+    def convert_heuristic_action(self, agent_str: str, neighbor_idx: int) -> int:
+        """
+        将启发式动作(邻居索引)转换为 MASUPEnv 动作索引
+        
+        Args:
+            agent_str: 智能体标识符,如 "agent_0"
+            neighbor_idx: 邻居列表中的索引 (0-based)
+        
+        Returns:
+            MASUPEnv 动作索引: 0=wait, 1~N=neighbors, N+1=no-op
+            邻居索引 0 -> 动作索引 1
+        """
+        # MASUPEnv 动作空间: 0=wait, 1~N=neighbors, N+1=no-op
+        # 启发式返回的是邻居索引 (0-based)
+        return neighbor_idx + 1

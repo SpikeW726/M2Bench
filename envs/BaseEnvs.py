@@ -49,7 +49,7 @@ class EventDrivenEnv(ParallelEnv):
             
             if self.world.is_ready(agent_id):
                 if self.enable_wait:
-                    if action_idx == 0:
+                    if action_idx == 0: # 所有动作空间有"等待"的环境须遵循 action_idx=0 代表"等待"
                         self.world.set_wait_action(agent_id)
                     else:
                         target = self._action_to_target(agent_id, action_idx)

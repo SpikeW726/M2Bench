@@ -1,0 +1,3 @@
+algorithm_params:
+  exploration_rate: 0.0            # 评估设 0
+  use_avg_len_lower_bound: true    # 使用均值边长作为旅行时间下界（避免短边抖动）

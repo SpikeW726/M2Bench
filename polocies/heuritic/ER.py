@@ -19,7 +19,7 @@ class ERPolicy(HeuriticBasePolicy):
     Design:
     - compute_actions: SEQUENTIAL decision - agents decide one by one
     - _compute_action: single agent decision using intention-based coordination
-    - Maintains intention table (er_intention_eta) in global_state for conflict avoidance
+    - Maintains intention table (_intention_eta) for conflict avoidance
     
     Sequential Decision Protocol:
         Agent 0 decides → intention recorded → Agent 1 sees Agent 0's intention → 
@@ -37,6 +37,13 @@ class ERPolicy(HeuriticBasePolicy):
         self.use_avg_len_lower_bound: bool = bool(
             config.get("use_avg_len_lower_bound", ap.get("use_avg_len_lower_bound", True))
         )
+        
+        # ER算法内部状态: 意图表 {node_id: expected_arrival_time}
+        self._intention_eta: Dict[int, float] = {}
+    
+    def reset(self):
+        """重置策略内部状态,每个episode开始时调用"""
+        self._intention_eta.clear()
 
     def compute_actions(
         self,
@@ -48,7 +55,7 @@ class ERPolicy(HeuriticBasePolicy):
         
         Sequential Decision Protocol:
             - Agents decide one by one in order
-            - Each agent's decision (intention) is immediately recorded in global_state
+            - Each agent's decision (intention) is immediately recorded
             - Subsequent agents can see previous agents' intentions and avoid conflicts
         
         Args:
@@ -64,18 +71,12 @@ class ERPolicy(HeuriticBasePolicy):
                 - 'agent_speeds': List[float] (agent speeds from physical world)
                 - 'current_time': float (current simulation time)
                 - 'node_last_visit': Dict[int, float] (last visit time for each node)
-                - 'er_intention_eta': Dict[int, float] (intention ETA for each node)
                 - 'er_avg_edge_len': float (average edge length, optional)
         
         Returns:
             actions: {agent_str: action_idx} for agents that need to decide
         """
         actions = {}
-        
-        # Ensure er_intention_eta exists in global_state
-        if 'er_intention_eta' not in global_state:
-            global_state['er_intention_eta'] = {}
-        er_intention_eta = global_state['er_intention_eta']
         
         # Sequential decision: process agents one by one
         for agent_str, obs in obs_dict.items():
@@ -89,7 +90,7 @@ class ERPolicy(HeuriticBasePolicy):
             if on_edge:
                 continue
             
-            # Compute action (can see previous agents' intentions via er_intention_eta)
+            # Compute action (can see previous agents' intentions via self._intention_eta)
             result = self._compute_action(agent_id, obs, global_state)
             
             if result is not None:
@@ -98,9 +99,9 @@ class ERPolicy(HeuriticBasePolicy):
                 
                 # IMMEDIATELY update intention so subsequent agents can see it
                 if target_node is not None and eta is not None:
-                    existing_eta = er_intention_eta.get(target_node)
+                    existing_eta = self._intention_eta.get(target_node)
                     if existing_eta is None or eta < existing_eta:
-                        er_intention_eta[target_node] = eta
+                        self._intention_eta[target_node] = eta
         
         return actions
 
@@ -130,7 +131,6 @@ class ERPolicy(HeuriticBasePolicy):
         graph = global_state.get('graph')
         current_time = global_state.get('current_time', 0.0)
         node_last_visit = global_state.get('node_last_visit', {})
-        er_intention_eta = global_state.get('er_intention_eta', {})
         
         # Average edge length lower bound (to avoid short-edge oscillation)
         avg_len_lb = 0.0
@@ -158,8 +158,8 @@ class ERPolicy(HeuriticBasePolicy):
             
             t_next = current_time + travel_time  # Expected arrival time
             
-            # Expected idleness: use intention ETA if exists, otherwise use last visit time
-            intention_eta = er_intention_eta.get(neighbor)
+            # Expected idleness: use internal intention table if exists, otherwise use last visit time
+            intention_eta = self._intention_eta.get(neighbor)
             if intention_eta is not None and intention_eta >= current_time:
                 # Another agent has intention for this node
                 I_exp = t_next - intention_eta

@@ -165,6 +165,14 @@ class Graph:
                 edge_length.append(weight)
         return max(edge_length)
     
+    def get_average_edge_length(self) -> float:
+        """计算图中所有边的平均长度"""
+        edge_lengths = []
+        for n in self.nodes:
+            for _, weight in self.adj_list[n]:
+                edge_lengths.append(weight)
+        return sum(edge_lengths) / len(edge_lengths) if edge_lengths else 1.0
+    
     def get_max_phi(self):
         return max(self.phi.values())
 
