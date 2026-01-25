@@ -4204,3 +4204,84 @@ class HeuristicSamplerTrainer:
 
 
 
+framework/
+├── policies/
+│   ├── __init__.py
+│   ├── base_policy.py              # RLBasePolicy
+│   │
+│   ├── rl/
+│   │   ├── __init__.py
+│   │   ├── q_learning_policy.py    # QLearningPolicy (DQN, IQL, VDN, QMIX)
+│   │   ├── stochastic_actor.py     # StochasticActorPolicy (A2C, PPO, TRPO 全系列)
+│   │   └── deterministic_actor.py  # DeterministicActorPolicy (DDPG 全系列)
+│   │
+│   └── multi_agent/
+│       ├── __init__.py
+│       └── ma_policy_wrapper.py    # MultiAgentPolicy (policy mapping + batching)
+│
+├── critics/                         # 单独的 Critic 模块！
+│   ├── __init__.py
+│   ├── base_critic.py              # BaseCritic
+│   ├── independent_critic.py       # V(obs) 或 Q(obs, a) - 用于 I* 算法
+│   ├── centralized_critic.py       # V(global_state) - 用于 MA* 算法
+│   └── mixing_critic.py            # ValueMixer - 用于 VD* 算法
+│       ├── vdn_mixer.py            # 简单加和
+│       └── qmix_mixer.py           # 超网络混合
+│
+├── algorithms/
+│   ├── __init__.py
+│   ├── base_algorithm.py           # BaseAlgorithm
+│   ├── on_policy_base.py           # OnPolicyAlgorithm (GAE, advantage norm)
+│   ├── off_policy_base.py          # OffPolicyAlgorithm (target net, n-step)
+│   │
+│   ├── single_agent/               # 单体算法（基础实现）
+│   │   ├── __init__.py
+│   │   ├── ppo.py                  # PPO
+│   │   ├── a2c.py                  # A2C
+│   │   ├── dqn.py                  # DQN
+│   │   └── ddpg.py                 # DDPG
+│   │
+│   └── multi_agent/                # 多体算法
+│       ├── __init__.py
+│       │
+│       ├── independent/            # 独立学习（直接继承单体）
+│       │   ├── ippo.py             # IPPO(PPO) - 几乎无修改
+│       │   ├── ia2c.py             # IA2C(A2C)
+│       │   ├── iql.py              # IQL(DQN)
+│       │   └── iddpg.py            # IDDPG(DDPG)
+│       │
+│       ├── centralized_critic/     # 中心化 Critic（继承 + 改 Critic）
+│       │   ├── mappo.py            # MAPPO(PPO) - Critic 用 global_state
+│       │   ├── maa2c.py            # MAA2C(A2C)
+│       │   ├── maddpg.py           # MADDPG(DDPG)
+│       │   └── matrpo.py           # MATRPO(TRPO)
+│       │
+│       ├── value_decomposition/    # 值分解（组合 Mixer）
+│       │   ├── vdn.py              # VDN = IQL + SumMixer
+│       │   ├── qmix.py             # QMIX = IQL + QMIXMixer
+│       │   ├── vda2c.py            # VDA2C = IA2C + ValueMixer
+│       │   ├── vdppo.py            # VDPPO = IPPO + ValueMixer
+│       │   └── facmac.py           # FACMAC = IDDPG + Mixer
+│       │
+│       └── sequential_update/      # 序贯更新（需要重写 update）
+│           ├── happo.py            # HAPPO - sequential policy update
+│           ├── hatrpo.py           # HATRPO
+│           └── coma.py             # COMA - counterfactual baseline
+│
+├── trainers/
+│   ├── __init__.py
+│   ├── base_trainer.py
+│   ├── on_policy_trainer.py        # 处理 rollout buffer
+│   └── off_policy_trainer.py       # 处理 replay buffer
+│
+├── buffers/
+│   ├── __init__.py
+│   ├── rollout_buffer.py           # On-policy buffer
+│   ├── replay_buffer.py            # Off-policy buffer
+│   └── ma_buffer.py                # Multi-agent buffer wrapper
+│
+└── networks/
+    ├── __init__.py
+    ├── mlp.py
+    ├── rnn.py
+    └── hyper_net.py                # QMIX 的超网络

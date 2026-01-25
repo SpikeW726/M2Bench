@@ -23,10 +23,10 @@ import numpy as np
 import yaml
 from tqdm import tqdm
 
-from polocies.heuritic.HeuristicBase import HeuriticBasePolicy
-from polocies.heuritic.ER import ERPolicy
-from envs.BaseEnvs import EventDrivenEnv
-from envs.MASUPEnv import MASUPEnv
+from polocies.heuritic.heuristic_base import HeuriticBasePolicy
+from polocies.heuritic.er import ERPolicy
+from envs.base_envs import EventDrivenEnv
+from envs.masup_env import MASUPEnv
 
 
 @dataclass

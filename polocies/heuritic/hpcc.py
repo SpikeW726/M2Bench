@@ -3,7 +3,7 @@
 from typing import Dict, List, Optional, Any
 import numpy as np
 import math
-from polocies.heuritic.HeuristicBase import HeuriticBasePolicy
+from polocies.heuritic.heuristic_base import HeuriticBasePolicy
 
 class HPCCPolicy(HeuriticBasePolicy):
     """

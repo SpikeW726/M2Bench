@@ -1,6 +1,6 @@
 # big profiles
 models/
-data/
+dataset/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

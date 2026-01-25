@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from pettingzoo import ParallelEnv
-from envs.PatrolCore import PatrolWorld, TickResult
+from envs.patrol_core import PatrolWorld, TickResult
 from typing import Dict, Any, Optional
 import gymnasium
 
