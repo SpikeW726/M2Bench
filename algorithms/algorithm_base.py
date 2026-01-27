@@ -94,7 +94,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
     Features:
     - GAE computation
     - Advantage normalization
-    - Multiple epochs over same batch
+    - Internal minibatch splitting and multi-epoch updates
     """
     
     def __init__(
@@ -108,6 +108,8 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         ent_coef: float = 0.01,
         max_grad_norm: float = 0.5,
         normalize_advantage: bool = True,
+        num_minibatches: int = 4,
+        update_epochs: int = 10,
     ):
         super().__init__(policy, lr, gamma, max_grad_norm)
         self.critic = critic.to(self.device)
@@ -115,6 +117,8 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         self.vf_coef = vf_coef
         self.ent_coef = ent_coef
         self.normalize_advantage = normalize_advantage
+        self.num_minibatches = num_minibatches
+        self.update_epochs = update_epochs
         
         # Add critic params to optimizer
         self.optimizer = torch.optim.Adam(
@@ -161,6 +165,36 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         returns = advantages + values
         return advantages, returns
     
+    def prepare_batch(self, batch: RolloutBatch) -> RolloutBatch:
+        """
+        用当前 critic 计算 value, adv, ret（采样后、更新前调用）
+        
+        确保使用采样时的 critic 参数，符合 on-policy 原理。
+        """
+        batch = batch.to_tensor(self.device)
+        
+        with torch.no_grad():
+            # 计算所有 value
+            critic_input = batch.obs
+            if batch.global_state is not None:
+                critic_input = batch.global_state
+            
+            values = self.critic(critic_input).squeeze(-1)
+            
+            # 计算最后一个 obs 的 next_value
+            # 如果最后一步 done=True，next_value 应该是 0
+            last_done = batch.done[-1]
+            if last_done > 0.5:
+                next_value = torch.tensor(0.0, device=self.device)
+            else:
+                next_value = self.critic(critic_input[-1:]).squeeze(-1)
+        
+        # 计算 GAE
+        batch.adv, batch.ret = self.compute_gae(batch.rew, values, batch.done, next_value)
+        batch.value = values
+        
+        return batch
+    
     def _normalize_advantage(self, adv: torch.Tensor) -> torch.Tensor:
         """Normalize advantages to zero mean and unit std."""
         if self.normalize_advantage and len(adv) > 1:
@@ -191,8 +225,8 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         return F.mse_loss(value_pred, batch.ret)
     
     def compute_loss(self, batch: RolloutBatch) -> tuple[torch.Tensor, TrainingStats]:
-        """Compute total loss."""
-        # Normalize advantage
+        """Compute total loss for a single minibatch."""
+        # Normalize advantage at minibatch level
         batch.adv = self._normalize_advantage(batch.adv)
         
         # Policy loss
@@ -210,6 +244,64 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         stats.entropy = entropy.item()
         
         return loss, stats
+    
+    def update(self, batch: RolloutBatch) -> TrainingStats:
+        """
+        Multi-epoch minibatch update.
+        内部处理 minibatch 切分和多轮更新。
+        """
+        import numpy as np
+        
+        batch = batch.to_tensor(self.device)
+        batch_size = len(batch)
+        minibatch_size = batch_size // self.num_minibatches
+        
+        all_stats = []
+        indices = np.arange(batch_size)
+        
+        for _ in range(self.update_epochs):
+            np.random.shuffle(indices)
+            
+            for start in range(0, batch_size, minibatch_size):
+                end = start + minibatch_size
+                mb_inds = indices[start:end]
+                
+                # 构造 minibatch（复用 batch 属性）
+                minibatch = RolloutBatch(
+                    obs=batch.obs[mb_inds],
+                    act=batch.act[mb_inds],
+                    rew=batch.rew[mb_inds] if batch.rew is not None else None,
+                    done=batch.done[mb_inds] if batch.done is not None else None,
+                    log_prob=batch.log_prob[mb_inds],
+                    value=batch.value[mb_inds] if batch.value is not None else None,
+                    adv=batch.adv[mb_inds].clone(),  # clone for normalization
+                    ret=batch.ret[mb_inds],
+                    global_state=batch.global_state[mb_inds] if batch.global_state is not None else None,
+                    action_mask=batch.action_mask[mb_inds] if batch.action_mask is not None else None,
+                )
+                
+                # Compute loss and update
+                loss, stats = self.compute_loss(minibatch)
+                
+                self.optimizer.zero_grad()
+                loss.backward()
+                if self.max_grad_norm > 0:
+                    nn.utils.clip_grad_norm_(
+                        list(self.policy.parameters()) + list(self.critic.parameters()),
+                        self.max_grad_norm
+                    )
+                self.optimizer.step()
+                
+                stats.loss = loss.item()
+                all_stats.append(stats)
+        
+        # Aggregate stats
+        return TrainingStats(
+            loss=np.mean([s.loss for s in all_stats]),
+            policy_loss=np.mean([s.policy_loss for s in all_stats]),
+            value_loss=np.mean([s.value_loss for s in all_stats]),
+            entropy=np.mean([s.entropy for s in all_stats]),
+        )
 
 
 # ============================================================================

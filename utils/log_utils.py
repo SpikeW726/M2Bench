@@ -1,6 +1,7 @@
+import os
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Any, Optional
 import numpy as np
 
 
@@ -226,3 +227,161 @@ class EpisodeMetricsTracker:
                 writer.writerow([data[k][i] for k in keys])
         
         print(f"Metrics exported to {path}")
+
+
+# ==================== 跨 Episode 聚合可视化工具 ====================
+
+def aggregate_episode_metrics(
+    metrics_history: List[Dict[str, List[float]]],
+    metric_keys: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    聚合多个 episode 的 metrics 历史数据
+    
+    Args:
+        metrics_history: 多个 episode 的 metrics 历史列表
+            每个元素是 Dict[str, List[float]]，格式如 {'step': [...], 'igi': [...], ...}
+        metric_keys: 需要聚合的指标键列表，如果为 None 则自动从第一个 episode 推断
+            (排除 'step' 和 'time')
+    
+    Returns:
+        聚合后的数据字典，包含：
+        - {metric}_mean: 每个指标的均值序列
+        - {metric}_std: 每个指标的标准差序列
+        - step_x: 统一的 x 轴（step）序列
+    """
+    if not metrics_history:
+        return {}
+    
+    # 自动推断需要聚合的指标（排除 'step' 和 'time'）
+    if metric_keys is None:
+        first_ep = metrics_history[0]
+        metric_keys = [k for k in first_ep.keys() if k not in ['step', 'time']]
+    
+    # 找到最大长度用于 padding
+    max_len = max(len(m['step']) for m in metrics_history)
+    
+    # Padding 所有序列到相同长度
+    padded_metrics = {k: [] for k in metrics_history[0].keys()}
+    for metrics in metrics_history:
+        ep_len = len(metrics['step'])
+        for key, values in metrics.items():
+            if key == 'step':
+                # step 使用 0 到 ep_len-1
+                padded = list(range(ep_len))
+            else:
+                # 其他指标用最后一个值 padding
+                padded = list(values) + [values[-1]] * (max_len - ep_len)
+            padded_metrics[key].append(padded)
+    
+    # 计算均值和标准差
+    aggregated = {}
+    for key in metric_keys:
+        arr = np.array(padded_metrics[key])
+        aggregated[f'{key}_mean'] = np.mean(arr, axis=0)
+        aggregated[f'{key}_std'] = np.std(arr, axis=0)
+    
+    # 统一的 x 轴
+    aggregated['step_x'] = list(range(max_len))
+    
+    return aggregated
+
+
+def plot_aggregated_metrics(
+    aggregated_data: Dict[str, Any],
+    metric_configs: Optional[List[tuple]] = None,
+    title: str = "Multi-Episode Metrics Evaluation",
+    save_path: Optional[str] = None,
+    show: bool = True,
+    figsize: tuple = (14, 10)
+):
+    """
+    绘制聚合后的 metrics（均值线 + 标准差阴影区域）
+    
+    Args:
+        aggregated_data: 由 aggregate_episode_metrics() 返回的聚合数据
+        metric_configs: 要绘制的指标配置列表，每个元素为 (key, title, label)
+            如果为 None, 使用默认的 idleness metrics 配置
+        title: 图表标题
+        save_path: 保存路径（可选）
+        show: 是否显示图形
+        figsize: 图形大小
+    """
+    if not aggregated_data:
+        print("No data to plot")
+        return
+    
+    # 默认配置：idleness metrics
+    if metric_configs is None:
+        metric_configs = [
+            ('igi', 'Instantaneous Graph Idleness (IGI)', 'IGI'),
+            ('agi', 'Average Graph Idleness (AGI)', 'AGI'),
+            ('iwi', 'Instantaneous Worst Idleness (IWI)', 'IWI'),
+            ('wi', 'Worst Idleness (WI)', 'WI')
+        ]
+    
+    # 创建子图
+    n_metrics = len(metric_configs)
+    n_cols = 2
+    n_rows = (n_metrics + 1) // 2
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_metrics == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+    
+    fig.suptitle(title, fontsize=14)
+    
+    x_data = aggregated_data['step_x']
+    
+    for ax, (metric_key, metric_title, metric_label) in zip(axes, metric_configs):
+        mean_key = f'{metric_key}_mean'
+        std_key = f'{metric_key}_std'
+        
+        if mean_key not in aggregated_data or std_key not in aggregated_data:
+            print(f"Warning: {mean_key} or {std_key} not found in aggregated_data")
+            continue
+        
+        mean = aggregated_data[mean_key]
+        std = aggregated_data[std_key]
+        
+        ax.plot(x_data, mean, linewidth=2, label='Mean')
+        ax.fill_between(x_data, mean - std, mean + std, alpha=0.3, label='±1 Std')
+        ax.set_xlabel('Step')
+        ax.set_ylabel(metric_label)
+        ax.set_title(metric_title)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # 在图上标注最终的均值和标准差
+        # mean[-1] 和 std[-1] 是所有 episode 在最后一个时间步的统计值
+        # 由于 padding 使用最后一个值，这等价于所有 episode 最终值的统计
+        final_mean = mean[-1]
+        final_std = std[-1]
+        summary_text = f'Final: {final_mean:.4f} ± {final_std:.4f}'
+        
+        # 将文本放在图的右上角，使用半透明背景框
+        ax.text(0.98, 0.98, summary_text,
+                transform=ax.transAxes,
+                fontsize=11,
+                fontweight='bold',
+                verticalalignment='top',
+                horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85, edgecolor='gray', linewidth=1))
+    
+    # 隐藏多余的子图
+    for i in range(n_metrics, len(axes)):
+        axes[i].axis('off')
+    
+    plt.tight_layout()
+    
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to: {save_path}")
+    
+    if show:
+        plt.show()
+    else:
+        plt.close()

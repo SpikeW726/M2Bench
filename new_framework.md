@@ -4285,3 +4285,46 @@ framework/
     ├── mlp.py
     ├── rnn.py
     └── hyper_net.py                # QMIX 的超网络
+
+
+tianshou-framework:
+
+    OnPolicyAlgorithm
+    └── ActorCriticOnPolicyAlgorithm
+        ├── A2C
+        │   ├── PPO
+        │   │   └── GAIL (模仿学习)
+        │   └── NPG
+        │       └── TRPO
+        └── REINFORCE
+
+    OffPolicyAlgorithm
+    ├── QLearningOffPolicyAlgorithm (Q-Learning 系列)
+    │   ├── DQN
+    │   │   ├── BDQN (Bootstrapped DQN)
+    │   │   ├── C51 (Categorical DQN)
+    │   │   │   └── RainbowDQN
+    │   │   └── QRDQN (Quantile Regression DQN)
+    │   │       ├── IQN (Implicit Quantile Network)
+    │   │       ├── FQF (Fully Parameterized Quantile Function)
+    │   │       └── DiscreteCQL* (离线 RL)
+    │   ├── DiscreteBCQ (离线 RL)
+    │   ├── DiscreteCRR (离线 RL)
+    │   └── DiscreteSAC
+    │
+    ├── ActorCriticOffPolicyAlgorithm (Actor-Critic 系列)
+    │   └── DDPG
+    │       └── ActorDualCriticsOffPolicyAlgorithm
+    │           └── TD3
+    │               └── TD3BC* (离线 RL)
+    │
+    └── SAC
+        └── REDQ
+
+    OfflineAlgorithm (离线强化学习)
+    ├── BCQ (连续动作空间)
+    ├── CQL (连续动作空间)
+    ├── DiscreteCQL* (继承自 QRDQN)
+    ├── TD3BC* (继承自 TD3)
+    ├── DiscreteBCQ
+    └── DiscreteCRR

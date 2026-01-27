@@ -84,10 +84,6 @@ class imi_trainer:
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(), lr=kwargs.get("critic_lr", 1e-3), eps=1e-5)
         
-        # Returns 归一化参数（在训练时计算）
-        self.returns_mean = None
-        self.returns_std = None
-        
         # Actor 早停配置
         self.actor_patience = kwargs.get("actor_patience", 5)  # 连续多少个epoch没有改善就早停
         self.actor_min_delta = kwargs.get("actor_min_delta", 1e-5)  # 最小改善量
@@ -158,13 +154,10 @@ class imi_trainer:
             for key, arr in flattened_data.items():
                 print(f"  {key}: {arr.shape}")
             
-            # 归一化 returns (解决 critic_loss 量级过大的问题)
-            returns_raw = flattened_data["returns"]
-            self.returns_mean = np.mean(returns_raw)
-            self.returns_std = np.std(returns_raw) + 1e-8  # 避免除零
-            flattened_data["returns"] = (returns_raw - self.returns_mean) / self.returns_std
-            print(f"[ImiTrainer] Returns normalized: mean={self.returns_mean:.2f}, std={self.returns_std:.2f}")
-            print(f"[ImiTrainer] Returns range after normalization: [{flattened_data['returns'].min():.4f}, {flattened_data['returns'].max():.4f}]")
+            # 打印 returns 统计信息
+            returns_data = flattened_data["returns"]
+            print(f"[ImiTrainer] Returns range: [{returns_data.min():.4f}, {returns_data.max():.4f}], "
+                  f"mean={returns_data.mean():.2f}, std={returns_data.std():.2f}")
             
             # 训练逻辑
             data_idx = np.arange(num_valid_steps * M)
@@ -213,11 +206,9 @@ class imi_trainer:
                     critic_loss.backward()
                     self.critic_optimizer.step()
                     
-                    # 累计统计 (注意: critic_loss 是归一化后的，需要记录原始值用于显示)
+                    # 累计统计
                     itr_actor_loss += actor_loss.item() * len(batch_idx)
-                    # 记录归一化前的 critic_loss (用于显示原始量级)
-                    critic_loss_raw = critic_loss.item() * (self.returns_std ** 2)  # 反归一化到原始尺度
-                    itr_critic_loss += critic_loss_raw * len(batch_idx)
+                    itr_critic_loss += critic_loss.item() * len(batch_idx)
                     pred_actions = actor_logits.argmax(dim=-1)
                     itr_correct += (pred_actions == actions_batch.squeeze(-1)).sum().item()
                     itr_total += len(batch_idx)
@@ -302,9 +293,6 @@ class imi_trainer:
             "final_accuracy": final_acc,
             "total_iterations": total_iterations,
             "run_name": self.run_name,
-            # 保存归一化参数，用于推理时反归一化
-            "returns_mean": self.returns_mean,
-            "returns_std": self.returns_std,
         }
         
         # 保存完整checkpoint
@@ -337,9 +325,9 @@ if __name__ == "__main__":
     config = {
         "actor_lr": 3e-4,
         "critic_lr": 3e-4,
-        "data_path": "data/samples_eps01.npz",
+        "data_path": "dataset/samples_pure.npz",
         "batch_size": 1024,
-        "iteration": 100,  # 总训练轮数
+        "iteration": 75,  # 总训练轮数
         # Actor 早停配置
         "actor_patience": 5,  # 连续多少个epoch没有改善就早停
         "actor_min_delta": 1e-5,  # 最小改善量

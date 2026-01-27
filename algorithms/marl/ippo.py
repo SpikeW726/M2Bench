@@ -51,6 +51,34 @@ class IPPOAlgo(ActorCriticOnPolicyAlgo):
             list(policy.parameters()) + list(critic.parameters()), lr=lr
         )
     
+    def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> Dict[str, RolloutBatch]:
+        """
+        为每个 agent 计算 GAE
+        
+        根据 critic 类型使用 local obs 或 global_state
+        """
+        for agent, batch in batch_dict.items():
+            batch = batch.to_tensor(self.device)
+            
+            with torch.no_grad():
+                # 选择 critic 输入
+                critic_input = batch.global_state if batch.global_state is not None else batch.obs
+                values = self.critic(critic_input).squeeze(-1)
+                
+                # 计算 next_value
+                last_done = batch.done[-1]
+                if last_done > 0.5:
+                    next_value = torch.tensor(0.0, device=self.device)
+                else:
+                    next_value = self.critic(critic_input[-1:]).squeeze(-1)
+            
+            # 计算 GAE
+            batch.adv, batch.ret = self.compute_gae(batch.rew, values, batch.done, next_value)
+            batch.value = values
+            batch_dict[agent] = batch
+        
+        return batch_dict
+    
     def update(self, batch_dict: Dict[str, RolloutBatch]) -> TrainingStats:
         """处理 Dict 输入，循环计算每个 agent 的 loss。"""
         batch_dict = {k: v.to_tensor(self.device) for k, v in batch_dict.items()}

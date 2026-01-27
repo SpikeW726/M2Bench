@@ -1,5 +1,5 @@
-from dataclasses import dataclass, fields
-from typing import Iterator, Self
+from dataclasses import dataclass, field, fields
+from typing import Dict, Iterator, List, Self, Union
 import numpy as np
 import torch
 
@@ -16,7 +16,13 @@ class BaseBatch:
             if val is None:
                 kwargs[f.name] = None
             elif isinstance(val, np.ndarray):
-                dtype = torch.float32 if val.dtype in [np.float32, np.float64] else torch.long
+                # 根据 dtype 选择合适的 torch dtype
+                if val.dtype == np.bool_:
+                    dtype = torch.bool
+                elif val.dtype in [np.float32, np.float64]:
+                    dtype = torch.float32
+                else:
+                    dtype = torch.long
                 kwargs[f.name] = torch.as_tensor(val, dtype=dtype, device=device)
             elif isinstance(val, torch.Tensor):
                 kwargs[f.name] = val.to(device)
@@ -91,7 +97,8 @@ class RolloutBatch(BaseBatch):
     obs: torch.Tensor | np.ndarray = None          # (batch, *obs_shape)
     act: torch.Tensor | np.ndarray = None          # (batch,) or (batch, act_dim)
     rew: torch.Tensor | np.ndarray = None          # (batch,)
-    done: torch.Tensor | np.ndarray = None         # (batch,)
+    done: torch.Tensor | np.ndarray = None         # (batch,) termination | truncation
+    truncated: torch.Tensor | np.ndarray = None    # (batch,) 是否为时间截断（用于正确的 value bootstrap）
     log_prob: torch.Tensor | np.ndarray = None     # (batch,) old log_prob from collection
     value: torch.Tensor | np.ndarray = None        # (batch,) value estimate
     adv: torch.Tensor | np.ndarray = None          # (batch,) advantage
@@ -113,3 +120,13 @@ class TransitionBatch(BaseBatch):
     # For action masking
     action_mask: torch.Tensor | np.ndarray = None  # (batch, num_actions)
     next_action_mask: torch.Tensor | np.ndarray = None
+
+
+@dataclass
+class CollectResult:
+    """采集结果，包含 batch 数据和统计信息"""
+    batch: Union[RolloutBatch, Dict[str, RolloutBatch]]  # 采集的数据
+    n_steps: int = 0                                      # 总步数
+    n_episodes: int = 0                                   # 完成的 episode 数
+    episode_rewards: List[float] = field(default_factory=list)  # 每个完成 episode 的总奖励
+    episode_lengths: List[int] = field(default_factory=list)    # 每个完成 episode 的长度
