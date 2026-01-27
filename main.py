@@ -19,12 +19,8 @@ def main():
     # ========== 配置 ==========
     # 环境
     num_envs = 4
-    num_agents = 3
     
-    # 网络维度（需与预训练时一致）
-    obs_dim = 27
-    critic_state_dim = 26  # global_state(23) + agent_one_hot(3)
-    action_dim = 7
+    # 网络隐藏层（需与预训练时一致）
     actor_hidden = [256, 256]
     critic_hidden = [128, 256, 256, 128]
     
@@ -40,7 +36,7 @@ def main():
     vf_coef = 0.5
     ent_coef = 0.01
     
-    # 预训练权重路径（修改为实际路径）
+    # 预训练权重路径
     actor_path = "models/imi_train__1769515607_actor_best.pt"
     critic_path = "models/imi_train__1769515607_critic.pt"
     
@@ -48,17 +44,32 @@ def main():
     with open("configs/MASUPEnv.yaml", 'r') as f:
         config = yaml.safe_load(f)
     
-    # 使用 lambda 的默认参数避免闭包问题
     def make_env(env_config, custom_config):
         return lambda: MASUPEnv(env_config, **custom_config)
     
     env_fns = [make_env(config["env_config"], config["custom_config"]) for _ in range(num_envs)]
     vec_env = DummyVectorEnv(env_fns)
     
+    # 从环境获取维度
+    agent_ids = vec_env.agents
+    num_agents = len(agent_ids)
+    obs_space = vec_env.observation_space[agent_ids[0]]
+    action_space = vec_env.action_space[agent_ids[0]]
+    
+    obs_dim = obs_space.shape[0]
+    action_dim = action_space.n
+    
+    # global_state 维度需要从环境获取
+    temp_env = MASUPEnv(config["env_config"], **config["custom_config"])
+    temp_env.reset()
+    state_dim = len(temp_env.state())
+    critic_state_dim = state_dim + num_agents  # global_state + agent_one_hot
+    temp_env.close()
+    
     print(f"[Main] Created {num_envs} vectorized MASUPEnv")
-    print(f"  Agents: {vec_env.agents}")
-    print(f"  Obs space: {vec_env.observation_space[vec_env.agents[0]]}")
-    print(f"  Action space: {vec_env.action_space[vec_env.agents[0]]}")
+    print(f"  Agents: {agent_ids}")
+    print(f"  Obs dim: {obs_dim}, Action dim: {action_dim}")
+    print(f"  Critic input dim: {critic_state_dim} (state={state_dim} + one_hot={num_agents})")
     
     # ========== 加载预训练权重 ==========
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -67,17 +78,21 @@ def main():
     critic_net = CriticMLP(critic_state_dim, critic_hidden, 1)
     
     if Path(actor_path).exists() and Path(critic_path).exists():
-        actor_net.load_state_dict(torch.load(actor_path, map_location=device, weights_only=True))
-        critic_net.load_state_dict(torch.load(critic_path, map_location=device, weights_only=True))
+        # 从 checkpoint 字典中提取 state_dict
+        actor_ckpt = torch.load(actor_path, map_location=device, weights_only=True)
+        critic_ckpt = torch.load(critic_path, map_location=device, weights_only=True)
+        
+        # 兼容两种格式：直接 state_dict 或 checkpoint 字典
+        actor_sd = actor_ckpt.get("actor_state_dict", actor_ckpt)
+        critic_sd = critic_ckpt.get("critic_state_dict", critic_ckpt)
+        
+        actor_net.load_state_dict(actor_sd)
+        critic_net.load_state_dict(critic_sd)
         print(f"[Main] Loaded pretrained weights from {actor_path}, {critic_path}")
     else:
         print(f"[Main] Warning: Pretrained weights not found, using random initialization")
     
     # ========== 构建 Policy 和 Algorithm ==========
-    agent_ids = vec_env.agents
-    obs_space = vec_env.observation_space[agent_ids[0]]
-    action_space = vec_env.action_space[agent_ids[0]]
-    
     ma_policy = MultiAgentPolicy(
         agent_ids=agent_ids,
         obs_space=obs_space,
