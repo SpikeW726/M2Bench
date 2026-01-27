@@ -3,8 +3,8 @@ import numpy as np
 import random
 from gymnasium.spaces import Box, Discrete
 
-from envs.patrol_core import AgentState, TickResult
-from envs.base_envs import EventDrivenEnv
+from envs.mdps.patrol_core import AgentState, TickResult
+from envs.mdps.base_envs import EventDrivenEnv
 
 class MASUPEnv(EventDrivenEnv):
     def __init__(self, config: Dict, **kwargs):

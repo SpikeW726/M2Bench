@@ -25,8 +25,8 @@ from tqdm import tqdm
 
 from polocies.heuritic.heuristic_base import HeuriticBasePolicy
 from polocies.heuritic.er import ERPolicy
-from envs.base_envs import EventDrivenEnv
-from envs.masup_env import MASUPEnv
+from envs.mdps.base_envs import EventDrivenEnv
+from envs.mdps.masup_env import MASUPEnv
 
 
 @dataclass

@@ -1,6 +1,59 @@
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 from typing import Dict, List
+import numpy as np
+
+
+class RunningMeanStd:
+    """
+    在线计算数据流的 running mean 和 std。
+    
+    用于观测归一化，参考：
+    https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+    
+    Args:
+        mean: 初始均值估计
+        std: 初始标准差估计
+        clip_max: 归一化后的裁剪范围
+    """
+    
+    def __init__(
+        self,
+        mean: float | np.ndarray = 0.0,
+        std: float | np.ndarray = 1.0,
+        clip_max: float | None = 10.0,
+    ):
+        self.mean = mean
+        self.var = std  # 初始方差 = std
+        self.count = 0
+        self.clip_max = clip_max
+        self.eps = np.finfo(np.float32).eps.item()
+    
+    def update(self, data: np.ndarray) -> None:
+        """用一批数据更新统计量。"""
+        batch_mean = np.mean(data, axis=0)
+        batch_var = np.var(data, axis=0)
+        batch_count = len(data)
+        
+        delta = batch_mean - self.mean
+        total_count = self.count + batch_count
+        
+        # Parallel algorithm for combining statistics
+        new_mean = self.mean + delta * batch_count / total_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m_2 = m_a + m_b + delta ** 2 * self.count * batch_count / total_count
+        new_var = m_2 / total_count
+        
+        self.mean, self.var = new_mean, new_var
+        self.count = total_count
+    
+    def norm(self, data: np.ndarray) -> np.ndarray:
+        """归一化数据。"""
+        result = (data - self.mean) / np.sqrt(self.var + self.eps)
+        if self.clip_max is not None:
+            result = np.clip(result, -self.clip_max, self.clip_max)
+        return result
 
 @dataclass
 class IdlenessMetrics:
