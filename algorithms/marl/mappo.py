@@ -71,9 +71,9 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         
         处理向量化环境：数据排列为 (T*N, ...) 需要 reshape 为 (T, N, ...) 分别计算 GAE
         
-        正确处理 truncation vs termination:
+        正确处理 truncation vs termination（包括中间的 done）:
         - termination (真正结束): next_value = 0
-        - truncation (时间截断): next_value = critic(next_state)
+        - truncation (时间截断): next_value = critic(final_state)
         """
         agents = list(batch_dict.keys())
         num_agents = len(agents)
@@ -84,7 +84,11 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         all_critic_input, all_action_mask = [], []
         
         for i, agent in enumerate(agents):
-            batch = batch_dict[agent].to_tensor(self.device)
+            batch = batch_dict[agent]
+            # 提取 final_global_state（List[List[ndarray or None]]，不转为 tensor）
+            final_gs = batch.final_global_state  # T x N 的嵌套列表
+            
+            batch = batch.to_tensor(self.device)
             total_size = batch.global_state.shape[0]
             T = total_size // N  # num_steps
             
@@ -106,23 +110,18 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             with torch.no_grad():
                 values = self.critic(critic_input).squeeze(-1).view(T, N)
                 
-                # 为每个环境计算 next_value 和 GAE
+                # 为每个环境计算 GAE，正确处理中间 truncation
                 all_env_adv, all_env_ret = [], []
                 for env_idx in range(N):
-                    last_done = done_2d[-1, env_idx] > 0.5
-                    # 判断最后一步是 truncation 还是 termination
-                    last_truncated = truncated_2d is not None and truncated_2d[-1, env_idx] > 0.5
-                    
-                    if last_done and not last_truncated:
-                        # 真正的 termination，next_value = 0
-                        next_val = torch.tensor(0.0, device=self.device)
-                    else:
-                        # truncation 或未结束，使用 critic 估计 next_value
-                        next_val = self.critic(critic_2d[-1, env_idx:env_idx+1]).squeeze()
-                    
-                    adv, ret = self.compute_gae(
-                        rew_2d[:, env_idx], values[:, env_idx], 
-                        done_2d[:, env_idx], next_val
+                    adv, ret = self._compute_gae_with_truncation(
+                        rewards=rew_2d[:, env_idx],
+                        values=values[:, env_idx],
+                        dones=done_2d[:, env_idx],
+                        truncateds=truncated_2d[:, env_idx] if truncated_2d is not None else None,
+                        final_global_states=[final_gs[t][env_idx] if final_gs else None for t in range(T)],
+                        critic_input_last=critic_2d[-1, env_idx:env_idx+1],
+                        agent_idx=i,
+                        num_agents=num_agents,
                     )
                     all_env_adv.append(adv)
                     all_env_ret.append(ret)
@@ -152,6 +151,109 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             global_state=torch.cat(all_critic_input, dim=0),
             action_mask=torch.cat(all_action_mask, dim=0) if all_action_mask else None,
         )
+    
+    def _compute_gae_with_truncation(
+        self,
+        rewards: torch.Tensor,
+        values: torch.Tensor,
+        dones: torch.Tensor,
+        truncateds: Optional[torch.Tensor],
+        final_global_states: List[Optional[np.ndarray]],
+        critic_input_last: torch.Tensor,
+        agent_idx: int,
+        num_agents: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        计算 GAE，正确处理中间的 truncation
+        
+        Args:
+            rewards: (T,) 奖励序列
+            values: (T,) value 估计
+            dones: (T,) done 标志
+            truncateds: (T,) truncation 标志
+            final_global_states: 长度为 T 的列表，每个元素是 final_state 或 None
+            critic_input_last: 最后一步的 critic 输入（用于非 done 情况）
+            agent_idx: 当前 agent 索引（用于构建 one_hot）
+            num_agents: agent 总数
+        
+        Returns:
+            advantages: (T,)
+            returns: (T,)
+        """
+        T = len(rewards)
+        advantages = torch.zeros_like(rewards)
+        last_gae = 0.0
+        
+        for t in reversed(range(T)):
+            is_done = dones[t] > 0.5
+            is_truncated = truncateds is not None and truncateds[t] > 0.5
+            
+            if t == T - 1:
+                # 最后一步
+                if is_done and not is_truncated:
+                    # termination: next_value = 0
+                    next_val = torch.tensor(0.0, device=self.device)
+                elif is_done and is_truncated:
+                    # truncation: 使用 final_state 计算 next_value
+                    next_val = self._get_truncation_value(
+                        final_global_states[t], agent_idx, num_agents
+                    )
+                else:
+                    # 未结束: 使用最后一步的 critic 输入
+                    next_val = self.critic(critic_input_last).squeeze()
+            else:
+                # 中间步
+                if is_done and not is_truncated:
+                    # termination: next_value = 0，GAE 截断
+                    next_val = torch.tensor(0.0, device=self.device)
+                elif is_done and is_truncated:
+                    # truncation: 使用 final_state 计算 next_value
+                    next_val = self._get_truncation_value(
+                        final_global_states[t], agent_idx, num_agents
+                    )
+                else:
+                    # 正常情况: 使用下一步的 value
+                    next_val = values[t + 1]
+            
+            # TD error
+            if is_done and not is_truncated:
+                # termination: 完全截断，不使用 next_val
+                delta = rewards[t] - values[t]
+                last_gae = delta
+            elif is_done and is_truncated:
+                # truncation: 使用 bootstrapped next_val，但 GAE 在这里截断
+                delta = rewards[t] + self.gamma * next_val - values[t]
+                last_gae = delta
+            else:
+                # 正常情况
+                delta = rewards[t] + self.gamma * next_val - values[t]
+                last_gae = delta + self.gamma * self.gae_lambda * last_gae
+            
+            advantages[t] = last_gae
+        
+        returns = advantages + values
+        return advantages, returns
+    
+    def _get_truncation_value(
+        self,
+        final_state: Optional[np.ndarray],
+        agent_idx: int,
+        num_agents: int,
+    ) -> torch.Tensor:
+        """获取 truncation 时的 bootstrapped value"""
+        if final_state is None:
+            # 如果没有 final_state，回退到 0
+            return torch.tensor(0.0, device=self.device)
+        
+        # 构建 critic_input: final_state + agent_one_hot
+        state_t = torch.as_tensor(final_state, dtype=torch.float32, device=self.device)
+        if state_t.dim() == 1:
+            state_t = state_t.unsqueeze(0)
+        one_hot = torch.zeros(1, num_agents, device=self.device)
+        one_hot[0, agent_idx] = 1.0
+        critic_input = torch.cat([state_t, one_hot], dim=-1)
+        
+        return self.critic(critic_input).squeeze()
     
     def update(self, batch: RolloutBatch) -> TrainingStats:
         """

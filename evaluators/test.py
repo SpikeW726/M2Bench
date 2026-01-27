@@ -33,16 +33,33 @@ def load_trained_actor(checkpoint_path: str, obs_dim: int, action_dim: int,
     print(f"Loading actor from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
 
-    print(f"Checkpoint keys: {list(checkpoint.keys())}")
+    print(f"Checkpoint keys: {list(checkpoint.keys())[:6]}...")  # 只打印前几个
 
     # Create actor network
     actor = ActorMLP(obs_dim, hidden_sizes, action_dim)
-    actor.load_state_dict(checkpoint['actor_state_dict'])
+    
+    # 兼容多种保存格式
+    if 'actor_state_dict' in checkpoint:
+        # 预训练格式
+        actor.load_state_dict(checkpoint['actor_state_dict'])
+        print(f"Actor loss: {checkpoint.get('actor_loss', 'N/A')}")
+        print(f"Actor accuracy: {checkpoint.get('actor_accuracy', 'N/A')}")
+    elif '_shared_policy.actor.network.0.weight' in checkpoint:
+        # MAPPO MultiAgentPolicy 格式：提取 actor 权重
+        actor_sd = {}
+        prefix = '_shared_policy.actor.'
+        for k, v in checkpoint.items():
+            if k.startswith(prefix):
+                new_key = k[len(prefix):]  # 去掉前缀
+                actor_sd[new_key] = v
+        actor.load_state_dict(actor_sd)
+        print("Loaded from MAPPO MultiAgentPolicy format")
+    else:
+        # 直接是 actor state_dict
+        actor.load_state_dict(checkpoint)
+        print("Loaded from direct state_dict format")
+    
     actor.eval()
-
-    print(f"Actor loss: {checkpoint.get('actor_loss', 'N/A')}")
-    print(f"Actor accuracy: {checkpoint.get('actor_accuracy', 'N/A')}")
-    print(f"Stopped at iteration: {checkpoint.get('stopped_iteration', 'N/A')}")
 
     return actor
 
@@ -81,8 +98,8 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
     # Create MultiAgentPolicy with shared strategy
     multi_policy = MultiAgentPolicy(
         agent_ids=env.possible_agents,
-        obs_spaces=env.observation_spaces,
-        action_spaces=env.action_spaces,
+        obs_space=env.observation_space(env.possible_agents[0]),
+        action_space=env.action_space(env.possible_agents[0]),
         policy_class=ActorPolicy,
         policy_kwargs={'actor': actor, 'deterministic_eval': True},
         shared=True
@@ -99,11 +116,24 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
         obs, infos = env.reset()
 
         while True:
-            # Get action masks
-            action_masks = {aid: info['action_mask'] for aid, info in infos.items()}
-
-            # Compute actions using multi-agent policy
-            actions, _ = multi_policy.compute_actions(obs, action_masks=action_masks)
+            # Get action masks and convert to tensor
+            action_masks = {
+                aid: torch.as_tensor(info['action_mask'], dtype=torch.bool, device=multi_policy.device)
+                for aid, info in infos.items()
+            }
+            
+            # Convert obs to tensor
+            obs_tensor = {
+                aid: torch.as_tensor(o, dtype=torch.float32, device=multi_policy.device)
+                for aid, o in obs.items()
+            }
+            
+            # Forward pass with action_mask
+            with torch.no_grad():
+                outputs = multi_policy.forward(obs_tensor, action_mask=action_masks)
+            
+            # Extract actions
+            actions = {aid: out['act'].cpu().numpy() for aid, out in outputs.items()}
 
             # Step environment
             obs, rewards, terminations, truncations, infos = env.step(actions)
@@ -158,7 +188,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Test trained RL policy')
     parser.add_argument('--checkpoint', type=str,
-                        default='models/pure/imi_train__1769274544_actor_best.pt',
+                        default='models/models/imi_train__1769515607_actor_best.pt',
                         help='Path to actor checkpoint')
     parser.add_argument('--num_episodes', type=int, default=10,
                         help='Number of episodes to run')

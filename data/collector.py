@@ -124,7 +124,8 @@ class Collector(BaseCollector):
         if self._obs is None:
             self.reset()
         
-        self.algorithm.set_training_mode(False)
+        # training_mode=True 使策略使用采样而非 argmax（梯度由 torch.no_grad 控制）
+        self.algorithm.set_training_mode(True)
         policy = self.algorithm.policy
         device = self.algorithm.device
         
@@ -237,6 +238,7 @@ class MACollector(BaseCollector):
                 'log_prob': [],
                 'action_mask': [],
                 'global_state': [],
+                'final_global_state': [],  # 用于中间 truncation 的 value bootstrap
             }
             for agent in self.agents
         }
@@ -261,7 +263,8 @@ class MACollector(BaseCollector):
         if self._obs is None:
             self.reset()
         
-        self.algorithm.set_training_mode(False)
+        # training_mode=True 使策略使用采样而非 argmax（梯度由 torch.no_grad 控制）
+        self.algorithm.set_training_mode(True)
         policy = self.algorithm.policy  # MultiAgentPolicy
         
         step_count = 0
@@ -304,6 +307,21 @@ class MACollector(BaseCollector):
                 self._buffers[agent]['done'].append(done.astype(np.float32))
                 self._buffers[agent]['truncated'].append(trunc[agent].astype(np.float32))
             
+            # 提取 final_global_state（用于中间 truncation 的 value bootstrap）
+            first_agent = self.agents[0]
+            final_gs_list = []
+            for i in range(self.num_envs):
+                if trunc[first_agent][i]:
+                    info_i = info[first_agent][i]
+                    if isinstance(info_i, dict) and 'final_state' in info_i:
+                        final_gs_list.append(info_i['final_state'].copy())
+                    else:
+                        final_gs_list.append(None)
+                else:
+                    final_gs_list.append(None)
+            for agent in self.agents:
+                self._buffers[agent]['final_global_state'].append(final_gs_list)
+            
             # 更新统计（用第一个 agent 的 reward 作为 episode reward）
             first_agent = self.agents[0]
             self._current_rewards += rew[first_agent]
@@ -323,6 +341,9 @@ class MACollector(BaseCollector):
         batch_dict: Dict[str, RolloutBatch] = {}
         for agent in self.agents:
             buf = self._buffers[agent]
+            # 处理 final_global_state: List[List[ndarray or None]] -> List[List]
+            # 保持原始结构以便在 prepare_batch 中使用
+            final_gs = buf['final_global_state'] if buf['final_global_state'] else None
             batch_dict[agent] = RolloutBatch(
                 obs=np.concatenate(buf['obs'], axis=0),
                 act=np.concatenate(buf['act'], axis=0),
@@ -332,6 +353,7 @@ class MACollector(BaseCollector):
                 log_prob=np.concatenate(buf['log_prob'], axis=0),
                 global_state=np.concatenate(buf['global_state'], axis=0) if buf['global_state'] else None,
                 action_mask=np.concatenate(buf['action_mask'], axis=0) if buf['action_mask'] else None,
+                final_global_state=final_gs,  # List[List[ndarray or None]]，保持原始结构
             )
         
         result = CollectResult(

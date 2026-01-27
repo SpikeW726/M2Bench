@@ -111,6 +111,8 @@ class RolloutBatch(BaseBatch):
     global_state: torch.Tensor | np.ndarray = None # (batch, global_state_dim)
     # For action masking
     action_mask: torch.Tensor | np.ndarray = None  # (batch, num_actions)
+    # For truncation value bootstrap (List[List[ndarray or None]]，不转为 tensor)
+    final_global_state: list = None
 
 
 @dataclass 

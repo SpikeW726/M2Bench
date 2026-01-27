@@ -1,12 +1,12 @@
 env_config:
-  graph_path: "graphs/essay_MapB.json"
+  graph_path: "graphs/simple_TSP_12.json"
   
   enable_wait: False
   deltaT: 0.5
   
-  num_agents: 10
+  num_agents: 3
   
-  episode_len: 5000 # 默认是一个episode的step数,在MASUP环境中若truncate_by_time为True,则是一个episode的最大时间
+  episode_len: 1000 # 默认是一个episode的step数,在MASUP环境中若truncate_by_time为True,则是一个episode的最大时间
 
   
 custom_config:

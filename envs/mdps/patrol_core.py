@@ -130,7 +130,7 @@ class PatrolWorld:
         for node in self.graph.nodes:
             if node not in self._occupied_nodes:
                 self.node_idleness[node] += dt
-        current_worst_idleness = max(self.node_idleness)
+        current_worst_idleness = max(self.node_idleness.values())
         self.worst_idleness = max(self.worst_idleness, current_worst_idleness)
         
         # 2. 更新智能体状态

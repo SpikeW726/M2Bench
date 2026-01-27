@@ -145,12 +145,47 @@ class BaseVectorEnv:
             results = []
             for j, i in enumerate(env_id):
                 action_dict = {agent: actions[agent][j] for agent in self.agents}
-                results.append(self.workers[i].step(action_dict))
+                obs, rew, term, trunc, info = self.workers[i].step(action_dict)
+                
+            # Autoreset: 任意 agent done 则 reset 整个环境
+            first_agent = self.agents[0]
+            if term[first_agent] or trunc[first_agent]:
+                # 保存 final obs 到 info
+                for agent in self.agents:
+                    info[agent]["final_obs"] = obs[agent]
+                
+                # 保存 final_state（用于 truncation 的 value bootstrap）
+                if trunc[first_agent]:
+                    try:
+                        state_method = self.workers[i].get_env_attr("state")
+                        if state_method is not None:
+                            final_state = state_method() if callable(state_method) else state_method
+                            for agent in self.agents:
+                                info[agent]["final_state"] = final_state
+                    except Exception:
+                        pass
+                
+                # Reset 环境，用新 obs 替换
+                obs, reset_info = self.workers[i].reset()
+                for agent in self.agents:
+                    info[agent].update(reset_info.get(agent, {}))
+                
+                results.append((obs, rew, term, trunc, info))
             return self._unpack_parallel_results(results, env_id)
         else:
             # Gymnasium Env
+            results = []
             assert len(actions) == len(env_id)
-            results = [self.workers[i].step(actions[j]) for j, i in enumerate(env_id)]
+            for j, i in enumerate(env_id):
+                obs, rew, term, trunc, info = self.workers[i].step(actions[j])
+                
+                # Autoreset
+                if term or trunc:
+                    info["final_obs"] = obs
+                    obs, reset_info = self.workers[i].reset()
+                    info.update(reset_info)
+                
+                results.append((obs, rew, term, trunc, info))
             return self._unpack_gym_results(results, env_id)
     
     # =========================================================================
