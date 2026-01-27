@@ -327,7 +327,7 @@ if __name__ == "__main__":
         "critic_lr": 3e-4,
         "data_path": "dataset/samples_pure.npz",
         "batch_size": 1024,
-        "iteration": 75,  # 总训练轮数
+        "iteration": 25,  # 总训练轮数
         # Actor 早停配置
         "actor_patience": 5,  # 连续多少个epoch没有改善就早停
         "actor_min_delta": 1e-5,  # 最小改善量
@@ -336,7 +336,7 @@ if __name__ == "__main__":
         "track": True,  # 设为 True 启用 wandb
         "wandb_project": "MAP-imitation",
         # 模型保存配置
-        "save_dir": "models/eps01",  # 模型保存目录
+        "save_dir": "models/pure",  # 模型保存目录
         "save_model": True,  # 是否保存模型
     }
 

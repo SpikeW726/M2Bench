@@ -5,14 +5,14 @@ Test script for trained RL actor policy
 
 Loads trained actor weights and evaluates performance in MASUPEnv.
 """
+import os
 import sys
 from pathlib import Path
 
-# 添加项目根目录到 Python 路径
+# 添加项目根目录到 Python 路径，并切换工作目录（确保配置文件路径正确）
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
-
-import os
+os.chdir(project_root)
 import yaml
 import torch
 import numpy as np

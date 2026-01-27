@@ -41,8 +41,8 @@ def main():
     ent_coef = 0.01
     
     # 预训练权重路径（修改为实际路径）
-    actor_path = "models/xxx_actor.pt"
-    critic_path = "models/xxx_critic.pt"
+    actor_path = "models/imi_train__1769515607_actor_best.pt"
+    critic_path = "models/imi_train__1769515607_critic.pt"
     
     # ========== 环境 ==========
     with open("configs/MASUPEnv.yaml", 'r') as f:

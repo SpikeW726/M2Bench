@@ -330,3 +330,98 @@ class PatrolWorld:
     def export_metrics_to_csv(self, path: str):
         """导出指标历史到 CSV 文件"""
         self.metrics_tracker.to_csv(path)
+    
+    # ==================== 启发式算法接口 ====================
+    
+    def get_heuristic_obs(self) -> Dict[str, Dict]:
+        """
+        返回启发式算法需要的观测格式,目前只适用于ER启发式算法
+        
+        Returns:
+            {agent_str: {
+                'current_node': int,      # 当前节点
+                'neighbors': List[int],   # 邻居节点列表
+                'on_edge': bool           # 是否在边上移动中
+            }}
+        """
+        obs_dict = {}
+        for agent_id in range(self.num_agents):
+            agent_status = self.agents[agent_id]
+            current_pos = agent_status.position
+            neighbors = self.graph.get_neighbors(current_pos)
+            on_edge = agent_status.state == AgentState.ON_EDGE
+            
+            obs_dict[f"agent_{agent_id}"] = {
+                'current_node': current_pos,
+                'neighbors': neighbors,
+                'on_edge': on_edge,
+            }
+        return obs_dict
+    
+    def get_global_state_for_heuristic(self) -> Dict:
+        """
+        返回启发式算法需要的全局状态,目前只适用于ER启发式算法
+        
+        Returns:
+            {
+                'graph': Graph,                       # 图结构对象
+                'agent_positions': Dict[int, int],    # 智能体位置
+                'agents_on_edge': Dict[int, bool],    # 智能体是否在边上
+                'current_time': float,                # 当前仿真时间
+                'node_last_visit': Dict[int, float],  # 节点上次访问时间
+                'agent_speeds': List[float],          # 智能体速度
+                'er_avg_edge_len': float,             # 平均边长
+            }
+        """
+        # 从 idleness 反推 last_visit_time: last_visit[n] = current_time - idleness[n]
+        node_last_visit = {
+            n: self.current_time - self.node_idleness[n]
+            for n in self.graph.nodes
+        }
+        
+        return {
+            'graph': self.graph,
+            'agent_positions': {
+                i: self.agents[i].position 
+                for i in range(self.num_agents)
+            },
+            'agents_on_edge': {
+                i: self.agents[i].state == AgentState.ON_EDGE
+                for i in range(self.num_agents)
+            },
+            'current_time': self.current_time,
+            'node_last_visit': node_last_visit,
+            'agent_speeds': self.speeds,
+            'er_avg_edge_len': self.graph.get_average_edge_length() if hasattr(self.graph, 'get_average_edge_length') else 1.0,
+        }
+    
+    def step_heuristic(self, actions: Dict[str, int]) -> TickResult:
+        """
+        执行启发式动作并推进环境（事件驱动模式）
+        
+        启发式算法直接与 PatrolWorld 交互的接口，无需经过 MDP 封装。
+        
+        Args:
+            actions: {agent_str: neighbor_idx} 启发式动作，neighbor_idx 是邻居列表中的索引
+                     只需要包含 READY 状态智能体的动作，其他智能体会被跳过
+        
+        Returns:
+            TickResult: 包含时间推进结果
+        """
+        # 1. 为每个 READY 状态的智能体设置移动动作
+        for agent_str, neighbor_idx in actions.items():
+            agent_id = int(agent_str.split("_")[1]) if isinstance(agent_str, str) else int(agent_str)
+            
+            if not self.is_ready(agent_id):
+                continue
+            
+            # 将邻居索引转换为目标节点
+            current_pos = self.get_position(agent_id)
+            neighbors = self.graph.get_neighbors(current_pos)
+            
+            if 0 <= neighbor_idx < len(neighbors):
+                target_node = neighbors[neighbor_idx]
+                self.set_move_action(agent_id, target_node)
+        
+        # 2. 推进到下一个事件
+        return self.tick_to_next_event()

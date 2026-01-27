@@ -1,5 +1,9 @@
 from dataclasses import dataclass, field, fields
-from typing import Dict, Iterator, List, Self, Union
+from typing import Dict, Iterator, List, Union
+try:
+    from typing import Self  # Python 3.11+
+except ImportError:
+    from typing_extensions import Self  # Python 3.10 兼容
 import numpy as np
 import torch
 

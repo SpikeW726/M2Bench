@@ -112,9 +112,9 @@ class HeuristicSampler:
         done = False
         
         while not done:
-            # 1. 获取启发式观测和全局状态，然后获取启发式决策
-            h_obs = self.env.get_heuristic_obs()
-            global_state = self.env.get_global_state_for_heuristic()
+            # 1. 获取启发式观测和全局状态（直接从 PatrolWorld 获取），然后获取启发式决策
+            h_obs = self.env.world.get_heuristic_obs()
+            global_state = self.env.world.get_global_state_for_heuristic()
             h_actions = self.policy.compute_actions(h_obs, global_state)
             
             # 2. 转换动作格式 + epsilon-greedy 探索
