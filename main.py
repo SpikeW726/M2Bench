@@ -35,8 +35,8 @@ def main():
     gamma = 0.999
     gae_lambda = 1.0
     clip_range = 0.2
-    vf_coef = 0.5
-    ent_coef = 0.1
+    vf_coef = 0.1
+    ent_coef = 0.05
     
     # 日志配置
     exp_name = "mappo_patrol"

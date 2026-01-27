@@ -320,7 +320,7 @@ class MASUPEnv(EventDrivenEnv):
                 reward = - self.worst_idleness_fromT * result.dt
             else:
                 reward = - self.worst_idleness_fromT
-            rewards[agent_str] = reward
+            rewards[agent_str] = reward * self.reward_scale
 
         return rewards
 
