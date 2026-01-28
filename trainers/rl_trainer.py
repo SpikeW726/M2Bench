@@ -1,192 +1,270 @@
-"""RL 训练器：协调 Collector 和 Algorithm 进行训练"""
+"""RL Trainers: coordinate Collector and Algorithm for training"""
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 import time
 import numpy as np
 
-from algorithms.algorithm_base import BaseAlgorithm, ActorCriticOnPolicyAlgo, TrainingStats
-from data.collector import BaseCollector, Collector, MACollector
-from data.batch import RolloutBatch, CollectResult
+from algorithms.algorithm_base import BaseAlgorithm, OnPolicyAlgorithm, TrainingStats
+from data.collector import BaseCollector
+from data.batch import CollectResult
 
 
 class BaseTrainer(ABC):
     """
-    训练器基类
+    Base trainer class.
     
-    Args:
-        algorithm: RL 算法实例
-        collector: 数据采集器
-        max_epoch: 最大训练轮数
-        step_per_epoch: 每轮采集的步数
-        logger: 日志记录器（可选）
+    Terminology:
+        - iteration: one collect-update cycle (call update() once)
+        - epoch: inside update(), how many times to iterate over the same batch
+                 (this is controlled by algorithm, not trainer)
     """
     
     def __init__(
         self,
         algorithm: BaseAlgorithm,
         collector: BaseCollector,
-        max_epoch: int = 100,
-        step_per_epoch: int = 2048,
+        max_iteration: int,
+        step_per_iteration: int,
+        # Callbacks
+        save_checkpoint_fn: Optional[Callable[[int], None]] = None,
+        save_interval: int = 100,
+        log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        stop_fn: Optional[Callable[[float], bool]] = None,
+        # Logging
         logger: Optional[Any] = None,
         verbose: bool = True,
     ):
+        """
+        Args:
+            algorithm: RL algorithm instance
+            collector: data collector
+            max_iteration: total number of collect-update cycles
+            step_per_iteration: env steps per iteration
+            save_checkpoint_fn: callback(iteration) to save model
+            save_interval: save every N iterations
+            log_extra_fn: callback() -> dict of extra metrics to log
+            stop_fn: callback(mean_reward) -> bool, return True to stop
+            logger: logger instance (supports .log(dict, step))
+            verbose: print progress
+        """
         self.algorithm = algorithm
         self.collector = collector
-        self.max_epoch = max_epoch
-        self.step_per_epoch = step_per_epoch
+        self.max_iteration = max_iteration
+        self.step_per_iteration = step_per_iteration
+        
+        # Callbacks
+        self.save_checkpoint_fn = save_checkpoint_fn
+        self.save_interval = save_interval
+        self.log_extra_fn = log_extra_fn
+        self.stop_fn = stop_fn
+        
+        # Logging
         self.logger = logger
         self.verbose = verbose
         
-        # 训练状态
-        self.epoch = 0
+        # State
+        self.iteration = 0
         self.total_steps = 0
         self.best_reward = -float('inf')
-        
-        # 统计
-        self._epoch_stats: Dict[str, List[float]] = {}
+        self.start_time: float = 0.0
     
     @abstractmethod
     def train(self) -> Dict[str, float]:
-        """执行训练，返回最终统计"""
+        """Execute training, return final stats"""
         pass
     
     @abstractmethod
-    def _train_epoch(self) -> Dict[str, float]:
-        """执行一轮训练"""
+    def _train_iteration(self) -> Dict[str, Any]:
+        """Execute one iteration"""
         pass
     
-    def _log_epoch(self, stats: Dict[str, float]):
-        """记录一轮训练的统计"""
-        if self.verbose:
-            msg = f"[Epoch {self.epoch}/{self.max_epoch}] "
-            msg += " | ".join(f"{k}: {v:.4f}" for k, v in stats.items())
-            print(msg)
-        
-        if self.logger is not None:
-            for k, v in stats.items():
-                self.logger.log({f"train/{k}": v}, step=self.total_steps)
+    def _compute_sps(self) -> int:
+        """Compute steps per second"""
+        elapsed = time.time() - self.start_time
+        return int(self.total_steps / elapsed) if elapsed > 0 else 0
     
     def _update_best(self, mean_reward: float) -> bool:
-        """更新最佳奖励，返回是否更新"""
+        """Update best reward, return True if updated"""
         if mean_reward > self.best_reward:
             self.best_reward = mean_reward
             return True
         return False
+    
+    def _log(self, data: Dict[str, float]):
+        """Log metrics"""
+        if self.logger is not None:
+            self.logger.log(data, step=self.total_steps)
 
 
 class OnPolicyTrainer(BaseTrainer):
     """
-    On-policy 训练器（用于 PPO, A2C, MAPPO 等）
+    On-policy trainer (for PPO, A2C, MAPPO, etc.)
     
-    训练流程：
-    1. 采集 step_per_epoch 步数据
-    2. 计算 GAE（algorithm.prepare_batch）
-    3. 更新（algorithm.update，内部处理 minibatch 切分和多轮更新）
-    4. 清空 buffer
+    Training loop per iteration:
+        1. Collect step_per_iteration steps (eval mode)
+        2. Compute GAE (algorithm.prepare_batch)
+        3. Update (algorithm.update, handles minibatch and epochs internally)
+        4. Clear buffer
     """
     
     def __init__(
         self,
-        algorithm: ActorCriticOnPolicyAlgo,
+        algorithm: OnPolicyAlgorithm,
         collector: BaseCollector,
-        max_epoch: int = 100,
-        step_per_epoch: int = 2048,
+        max_iteration: int,
+        step_per_iteration: int,
+        # Callbacks
+        save_checkpoint_fn: Optional[Callable[[int], None]] = None,
+        save_interval: int = 100,
+        log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        stop_fn: Optional[Callable[[float], bool]] = None,
+        # Logging
         logger: Optional[Any] = None,
         verbose: bool = True,
     ):
-        super().__init__(algorithm, collector, max_epoch, step_per_epoch, logger, verbose)
+        super().__init__(
+            algorithm=algorithm,
+            collector=collector,
+            max_iteration=max_iteration,
+            step_per_iteration=step_per_iteration,
+            save_checkpoint_fn=save_checkpoint_fn,
+            save_interval=save_interval,
+            log_extra_fn=log_extra_fn,
+            stop_fn=stop_fn,
+            logger=logger,
+            verbose=verbose,
+        )
     
     def train(self) -> Dict[str, float]:
-        """执行完整训练"""
-        # 重置环境和 buffer
+        """Execute full training"""
         self.collector.reset()
+        self.start_time = time.time()
         
-        start_time = time.time()
+        for self.iteration in range(1, self.max_iteration + 1):
+            # Checkpoint
+            if self.save_checkpoint_fn and self.iteration % self.save_interval == 0:
+                self.save_checkpoint_fn(self.iteration)
+            
+            # Train one iteration
+            iter_result = self._train_iteration()
+            
+            # Log
+            self._log_iteration(iter_result)
+            
+            # Early stop
+            mean_reward = iter_result.get("mean_reward")
+            if mean_reward is not None and self.stop_fn and self.stop_fn(mean_reward):
+                if self.verbose:
+                    print(f"Early stopping at iteration {self.iteration}")
+                break
         
-        for self.epoch in range(1, self.max_epoch + 1):
-            epoch_stats = self._train_epoch()
-            self._log_epoch(epoch_stats)
+        # Final checkpoint
+        if self.save_checkpoint_fn:
+            self.save_checkpoint_fn(self.iteration)
         
-        total_time = time.time() - start_time
-        
+        total_time = time.time() - self.start_time
         final_stats = {
-            "total_epochs": self.max_epoch,
+            "total_iterations": self.iteration,
             "total_steps": self.total_steps,
             "total_time": total_time,
             "best_reward": self.best_reward,
+            "final_sps": self._compute_sps(),
         }
         
         if self.verbose:
-            print(f"\n训练完成! 总步数: {self.total_steps}, 耗时: {total_time:.1f}s")
+            print(f"\nTraining complete! Steps: {self.total_steps}, "
+                  f"Time: {total_time:.1f}s, SPS: {final_stats['final_sps']}")
         
         return final_stats
     
-    def _train_epoch(self) -> Dict[str, float]:
-        """执行一轮训练"""
-        # 1. 采集数据
+    def _train_iteration(self) -> Dict[str, Any]:
+        """Execute one collect-update iteration"""
+        # 1. Collect (eval mode)
         self.algorithm.set_training_mode(False)
-        result = self.collector.collect(n_steps=self.step_per_epoch)
+        result = self.collector.collect(n_steps=self.step_per_iteration)
         self.total_steps += result.n_steps
         
-        # 2. 计算 GAE
+        # 2. Prepare batch (compute GAE)
         batch = self.algorithm.prepare_batch(result.batch)
         
-        # 3. 更新（算法内部处理 minibatch 切分和多轮更新）
+        # 3. Update (train mode)
         self.algorithm.set_training_mode(True)
         stats = self.algorithm.update(batch)
         
-        # 4. 清空 buffer
+        # 4. Clear buffer
         self.collector.reset_buffer()
         
-        # 5. 统计
-        epoch_stats = self._aggregate_stats([stats], result)
+        # 5. Build result dict
+        iter_result = {
+            "stats": stats,
+            "collect_result": result,
+            "sps": self._compute_sps(),
+        }
         
-        # 更新最佳奖励
+        # Update best reward
         if result.episode_rewards:
             mean_reward = np.mean(result.episode_rewards)
             self._update_best(mean_reward)
-            epoch_stats["mean_episode_reward"] = mean_reward
-            epoch_stats["n_episodes"] = result.n_episodes
+            iter_result["mean_reward"] = mean_reward
+            iter_result["n_episodes"] = result.n_episodes
         
-        return epoch_stats
+        return iter_result
     
-    def _aggregate_stats(
-        self, 
-        stats_list: List[TrainingStats], 
-        result: CollectResult
-    ) -> Dict[str, float]:
-        """聚合统计信息"""
-        if not stats_list:
-            return {}
+    def _log_iteration(self, iter_result: Dict[str, Any]):
+        """Log iteration metrics"""
+        stats: TrainingStats = iter_result["stats"]
+        result: CollectResult = iter_result["collect_result"]
+        sps = iter_result["sps"]
         
-        # 平均 loss
-        epoch_stats = {
-            "loss": np.mean([s.loss for s in stats_list]),
-            "policy_loss": np.mean([s.policy_loss for s in stats_list]),
-            "value_loss": np.mean([s.value_loss for s in stats_list]),
-            "entropy": np.mean([s.entropy for s in stats_list]),
-            "n_steps": result.n_steps,
+        # Core metrics
+        log_data = {
+            "train/loss": stats.loss,
+            "train/policy_loss": stats.policy_loss,
+            "train/value_loss": stats.value_loss,
+            "train/entropy": stats.entropy,
+            "train/sps": sps,
+            "train/total_steps": self.total_steps,
         }
         
-        return epoch_stats
+        # Extra stats from algorithm (clipfrac, approx_kl, etc.)
+        if stats.extra:
+            for k, v in stats.extra.items():
+                log_data[f"train/{k}"] = v
+        
+        # Episode stats
+        if result.episode_rewards:
+            log_data["rollout/episode_reward"] = np.mean(result.episode_rewards)
+            log_data["rollout/episode_length"] = np.mean(result.episode_lengths)
+            log_data["rollout/n_episodes"] = result.n_episodes
+        
+        # Extra metrics from callback (env-specific metrics)
+        if self.log_extra_fn:
+            extra = self.log_extra_fn()
+            if extra:
+                log_data.update(extra)
+        
+        # Log to logger
+        self._log(log_data)
+        
+        # Console output
+        if self.verbose and (self.iteration % 10 == 0 or self.iteration == 1):
+            reward_str = f"{iter_result.get('mean_reward', 0):.2f}" if result.episode_rewards else "N/A"
+            print(
+                f"[Iter {self.iteration}/{self.max_iteration}] "
+                f"steps={self.total_steps}, reward={reward_str}, "
+                f"pg_loss={stats.policy_loss:.4f}, v_loss={stats.value_loss:.4f}, "
+                f"SPS={sps}"
+            )
 
 
 class OffPolicyTrainer(BaseTrainer):
     """
-    Off-policy 训练器（用于 DQN, SAC 等）
+    Off-policy trainer (for DQN, SAC, etc.)
     
-    训练流程：
-    1. 采集少量数据存入 replay buffer
-    2. 从 buffer 采样更新
-    
-    Args:
-        algorithm: Off-policy 算法实例
-        collector: 数据采集器
-        buffer: Replay buffer
-        step_per_collect: 每次采集的步数
-        update_per_collect: 每次采集后更新的次数
-        batch_size: 采样 batch 大小
+    Training loop:
+        1. Collect few steps into replay buffer
+        2. Sample from buffer and update
     """
     
     def __init__(
@@ -194,79 +272,135 @@ class OffPolicyTrainer(BaseTrainer):
         algorithm: BaseAlgorithm,
         collector: BaseCollector,
         buffer: Any,  # ReplayBuffer
-        max_epoch: int = 100,
-        step_per_epoch: int = 10000,
-        step_per_collect: int = 10,
-        update_per_collect: int = 10,
+        max_iteration: int,
+        step_per_iteration: int = 1000,
+        collect_per_step: int = 1,
+        update_per_step: int = 1,
         batch_size: int = 256,
-        start_timesteps: int = 10000,
+        warmup_steps: int = 10000,
+        # Callbacks
+        save_checkpoint_fn: Optional[Callable[[int], None]] = None,
+        save_interval: int = 100,
+        log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        stop_fn: Optional[Callable[[float], bool]] = None,
+        # Logging
         logger: Optional[Any] = None,
         verbose: bool = True,
     ):
-        super().__init__(algorithm, collector, max_epoch, step_per_epoch, logger, verbose)
+        super().__init__(
+            algorithm=algorithm,
+            collector=collector,
+            max_iteration=max_iteration,
+            step_per_iteration=step_per_iteration,
+            save_checkpoint_fn=save_checkpoint_fn,
+            save_interval=save_interval,
+            log_extra_fn=log_extra_fn,
+            stop_fn=stop_fn,
+            logger=logger,
+            verbose=verbose,
+        )
         self.buffer = buffer
-        self.step_per_collect = step_per_collect
-        self.update_per_collect = update_per_collect
+        self.collect_per_step = collect_per_step
+        self.update_per_step = update_per_step
         self.batch_size = batch_size
-        self.start_timesteps = start_timesteps
+        self.warmup_steps = warmup_steps
     
     def train(self) -> Dict[str, float]:
-        """执行完整训练"""
+        """Execute full training"""
         self.collector.reset()
-        start_time = time.time()
+        self.start_time = time.time()
         
-        # 预填充 buffer
-        if self.start_timesteps > 0:
+        # Warmup: fill buffer with random actions
+        if self.warmup_steps > 0:
             if self.verbose:
-                print(f"预填充 buffer: {self.start_timesteps} 步...")
-            # TODO: 实现随机策略采集
+                print(f"Warming up buffer with {self.warmup_steps} steps...")
+            # TODO: collect with random policy
+            pass
         
-        for self.epoch in range(1, self.max_epoch + 1):
-            epoch_stats = self._train_epoch()
-            self._log_epoch(epoch_stats)
+        for self.iteration in range(1, self.max_iteration + 1):
+            if self.save_checkpoint_fn and self.iteration % self.save_interval == 0:
+                self.save_checkpoint_fn(self.iteration)
+            
+            iter_result = self._train_iteration()
+            self._log_iteration(iter_result)
+            
+            mean_reward = iter_result.get("mean_reward")
+            if mean_reward is not None and self.stop_fn and self.stop_fn(mean_reward):
+                if self.verbose:
+                    print(f"Early stopping at iteration {self.iteration}")
+                break
         
-        total_time = time.time() - start_time
+        if self.save_checkpoint_fn:
+            self.save_checkpoint_fn(self.iteration)
+        
+        total_time = time.time() - self.start_time
         return {
-            "total_epochs": self.max_epoch,
+            "total_iterations": self.iteration,
             "total_steps": self.total_steps,
             "total_time": total_time,
             "best_reward": self.best_reward,
         }
     
-    def _train_epoch(self) -> Dict[str, float]:
-        """执行一轮训练"""
-        epoch_steps = 0
+    def _train_iteration(self) -> Dict[str, Any]:
+        """One iteration: collect + multiple updates"""
         all_stats: List[TrainingStats] = []
         all_rewards: List[float] = []
+        iter_steps = 0
         
-        while epoch_steps < self.step_per_epoch:
-            # 1. 采集
-            result = self.collector.collect(n_steps=self.step_per_collect)
-            epoch_steps += result.n_steps
+        while iter_steps < self.step_per_iteration:
+            # Collect
+            result = self.collector.collect(n_steps=self.collect_per_step)
+            iter_steps += result.n_steps
             self.total_steps += result.n_steps
             all_rewards.extend(result.episode_rewards)
             
-            # 2. 存入 buffer（TODO: 需要实现）
-            # self.buffer.add_batch(result.batch)
+            # Add to buffer
+            # self.buffer.add(result.batch)
             
-            # 3. 更新
+            # Update
             if len(self.buffer) >= self.batch_size:
-                for _ in range(self.update_per_collect):
+                for _ in range(self.update_per_step):
                     batch = self.buffer.sample(self.batch_size)
                     stats = self.algorithm.update(batch)
                     all_stats.append(stats)
         
-        # 统计
-        epoch_stats = {
-            "n_steps": epoch_steps,
+        iter_result = {
+            "stats_list": all_stats,
+            "sps": self._compute_sps(),
         }
         
-        if all_stats:
-            epoch_stats["loss"] = np.mean([s.loss for s in all_stats])
-        
         if all_rewards:
-            epoch_stats["mean_episode_reward"] = np.mean(all_rewards)
-            epoch_stats["n_episodes"] = len(all_rewards)
-            self._update_best(epoch_stats["mean_episode_reward"])
+            mean_reward = np.mean(all_rewards)
+            self._update_best(mean_reward)
+            iter_result["mean_reward"] = mean_reward
+            iter_result["n_episodes"] = len(all_rewards)
         
-        return epoch_stats
+        return iter_result
+    
+    def _log_iteration(self, iter_result: Dict[str, Any]):
+        """Log iteration metrics"""
+        stats_list = iter_result.get("stats_list", [])
+        
+        log_data = {
+            "train/sps": iter_result["sps"],
+            "train/total_steps": self.total_steps,
+        }
+        
+        if stats_list:
+            log_data["train/loss"] = np.mean([s.loss for s in stats_list])
+        
+        if "mean_reward" in iter_result:
+            log_data["rollout/episode_reward"] = iter_result["mean_reward"]
+            log_data["rollout/n_episodes"] = iter_result["n_episodes"]
+        
+        if self.log_extra_fn:
+            extra = self.log_extra_fn()
+            if extra:
+                log_data.update(extra)
+        
+        self._log(log_data)
+        
+        if self.verbose and (self.iteration % 10 == 0 or self.iteration == 1):
+            reward_str = f"{iter_result.get('mean_reward', 0):.2f}" if "mean_reward" in iter_result else "N/A"
+            print(f"[Iter {self.iteration}/{self.max_iteration}] "
+                  f"steps={self.total_steps}, reward={reward_str}, SPS={iter_result['sps']}")

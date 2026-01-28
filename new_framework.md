@@ -4328,3 +4328,6 @@ tianshou-framework:
     ├── TD3BC* (继承自 TD3)
     ├── DiscreteBCQ
     └── DiscreteCRR
+
+    epoch 指的是调用一次algo.update()函数会使用一个buffer中的数据进行几次参数更新
+    iteration 指的是一共调用几次update函数

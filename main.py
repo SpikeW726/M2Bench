@@ -2,6 +2,7 @@
 
 import os
 import time
+from datetime import datetime
 import yaml
 import torch
 import numpy as np
@@ -28,15 +29,17 @@ def main():
     
     # 训练超参数
     total_timesteps = 50000000
-    num_steps = 128  # 每个 env 每次采集的步数
-    num_minibatches = 4
+    num_steps = 1024  # 每个 env 每次采集的步数
+    num_minibatches = 8
     update_epochs = 10
-    lr = 3e-5
+    actor_lr = 3e-5
+    critic_lr = 3e-4
     gamma = 0.999
     gae_lambda = 1.0
     clip_range = 0.2
-    vf_coef = 0.1
-    ent_coef = 0.05
+    vf_coef = 1.0
+    ent_coef = 0.1
+    save_internal = 100 # 每过xx个iteration保存一次模型参数
     
     # 日志配置
     exp_name = "mappo_patrol"
@@ -48,9 +51,14 @@ def main():
     # critic_path = "models/imi_train__1769515607_critic.pt"
     actor_path = ""
     critic_path = ""
+
+    # 保存路径
+    save_dir = Path("models/mappo/no-imi2")
+    save_dir.mkdir(parents=True, exist_ok=True)
     
     # ========== 日志初始化 ==========
-    run_name = f"{exp_name}__{int(time.time())}"
+    now = datetime.now()
+    run_name = f"{exp_name}_{now:%Y-%m-%d}"
     log_dir = Path(f"runs/{run_name}")
     log_dir.mkdir(parents=True, exist_ok=True)
     
@@ -65,7 +73,8 @@ def main():
                 "total_timesteps": total_timesteps,
                 "num_envs": num_envs,
                 "num_steps": num_steps,
-                "lr": lr,
+                "actor_lr": actor_lr,
+                "critic_lr": critic_lr,
                 "gamma": gamma,
                 "gae_lambda": gae_lambda,
                 "clip_range": clip_range,
@@ -139,7 +148,8 @@ def main():
         policy=ma_policy,
         critic=critic_net,
         num_envs=num_envs,
-        lr=lr,
+        actor_lr=actor_lr,
+        critic_lr=critic_lr,
         gamma=gamma,
         gae_lambda=gae_lambda,
         clip_range=clip_range,
@@ -164,7 +174,13 @@ def main():
     print(f"  Batch size: {step_per_epoch * num_agents}, Device: {device}")
     
     for iteration in range(1, num_iterations + 1):
-        # 1. 采集数据
+        # 0. 每隔一段时间保存一次模型
+        if (iteration+1) % save_internal == 0:
+            torch.save(ma_policy.state_dict(), save_dir / f"{iteration+1}_policy.pt")
+            torch.save(critic_net.state_dict(), save_dir / f"{iteration+1}_critic.pt")
+
+        # 1. 采集数据 (eval mode)
+        algorithm.set_training_mode(False)
         result = collector.collect(n_steps=step_per_epoch)
         global_step += result.n_steps
         
@@ -191,7 +207,8 @@ def main():
             "env/iwi": env_metrics.iwi,
             "env/wi": env_metrics.wi,
             "charts/SPS": sps,
-            "charts/learning_rate": lr,
+            "charts/actor_lr": actor_lr,
+            "charts/critic_lr": critic_lr,
             "charts/global_step": global_step,
         }
         
@@ -220,12 +237,9 @@ def main():
                   f"pg_loss={stats.policy_loss:.4f}, v_loss={stats.value_loss:.4f}, "
                   f"iwi={env_metrics.iwi:.2f}, SPS={sps}")
     
-    # ========== 保存 ==========
-    save_dir = Path("models/mappo/no-imi")
-    save_dir.mkdir(parents=True, exist_ok=True)
-    
-    torch.save(ma_policy.state_dict(), save_dir / f"{run_name}_policy.pt")
-    torch.save(critic_net.state_dict(), save_dir / f"{run_name}_critic.pt")
+    # ========== 保存最终模型 ==========
+    torch.save(ma_policy.state_dict(), save_dir / "final_policy.pt")
+    torch.save(critic_net.state_dict(), save_dir / "final_critic.pt")
     print(f"\n[Main] Saved models to {save_dir}")
     
     writer.close()

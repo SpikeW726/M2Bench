@@ -1,7 +1,7 @@
 env_config:
   graph_path: "graphs/simple_TSP_12.json"
   
-  enable_wait: False
+  enable_wait: True
   deltaT: 0.5
   
   num_agents: 3
@@ -12,7 +12,7 @@ env_config:
 custom_config:
   T: 20.0
   role_imformation: "agent-index"
-  reward_scale: 0.001
+  reward_scale: 1.0
   truncate_by_time: True
 
 

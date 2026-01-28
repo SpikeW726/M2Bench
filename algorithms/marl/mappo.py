@@ -12,12 +12,13 @@ from data.batch import RolloutBatch
 
 class MAPPOAlgo(ActorCriticOnPolicyAlgo):
     """
-    MAPPO算法: 共享策略 + Centralized Critic
+    MAPPO: Multi-Agent PPO with Parameter Sharing and Centralized Critic
     
-    参考 CleanRL PPO 实现：
-    - Minibatch 级别 advantage normalization
-    - 可选的 value loss clipping
-    - 内部处理 minibatch 切分和多轮更新
+    Features:
+    - Separate optimizers for actor and critic (dual timescale update)
+    - Minibatch-level advantage normalization
+    - Optional value loss clipping
+    - Entropy loss only added to policy loss (not critic loss)
     """
     
     def __init__(
@@ -25,7 +26,8 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         policy: MultiAgentPolicy,
         critic: nn.Module,
         num_envs: int,
-        lr: float = 3e-4,
+        actor_lr: float = 3e-4,
+        critic_lr: float = 3e-4,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_range: float = 0.2,
@@ -45,7 +47,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         self.device = policy.device
         self.num_envs = num_envs
         
-        # PPO 超参数
+        # PPO hyperparams
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_range = clip_range
@@ -54,16 +56,15 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         self.max_grad_norm = max_grad_norm
         self.normalize_advantage = normalize_advantage
         
-        # Minibatch 和更新轮数
+        # Minibatch and epochs
         self.num_minibatches = num_minibatches
         self.update_epochs = update_epochs
         self.clip_vloss = clip_vloss
         self.target_kl = target_kl
         
-        # 优化器
-        self.optimizer = torch.optim.Adam(
-            list(policy.parameters()) + list(critic.parameters()), lr=lr
-        )
+        # Separate optimizers for actor and critic
+        self.actor_optimizer = torch.optim.Adam(policy.parameters(), lr=actor_lr)
+        self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=critic_lr)
     
     def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> RolloutBatch:
         """
@@ -255,31 +256,38 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         
         return self.critic(critic_input).squeeze()
     
-    def update(self, batch: RolloutBatch) -> TrainingStats:
+    def update(self, batch: RolloutBatch, update_actor: bool = True) -> TrainingStats:
         """
-        PPO 更新，参考 CleanRL 实现
+        PPO update with separate actor/critic optimization.
         
-        - Shuffle + minibatch 切分
-        - Minibatch 级别 advantage normalization
-        - 可选 value loss clipping
-        - KL 早停使用整个 epoch 的平均 KL
+        Args:
+            batch: RolloutBatch with computed advantages and returns
+            update_actor: whether to update actor (for dual timescale update)
+        
+        Features:
+            - Shuffle + minibatch split
+            - Minibatch-level advantage normalization
+            - Optional value loss clipping
+            - Entropy loss only added to actor loss
+            - KL early stopping based on epoch average
         """
         batch_size = len(batch)
         minibatch_size = batch_size // self.num_minibatches
         
         all_pg_loss, all_v_loss, all_entropy, all_clipfrac = [], [], [], []
-        all_approx_kl = []  # 用于 KL 早停判断
+        all_approx_kl = []
+        all_actor_grad_norm, all_critic_grad_norm = [], []
         indices = np.arange(batch_size)
         
         for epoch in range(self.update_epochs):
             np.random.shuffle(indices)
-            epoch_approx_kl = []  # 当前 epoch 内所有 minibatch 的 KL
+            epoch_approx_kl = []
             
             for start in range(0, batch_size, minibatch_size):
                 end = start + minibatch_size
                 mb_inds = indices[start:end]
                 
-                # 取 minibatch 数据
+                # Get minibatch data
                 mb_obs = batch.obs[mb_inds]
                 mb_act = batch.act[mb_inds]
                 mb_log_prob = batch.log_prob[mb_inds]
@@ -289,22 +297,36 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 mb_critic_input = batch.global_state[mb_inds]
                 mb_action_mask = batch.action_mask[mb_inds] if batch.action_mask is not None else None
                 
-                # Minibatch 级别 advantage normalization
+                # Minibatch-level advantage normalization
                 if self.normalize_advantage:
                     mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
                 
-                # Policy loss
+                # ===== Actor update =====
                 new_log_prob, entropy = self.policy.evaluate_actions_flat(
                     mb_obs, mb_act, action_mask=mb_action_mask
                 )
                 logratio = new_log_prob - mb_log_prob
                 ratio = logratio.exp()
                 
+                # Policy loss (clipped surrogate)
                 pg_loss1 = -mb_adv * ratio
                 pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - self.clip_range, 1 + self.clip_range)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
                 
-                # Value loss
+                # Entropy loss (only for actor)
+                entropy_loss = entropy.mean()
+                actor_loss = pg_loss - self.ent_coef * entropy_loss
+                
+                self.actor_optimizer.zero_grad()
+                if update_actor:
+                    actor_loss.backward()
+                    actor_grad_norm = nn.utils.clip_grad_norm_(
+                        self.policy.parameters(), self.max_grad_norm
+                    )
+                    self.actor_optimizer.step()
+                    all_actor_grad_norm.append(actor_grad_norm.item())
+                
+                # ===== Critic update =====
                 new_value = self.critic(mb_critic_input).squeeze(-1)
                 if self.clip_vloss:
                     v_loss_unclipped = (new_value - mb_ret) ** 2
@@ -316,31 +338,28 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 else:
                     v_loss = 0.5 * ((new_value - mb_ret) ** 2).mean()
                 
-                # Total loss
-                entropy_loss = entropy.mean()
-                loss = pg_loss + self.vf_coef * v_loss - self.ent_coef * entropy_loss
+                critic_loss = self.vf_coef * v_loss
                 
-                # Optimize
-                self.optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(
-                    list(self.policy.parameters()) + list(self.critic.parameters()),
-                    self.max_grad_norm
+                self.critic_optimizer.zero_grad()
+                critic_loss.backward()
+                critic_grad_norm = nn.utils.clip_grad_norm_(
+                    self.critic.parameters(), self.max_grad_norm
                 )
-                self.optimizer.step()
+                self.critic_optimizer.step()
+                all_critic_grad_norm.append(critic_grad_norm.item())
                 
-                # 记录统计
+                # Record stats
                 all_pg_loss.append(pg_loss.item())
                 all_v_loss.append(v_loss.item())
                 all_entropy.append(entropy_loss.item())
+                
                 with torch.no_grad():
                     clipfrac = ((ratio - 1.0).abs() > self.clip_range).float().mean().item()
                     all_clipfrac.append(clipfrac)
-                    # 计算当前 minibatch 的 approx KL
                     mb_approx_kl = ((ratio - 1) - logratio).mean().item()
                     epoch_approx_kl.append(mb_approx_kl)
             
-            # KL 早停：使用整个 epoch 的平均 KL
+            # KL early stopping based on epoch average
             if self.target_kl is not None and epoch_approx_kl:
                 avg_epoch_kl = np.mean(epoch_approx_kl)
                 all_approx_kl.append(avg_epoch_kl)
@@ -355,6 +374,8 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             extra={
                 "clipfrac": np.mean(all_clipfrac),
                 "approx_kl": np.mean(all_approx_kl) if all_approx_kl else 0.0,
+                "actor_grad_norm": np.mean(all_actor_grad_norm) if all_actor_grad_norm else 0.0,
+                "critic_grad_norm": np.mean(all_critic_grad_norm),
             }
         )
     
