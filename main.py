@@ -1,6 +1,5 @@
-"""MAPPO 后训练：使用预训练的 Actor/Critic 权重在 MASUPEnv 上进行强化学习"""
+"""MAPPO training: RL fine-tuning with pretrained Actor/Critic weights on MASUPEnv"""
 
-import os
 import time
 from datetime import datetime
 import yaml
@@ -16,6 +15,7 @@ from polocies.rl.rl_base import ActorPolicy
 from polocies.marl.marl_base import MultiAgentPolicy
 from algorithms.marl.mappo import MAPPOAlgo
 from data.collector import MACollector
+from utils.model_io import save_model
 
 
 def main():
@@ -39,26 +39,27 @@ def main():
     clip_range = 0.2
     vf_coef = 1.0
     ent_coef = 0.1
-    save_internal = 100 # 每过xx个iteration保存一次模型参数
+    save_internal = 1000 # 每过xx个iteration保存一次模型参数
     
     # 日志配置
-    exp_name = "mappo_patrol"
     track_wandb = True  # 是否使用 wandb
     wandb_project = "MAP-RL"
     
     # 预训练权重路径
-    # actor_path = "models/imi_train__1769515607_actor_best.pt"
-    # critic_path = "models/imi_train__1769515607_critic.pt"
-    actor_path = ""
-    critic_path = ""
+    actor_path = "models/imi_train__1769515607_actor_best.pt"
+    critic_path = "models/imi_train__1769515607_critic.pt"
+    # actor_path = ""
+    # critic_path = ""
 
     # 保存路径
-    save_dir = Path("models/mappo/no-imi2")
+    algo_name = "mappo"
+    exp_name = "imi"
+    now = datetime.now()
+    run_name = f"{exp_name}_{now:%Y-%m-%d_%H-%M-%S}"
+    save_dir = Path(f"models/{algo_name}/{run_name}")
     save_dir.mkdir(parents=True, exist_ok=True)
     
     # ========== 日志初始化 ==========
-    now = datetime.now()
-    run_name = f"{exp_name}_{now:%Y-%m-%d}"
     log_dir = Path(f"runs/{run_name}")
     log_dir.mkdir(parents=True, exist_ok=True)
     
@@ -160,6 +161,32 @@ def main():
         clip_vloss=True,
     )
     
+    # ========== Model Config (for saving) ==========
+    actor_config = {
+        'type': 'ActorMLP',
+        'input_dim': obs_dim,
+        'hidden_sizes': actor_hidden,
+        'output_dim': action_dim,
+    }
+    critic_config = {
+        'type': 'CriticMLP',
+        'input_dim': critic_state_dim,
+        'hidden_sizes': critic_hidden,
+        'output_dim': 1,
+    }
+    training_config = {
+        'algorithm': 'MAPPO',
+        'actor_lr': actor_lr,
+        'critic_lr': critic_lr,
+        'gamma': gamma,
+        'gae_lambda': gae_lambda,
+        'clip_range': clip_range,
+        'vf_coef': vf_coef,
+        'ent_coef': ent_coef,
+        'num_minibatches': num_minibatches,
+        'update_epochs': update_epochs,
+    }
+
     # ========== 训练循环 ==========
     collector = MACollector(algorithm, vec_env)
     collector.reset()
@@ -174,10 +201,17 @@ def main():
     print(f"  Batch size: {step_per_epoch * num_agents}, Device: {device}")
     
     for iteration in range(1, num_iterations + 1):
-        # 0. 每隔一段时间保存一次模型
-        if (iteration+1) % save_internal == 0:
-            torch.save(ma_policy.state_dict(), save_dir / f"{iteration+1}_policy.pt")
-            torch.save(critic_net.state_dict(), save_dir / f"{iteration+1}_critic.pt")
+        # 0. Checkpoint (HuggingFace style)
+        if (iteration + 1) % save_internal == 0:
+            ckpt_dir = save_dir / f"iter_{iteration + 1}"
+            save_model(
+                save_dir=ckpt_dir,
+                policy=ma_policy,
+                critic=critic_net,
+                actor_config=actor_config,
+                critic_config=critic_config,
+                extra_info={'iteration': iteration + 1, 'training': training_config},
+            )
 
         # 1. 采集数据 (eval mode)
         algorithm.set_training_mode(False)
@@ -237,10 +271,17 @@ def main():
                   f"pg_loss={stats.policy_loss:.4f}, v_loss={stats.value_loss:.4f}, "
                   f"iwi={env_metrics.iwi:.2f}, SPS={sps}")
     
-    # ========== 保存最终模型 ==========
-    torch.save(ma_policy.state_dict(), save_dir / "final_policy.pt")
-    torch.save(critic_net.state_dict(), save_dir / "final_critic.pt")
-    print(f"\n[Main] Saved models to {save_dir}")
+    # ========== Save final model (HuggingFace style) ==========
+    final_dir = save_dir / "final"
+    save_model(
+        save_dir=final_dir,
+        policy=ma_policy,
+        critic=critic_net,
+        actor_config=actor_config,
+        critic_config=critic_config,
+        extra_info={'iteration': num_iterations, 'training': training_config},
+    )
+    print(f"\n[Main] Saved final model to {final_dir}")
     
     writer.close()
     if track_wandb:

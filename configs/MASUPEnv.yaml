@@ -12,7 +12,8 @@ env_config:
 custom_config:
   T: 20.0
   role_imformation: "agent-index"
-  reward_scale: 1.0
+  reward_scale: 0.01
   truncate_by_time: True
-
+  idi_scale: 0.05
+  contribution_scale: 0.05
 

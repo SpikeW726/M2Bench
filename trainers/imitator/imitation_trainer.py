@@ -7,6 +7,7 @@ _project_root = Path(__file__).resolve().parent.parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
+import yaml
 import numpy as np
 import torch
 import torch.nn as nn
@@ -27,20 +28,25 @@ def layer_init(layer:nn.Linear, std=np.sqrt(2), bias_const=0.0):
 class ActorMLP(nn.Module):
     def __init__(self, input_dim, hidden_sizes, output_dim):
         """
-        Actor 网络
-        Output Layer gain = 0.01
+        Actor network with configurable hidden layers.
+        Output layer gain = 0.01 for stable policy initialization.
         """
         super().__init__()
+        # Store config for checkpoint saving
+        self.input_dim = input_dim
+        self.hidden_sizes = list(hidden_sizes)
+        self.output_dim = output_dim
+        
         layers = []
         current_dim = input_dim
 
-        # 动态构建隐藏层
+        # Build hidden layers
         for h_dim in hidden_sizes:
             layers.append(layer_init(nn.Linear(current_dim, h_dim), std=np.sqrt(2)))
             layers.append(nn.Tanh())
             current_dim = h_dim
 
-        # 构建Actor输出层, 使用 std=0.01
+        # Output layer with small std for stable init
         layers.append(layer_init(nn.Linear(current_dim, output_dim), std=0.01))
         
         self.network = nn.Sequential(*layers)
@@ -51,20 +57,25 @@ class ActorMLP(nn.Module):
 class CriticMLP(nn.Module):
     def __init__(self, input_dim, hidden_sizes, output_dim=1):
         """
-        Critic 网络 (Value Function)
-        Output Layer gain = 1.0
+        Critic network (Value Function).
+        Output layer gain = 1.0.
         """
         super().__init__()
+        # Store config for checkpoint saving
+        self.input_dim = input_dim
+        self.hidden_sizes = list(hidden_sizes)
+        self.output_dim = output_dim
+        
         layers = []
         current_dim = input_dim
 
-        # 动态构建隐藏层
+        # Build hidden layers
         for h_dim in hidden_sizes:
             layers.append(layer_init(nn.Linear(current_dim, h_dim), std=np.sqrt(2)))
             layers.append(nn.Tanh())
             current_dim = h_dim
 
-        # 构建Critic输出层, 使用 std=1.0
+        # Output layer with std=1.0
         layers.append(layer_init(nn.Linear(current_dim, output_dim), std=1.0))
         
         self.network = nn.Sequential(*layers)
@@ -256,57 +267,94 @@ class imi_trainer:
             self.writer.close()
     
     def _save_actor(self, actor_loss: float, actor_acc: float, stopped_iter: int):
-        """
-        单独保存 Actor 模型（早停时调用）
-        """
-        actor_checkpoint = {
+        """Save best actor model (HuggingFace style + legacy format)."""
+        # HuggingFace style: directory with config.yaml + weights
+        actor_dir = self.save_dir / f"{self.run_name}_actor_best"
+        actor_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save config
+        config = {
+            'actor': {
+                'type': self.actor.__class__.__name__,
+                'input_dim': self.actor.input_dim,
+                'hidden_sizes': self.actor.hidden_sizes,
+                'output_dim': self.actor.output_dim,
+            },
+            'extra': {
+                'actor_loss': actor_loss,
+                'actor_accuracy': actor_acc,
+                'stopped_iteration': stopped_iter,
+                'run_name': self.run_name,
+            }
+        }
+        with open(actor_dir / 'config.yaml', 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
+        
+        # Save weights
+        torch.save(self.actor.state_dict(), actor_dir / 'policy.pt')
+        print(f"[ImiTrainer] Saved best actor to {actor_dir}")
+        
+        # Also save legacy format for backward compatibility
+        legacy_checkpoint = {
             "actor_state_dict": self.actor.state_dict(),
-            "actor_optimizer_state_dict": self.actor_optimizer.state_dict(),
+            "hidden_sizes": self.actor.hidden_sizes,
             "actor_loss": actor_loss,
             "actor_accuracy": actor_acc,
             "stopped_iteration": stopped_iter,
             "run_name": self.run_name,
         }
-        
-        actor_checkpoint_path = self.save_dir / f"{self.run_name}_actor_best.pt"
-        torch.save(actor_checkpoint, actor_checkpoint_path)
-        print(f"[ImiTrainer] Saved best actor to {actor_checkpoint_path}")
+        torch.save(legacy_checkpoint, self.save_dir / f"{self.run_name}_actor_best.pt")
     
     def _save_checkpoint(self, final_actor_loss: float, final_critic_loss: float, 
                         final_acc: float, total_iterations: int):
-        """
-        保存训练好的模型checkpoint
+        """Save final checkpoint (HuggingFace style + legacy format)."""
+        # HuggingFace style: directory with config.yaml + weights
+        ckpt_dir = self.save_dir / f"{self.run_name}_final"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
         
-        Args:
-            final_actor_loss: 最终actor损失
-            final_critic_loss: 最终critic损失
-            final_acc: 最终准确率
-            total_iterations: 总训练轮数
-        """
-        checkpoint = {
+        # Save config
+        config = {
+            'actor': {
+                'type': self.actor.__class__.__name__,
+                'input_dim': self.actor.input_dim,
+                'hidden_sizes': self.actor.hidden_sizes,
+                'output_dim': self.actor.output_dim,
+            },
+            'critic': {
+                'type': self.critic.__class__.__name__,
+                'input_dim': self.critic.input_dim,
+                'hidden_sizes': self.critic.hidden_sizes,
+                'output_dim': self.critic.output_dim,
+            },
+            'extra': {
+                'final_actor_loss': final_actor_loss,
+                'final_critic_loss': final_critic_loss,
+                'final_accuracy': final_acc,
+                'total_iterations': total_iterations,
+                'run_name': self.run_name,
+            }
+        }
+        with open(ckpt_dir / 'config.yaml', 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
+        
+        # Save weights
+        torch.save(self.actor.state_dict(), ckpt_dir / 'policy.pt')
+        torch.save(self.critic.state_dict(), ckpt_dir / 'critic.pt')
+        print(f"[ImiTrainer] Saved final checkpoint to {ckpt_dir}")
+        
+        # Also save legacy format for backward compatibility
+        legacy_checkpoint = {
             "actor_state_dict": self.actor.state_dict(),
             "critic_state_dict": self.critic.state_dict(),
-            "actor_optimizer_state_dict": self.actor_optimizer.state_dict(),
-            "critic_optimizer_state_dict": self.critic_optimizer.state_dict(),
+            "actor_hidden_sizes": self.actor.hidden_sizes,
+            "critic_hidden_sizes": self.critic.hidden_sizes,
             "final_actor_loss": final_actor_loss,
             "final_critic_loss": final_critic_loss,
             "final_accuracy": final_acc,
             "total_iterations": total_iterations,
             "run_name": self.run_name,
         }
-        
-        # 保存完整checkpoint
-        checkpoint_path = self.save_dir / f"{self.run_name}.pt"
-        torch.save(checkpoint, checkpoint_path)
-        print(f"[ImiTrainer] Saved checkpoint to {checkpoint_path}")
-        
-        # 同时保存单独的模型文件（方便直接加载使用）
-        actor_path = self.save_dir / f"{self.run_name}_actor.pt"
-        critic_path = self.save_dir / f"{self.run_name}_critic.pt"
-        torch.save(self.actor.state_dict(), actor_path)
-        torch.save(self.critic.state_dict(), critic_path)
-        print(f"[ImiTrainer] Saved actor to {actor_path}")
-        print(f"[ImiTrainer] Saved critic to {critic_path}")
+        torch.save(legacy_checkpoint, self.save_dir / f"{self.run_name}.pt")
 
 if __name__ == "__main__":
     # 切换工作目录到项目根目录 (确保配置文件路径正确)

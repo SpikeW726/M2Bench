@@ -16,6 +16,7 @@ from polocies.marl.marl_base import MultiAgentPolicy
 from polocies.rl.rl_base import ActorPolicy
 from trainers.imitator.imitation_trainer import ActorMLP, CriticMLP
 from trainers.rl_trainer import OnPolicyTrainer
+from utils.model_io import save_model
 
 
 class SimpleLogger:
@@ -178,12 +179,45 @@ def main():
     # ========== Collector ==========
     collector = MACollector(algorithm, vec_env)
 
+    # ========== Model Config (for saving) ==========
+    actor_config = {
+        'type': 'ActorMLP',
+        'input_dim': obs_dim,
+        'hidden_sizes': actor_hidden,
+        'output_dim': action_dim,
+    }
+    critic_config = {
+        'type': 'CriticMLP',
+        'input_dim': critic_state_dim,
+        'hidden_sizes': critic_hidden,
+        'output_dim': 1,
+    }
+    training_config = {
+        'algorithm': 'MAPPO',
+        'actor_lr': actor_lr,
+        'critic_lr': critic_lr,
+        'gamma': gamma,
+        'gae_lambda': gae_lambda,
+        'clip_range': clip_range,
+        'vf_coef': vf_coef,
+        'ent_coef': ent_coef,
+        'num_minibatches': num_minibatches,
+        'update_epochs': update_epochs,
+    }
+
     # ========== Callbacks ==========
     def save_checkpoint_fn(iteration: int):
-        """Save model checkpoint"""
-        torch.save(ma_policy.state_dict(), save_dir / f"iter_{iteration}_policy.pt")
-        torch.save(critic_net.state_dict(), save_dir / f"iter_{iteration}_critic.pt")
-        print(f"[Checkpoint] Saved iteration {iteration}")
+        """Save model checkpoint in HuggingFace style"""
+        ckpt_dir = save_dir / f"iter_{iteration}"
+        save_model(
+            save_dir=ckpt_dir,
+            policy=ma_policy,
+            critic=critic_net,
+            actor_config=actor_config,
+            critic_config=critic_config,
+            extra_info={'iteration': iteration, 'training': training_config},
+        )
+        print(f"[Checkpoint] Saved iteration {iteration} to {ckpt_dir}")
 
     def log_extra_fn() -> Dict[str, float]:
         """Get environment-specific metrics (idleness)"""

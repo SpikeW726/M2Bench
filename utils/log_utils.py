@@ -291,6 +291,7 @@ def plot_aggregated_metrics(
     aggregated_data: Dict[str, Any],
     metric_configs: Optional[List[tuple]] = None,
     title: str = "Multi-Episode Metrics Evaluation",
+    subtitle: Optional[str] = None,
     save_path: Optional[str] = None,
     show: bool = True,
     figsize: tuple = (14, 10)
@@ -303,6 +304,7 @@ def plot_aggregated_metrics(
         metric_configs: 要绘制的指标配置列表，每个元素为 (key, title, label)
             如果为 None, 使用默认的 idleness metrics 配置
         title: 图表标题
+        subtitle: 副标题，用于显示额外信息（如图名、智能体数、平均时间等）
         save_path: 保存路径（可选）
         show: 是否显示图形
         figsize: 图形大小
@@ -331,7 +333,12 @@ def plot_aggregated_metrics(
     else:
         axes = axes.flatten()
     
-    fig.suptitle(title, fontsize=14)
+    # Title and subtitle
+    if subtitle:
+        fig.suptitle(title, fontsize=14, fontweight='bold')
+        fig.text(0.52, 0.95, subtitle, ha='center', va='top', fontsize=10, color='gray')
+    else:
+        fig.suptitle(title, fontsize=14)
     
     x_data = aggregated_data['step_x']
     
