@@ -16,7 +16,7 @@ import numpy as np
 from envs.mdps.masup_env import MASUPEnv
 from polocies.rl.rl_base import ActorPolicy
 from polocies.marl.marl_base import MultiAgentPolicy
-from trainers.imitator.imitation_trainer import ActorMLP
+from networks.mlp import ActorMLP
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
 
 

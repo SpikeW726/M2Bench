@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from envs.mdps.masup_env import MASUPEnv
 from envs.venvs import DummyVectorEnv
-from trainers.imitator.imitation_trainer import ActorMLP, CriticMLP
+from networks.mlp import ActorMLP, CriticMLP
 from polocies.rl.rl_base import ActorPolicy
 from polocies.marl.marl_base import MultiAgentPolicy
 from algorithms.marl.mappo import MAPPOAlgo
