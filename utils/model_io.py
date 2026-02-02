@@ -103,7 +103,7 @@ def load_model(
         config = yaml.safe_load(f)
     
     # Import network classes dynamically
-    from trainers.imitator.imitation_trainer import ActorMLP, CriticMLP
+    from networks.mlp import ActorMLP, CriticMLP
     
     CLASS_REGISTRY = {
         'ActorMLP': ActorMLP,

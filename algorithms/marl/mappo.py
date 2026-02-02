@@ -39,6 +39,15 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         update_epochs: int = 10,
         clip_vloss: bool = True,
         target_kl: Optional[float] = None,
+        # Learning rate scheduler parameters
+        use_lr_scheduler: bool = False,
+        actor_lr_start_factor: float = 1.0,
+        actor_lr_end_factor: float = 0.1,
+        actor_lr_decay_ratio: float = 0.8,
+        critic_lr_start_factor: float = 1.0,
+        critic_lr_end_factor: float = 0.1,
+        critic_lr_decay_ratio: float = 0.8,
+        total_iterations: Optional[int] = None,
     ):
         nn.Module.__init__(self)
         
@@ -65,6 +74,33 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         # Separate optimizers for actor and critic
         self.actor_optimizer = torch.optim.Adam(policy.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=critic_lr)
+
+        # Learning rate schedulers
+        self.use_lr_scheduler = use_lr_scheduler
+        self.actor_scheduler = None
+        self.critic_scheduler = None
+
+        if use_lr_scheduler and total_iterations is not None:
+            # 计算 total optimizer step 次数
+            steps_per_iteration = self.update_epochs * self.num_minibatches
+
+            # Actor scheduler
+            actor_decay_steps = int(total_iterations * actor_lr_decay_ratio * steps_per_iteration)
+            self.actor_scheduler = torch.optim.lr_scheduler.LinearLR(
+                self.actor_optimizer,
+                start_factor=actor_lr_start_factor,
+                end_factor=actor_lr_end_factor,
+                total_iters=actor_decay_steps,
+            )
+
+            # Critic scheduler
+            critic_decay_steps = int(total_iterations * critic_lr_decay_ratio * steps_per_iteration)
+            self.critic_scheduler = torch.optim.lr_scheduler.LinearLR(
+                self.critic_optimizer,
+                start_factor=critic_lr_start_factor,
+                end_factor=critic_lr_end_factor,
+                total_iters=critic_decay_steps,
+            )
     
     def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> RolloutBatch:
         """
@@ -347,6 +383,12 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 )
                 self.critic_optimizer.step()
                 all_critic_grad_norm.append(critic_grad_norm.item())
+
+                # Learning rate scheduler step
+                if self.actor_scheduler is not None:
+                    self.actor_scheduler.step()
+                if self.critic_scheduler is not None:
+                    self.critic_scheduler.step()
                 
                 # Record stats
                 all_pg_loss.append(pg_loss.item())

@@ -46,7 +46,8 @@ class BaseAlgorithm(nn.Module, ABC):
         self.gamma = gamma
         self.max_grad_norm = max_grad_norm
         self.device = policy.device
-        
+        self.lr = lr
+
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
         self.lr_scheduler = None
     
@@ -291,6 +292,9 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
                         self.max_grad_norm
                     )
                 self.optimizer.step()
+
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
                 
                 stats.loss = loss.item()
                 all_stats.append(stats)
@@ -305,7 +309,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
 
 
 # ============================================================================
-#                          Off-Policy Algorithm
+#                          Off-Policy Algorithm (Not completed yet)
 # ============================================================================
 
 class QLearningOffPolicyAlgo(BaseAlgorithm):

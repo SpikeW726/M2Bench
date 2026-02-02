@@ -5,13 +5,14 @@ env_config:
   deltaT: 0.5
   
   num_agents: 3
+  init_positions: [0, 5, 11]
   
   episode_len: 300 # 默认是一个episode的step数,在MASUP环境中若truncate_by_time为True,则是一个episode的最大时间
 
   
 custom_config:
   T: 20.0
-  role_imformation: "agent-index"
+  role_imformation: "decision"
   reward_scale: 0.01
   truncate_by_time: True
   idi_scale: 0.05

@@ -154,15 +154,61 @@ Expected Idleness 启发式策略：
 - 否则 `I_exp = t_next - last_visit_time[v]`
 - 选择效用最大的邻居：`U = |I_exp| / travel_time`
 
-## 运行示例
+## 运行命令
 
 ```bash
-# 运行启发式策略采样
-python trainers/imitator/HeuristicSampler.py
+# 启发式策略采样 - 收集专家演示数据
+python trainers/imitator/heuristic_sampler.py
+
+# MAPPO 训练 - 使用 OnPolicyTrainer（推荐）
+python train_mappo.py
+
+# MAPPO 训练 - 使用 main.py（手动训练循环）
+python main.py
+
+# 测试训练好的策略
+python evaluators/test.py --model models/mappo/imi/final --num_episodes 10
+
+# 测试并保存可视化结果
+python evaluators/test.py --model models/mappo/imi/final --num_episodes 10 --save_plot evaluators/results/rl_eval.png --no_show
 ```
 
+## 完整训练流程
+
+框架支持从启发式策略到强化学习的完整训练流程：
+
+```
+1. 启发式采样 → 2. 模仿学习预训练 → 3. RL 微调
+```
+
+### 1. 启发式采样 (`trainers/imitator/heuristic_sampler.py`)
+
+使用启发式策略（如 ER）收集专家演示数据，保存为 NPZ 格式：
+
 ```python
-# 使用代码
+# 数据格式:
+- obs: [N, T, M, Obs_Dim] - Actor 输入
+- critic_states: [N, T, M, State_Dim+M] - Centralized Critic 输入
+- actions: [N, T, M, 1] - 动作索引
+- action_masks: [N, T, M, Act_Dim] - 动作掩码
+- rewards: [N, T, M, 1] - 每个智能体的奖励
+- returns: [N, T, M, 1] - 累计折扣回报
+```
+
+### 2. 模仿学习预训练 (`trainers/imitator/imitation_trainer.py`)
+
+在收集的数据上训练 Actor-Critic 网络（监督学习）。
+
+### 3. RL 微调 (`train_mappo.py` 或 `main.py`)
+
+使用 MAPPO 算法微调预训练网络。MAPPO 特点：
+- **双优化器**：Actor 和 Critic 使用独立的优化器和学习率
+- **参数共享**：多个智能体共享 Actor 网络
+- **Centralized Critic**：Critic 输入包含全局状态 + agent one-hot
+
+## 代码使用示例
+
+```python
 from polocies.heuritic.ER import ERPolicy
 from envs.MASUPEnv import MASUPEnv
 import yaml
@@ -229,3 +275,51 @@ for _ in range(100):
 1. **动作索引约定**：`action_idx=0` 始终代表"等待"动作（如果 `enable_wait=True`）
 2. **info 必须包含 active_mask**：用于标记智能体是否真正需要决策
 3. **T_time 语义**：T_time 之前 `worst_idleness_fromT` 保持为 0，用于延迟奖励计算
+
+## 核心模块扩展
+
+### 网络架构 (`networks/`)
+
+- **ActorMLP** (`networks/mlp.py`): Actor 网络，输出层使用 `std=0.01` 初始化保证稳定性
+- **CriticMLP** (`networks/mlp.py`): Critic 网络（值函数），输出层使用 `std=1.0`
+
+所有线性层使用正交初始化 (`layer_init`)。
+
+### 训练框架 (`trainers/`)
+
+- **OnPolicyTrainer** (`trainers/rl_trainer.py`): 通用的 On-Policy RL 训练器，支持回调机制
+  - `save_checkpoint_fn(iteration)`: 保存检查点
+  - `log_extra_fn()`: 记录额外指标（如 idleness）
+  - `stop_fn(mean_reward)`: 提前停止条件
+
+### 模型 I/O (`utils/model_io.py`)
+
+采用 HuggingFace 风格的模型保存格式：
+
+```
+model_dir/
+├── config.yaml    # 网络架构配置
+├── policy.pt      # Policy 权重
+└── critic.pt      # Critic 权重（可选）
+```
+
+```python
+# 保存
+save_model(save_dir, policy=ma_policy, critic=critic_net,
+           actor_config={...}, critic_config={...})
+
+# 加载
+actor, critic = load_model(model_dir, device='cuda')
+```
+
+### 多智能体策略 (`polocies/marl/`)
+
+- **MultiAgentPolicy**: 包装单个 Policy 实现多智能体接口
+  - `shared=True`: 所有智能体共享参数
+  - 支持 `action_mask` 参数用于无效动作屏蔽
+
+### 数据采集 (`data/`)
+
+- **MACollector** (`data/collector.py`): 多智能体数据采集器
+- **CollectResult** (`data/batch.py`): 采集结果数据类，包含 transitions、episode_rewards 等
+

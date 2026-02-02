@@ -14,7 +14,7 @@ from envs.mdps.masup_env import MASUPEnv
 from envs.venvs import DummyVectorEnv
 from polocies.marl.marl_base import MultiAgentPolicy
 from polocies.rl.rl_base import ActorPolicy
-from trainers.imitator.imitation_trainer import ActorMLP, CriticMLP
+from networks.mlp import ActorMLP, CriticMLP
 from trainers.rl_trainer import OnPolicyTrainer
 from utils.model_io import save_model
 
@@ -56,6 +56,17 @@ def main():
     vf_coef = 1.0
     ent_coef = 0.1
     save_interval = 100
+
+    # Learning rate scheduler config
+    use_lr_scheduler = True           # 是否启用学习率调度
+    # Actor 调度器参数
+    actor_lr_start_factor = 1.0       # Actor 起始学习率因子
+    actor_lr_end_factor = 0.1         # Actor 结束学习率因子（降到10%）
+    actor_lr_decay_ratio = 0.8        # Actor 衰减占总训练的比例
+    # Critic 调度器参数
+    critic_lr_start_factor = 1.0      # Critic 起始学习率因子
+    critic_lr_end_factor = 0.1        # Critic 结束学习率因子
+    critic_lr_decay_ratio = 0.8       # Critic 衰减占总训练的比例
 
     # Logging
     exp_name = "mappo_patrol"
@@ -151,6 +162,10 @@ def main():
         print("[Main] Training from scratch (random initialization)")
 
     # ========== Policy & Algorithm ==========
+    # Compute max_iteration first (needed for LR scheduler)
+    step_per_iteration = num_envs * num_steps
+    max_iteration = total_timesteps // step_per_iteration
+
     ma_policy = MultiAgentPolicy(
         agent_ids=agent_ids,
         obs_space=obs_space,
@@ -174,6 +189,15 @@ def main():
         num_minibatches=num_minibatches,
         update_epochs=update_epochs,
         clip_vloss=True,
+        # Learning rate scheduler parameters
+        use_lr_scheduler=use_lr_scheduler,
+        actor_lr_start_factor=actor_lr_start_factor,
+        actor_lr_end_factor=actor_lr_end_factor,
+        actor_lr_decay_ratio=actor_lr_decay_ratio,
+        critic_lr_start_factor=critic_lr_start_factor,
+        critic_lr_end_factor=critic_lr_end_factor,
+        critic_lr_decay_ratio=critic_lr_decay_ratio,
+        total_iterations=max_iteration,
     )
 
     # ========== Collector ==========
@@ -236,9 +260,6 @@ def main():
         return {}
 
     # ========== Trainer ==========
-    step_per_iteration = num_envs * num_steps
-    max_iteration = total_timesteps // step_per_iteration
-
     trainer = OnPolicyTrainer(
         algorithm=algorithm,
         collector=collector,

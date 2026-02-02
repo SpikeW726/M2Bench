@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional
 import time
 import numpy as np
+import torch.optim as optim
 
 from algorithms.algorithm_base import BaseAlgorithm, OnPolicyAlgorithm, TrainingStats
 from data.collector import BaseCollector
@@ -134,8 +135,8 @@ class OnPolicyTrainer(BaseTrainer):
             stop_fn=stop_fn,
             logger=logger,
             verbose=verbose,
-        )
-    
+        )   
+
     def train(self) -> Dict[str, float]:
         """Execute full training"""
         self.collector.reset()
