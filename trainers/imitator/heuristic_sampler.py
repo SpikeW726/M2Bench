@@ -341,4 +341,4 @@ if __name__ == "__main__":
 
     sampler = HeuristicSampler(policy=policy, env=env)
     
-    sampler.sample(num_episodes=100000, save_path="dataset/samples_pure.npz", gamma=0.999, eps=0.0)
+    sampler.sample(num_episodes=100000, save_path="dataset/samples_pure_0.01reward_random.npz", gamma=0.999, eps=0.0)

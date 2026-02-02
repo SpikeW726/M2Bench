@@ -101,7 +101,12 @@ class imi_trainer:
         self.actor_stopped = False  # Actor 是否已经早停
         self.best_actor_loss = float('inf')
         self.actor_no_improve_count = 0
-        
+
+        # Value Normalization 配置
+        self.use_value_norm = kwargs.get("use_value_norm", False)
+        self.ret_mean = 0.0
+        self.ret_std = 1.0
+
         # Logging 配置
         self.track = kwargs.get("track", False)
         self.exp_name = kwargs.get("exp_name", "imi_train")
@@ -169,6 +174,12 @@ class imi_trainer:
             returns_data = flattened_data["returns"]
             print(f"[ImiTrainer] Returns range: [{returns_data.min():.4f}, {returns_data.max():.4f}], "
                   f"mean={returns_data.mean():.2f}, std={returns_data.std():.2f}")
+
+            # 计算 Value Normalization 统计量
+            if self.use_value_norm:
+                self.ret_mean = float(returns_data.mean())
+                self.ret_std = float(returns_data.std())
+                print(f"[ImiTrainer] Value Normalization: mean={self.ret_mean:.4f}, std={self.ret_std:.4f}")
             
             # 训练逻辑
             data_idx = np.arange(num_valid_steps * M)
@@ -211,7 +222,12 @@ class imi_trainer:
                     
                     # Critic 前向传播和更新（始终更新）
                     critic_pred = self.critic(critic_states_batch)  # [batch, 1]
-                    critic_loss = nn.functional.mse_loss(critic_pred, returns_batch)
+
+                    if self.use_value_norm:
+                        target_norm = (returns_batch - self.ret_mean) / (self.ret_std + 1e-8)
+                        critic_loss = nn.functional.mse_loss(critic_pred, target_norm)
+                    else:
+                        critic_loss = nn.functional.mse_loss(critic_pred, returns_batch)
                     
                     self.critic_optimizer.zero_grad()
                     critic_loss.backward()
@@ -285,7 +301,13 @@ class imi_trainer:
                 'actor_accuracy': actor_acc,
                 'stopped_iteration': stopped_iter,
                 'run_name': self.run_name,
-            }
+            },
+            # Value Normalization 统计量
+            'value_normalization': {
+                'use_value_norm': self.use_value_norm,
+                'ret_mean': self.ret_mean,
+                'ret_std': self.ret_std,
+            } if self.use_value_norm else None,
         }
         with open(actor_dir / 'config.yaml', 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
@@ -332,7 +354,13 @@ class imi_trainer:
                 'final_accuracy': final_acc,
                 'total_iterations': total_iterations,
                 'run_name': self.run_name,
-            }
+            },
+            # Value Normalization 统计量
+            'value_normalization': {
+                'use_value_norm': self.use_value_norm,
+                'ret_mean': self.ret_mean,
+                'ret_std': self.ret_std,
+            } if self.use_value_norm else None,
         }
         with open(ckpt_dir / 'config.yaml', 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
@@ -360,12 +388,20 @@ if __name__ == "__main__":
     # 切换工作目录到项目根目录 (确保配置文件路径正确)
     os.chdir(_project_root)
 
-    obs_dim = 27
-    critic_states_dim = 26
+    role_inf = "decision"
+    
+    # 观测和动作维度均暂时硬编码TSP12 + 3agent
+    if role_inf == "agent-idx":
+        obs_dim = 27
+        critic_states_dim = 26
+    elif role_inf == "decision":
+        obs_dim = 26
+        critic_states_dim = 26
+
     action_dim = 7
 
     actor_hidden_dim = [256, 256]
-    critic_hidden_dim = [128, 256, 256, 128]
+    critic_hidden_dim = [256, 256]
 
     actor = ActorMLP(obs_dim, actor_hidden_dim, action_dim)
     critic = CriticMLP(critic_states_dim, critic_hidden_dim, 1)
@@ -379,12 +415,14 @@ if __name__ == "__main__":
         # Actor 早停配置
         "actor_patience": 5,  # 连续多少个epoch没有改善就早停
         "actor_min_delta": 1e-5,  # 最小改善量
+        # Value Normalization 配置
+        "use_value_norm": True,  # 是否启用 Value Normalization
         # Logging 配置
         "exp_name": "imi_train",
         "track": True,  # 设为 True 启用 wandb
         "wandb_project": "MAP-imitation",
         # 模型保存配置
-        "save_dir": "models/pure",  # 模型保存目录
+        "save_dir": "models/pure-norm-random-init",  # 模型保存目录
         "save_model": True,  # 是否保存模型
     }
 

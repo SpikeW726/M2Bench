@@ -90,7 +90,7 @@ class MASUPEnv(EventDrivenEnv):
             low = np.array(
                 [0, 0, 0] * self.world.num_agents
                 + [0] * self.world.num_nodes
-                + [0, 0, 0, 0]
+                + [0, 0, 0, 0, 0]
             )
             high = np.array(
                 [self.world.num_nodes, self.world.num_nodes, max(self.world.max_edge_length, self.world.waitT)] * self.world.num_agents
@@ -138,7 +138,7 @@ class MASUPEnv(EventDrivenEnv):
         # 3. 为本次决策计算每个 agent 的决策序号
         self._decision_index_map = {}
         node_to_deciders = {}
-        for aid in range(self.agent_num):
+        for aid in range(self.world.num_agents):
             # 只有动作剩余时间为 0 的 agent 才被视为需要决策
             agents_action_time_left = {aid: self.world.agents[aid].action_remaining for aid in range(self.world.num_agents)}
             agent_positions = {aid: self.world.agents[aid].position for aid in range(self.world.num_agents)}
