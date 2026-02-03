@@ -48,6 +48,9 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         critic_lr_end_factor: float = 0.1,
         critic_lr_decay_ratio: float = 0.8,
         total_iterations: Optional[int] = None,
+        # Value Normalization parameters
+        use_value_norm: bool = False,
+        value_norm_config: Optional[Dict] = None,
     ):
         nn.Module.__init__(self)
         
@@ -101,6 +104,23 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 end_factor=critic_lr_end_factor,
                 total_iters=critic_decay_steps,
             )
+
+        # Value Normalization
+        self.use_value_norm = use_value_norm
+        self.ret_rms = None
+
+        if self.use_value_norm:
+            from utils.train_utils import RunningMeanStd
+            self.ret_rms = RunningMeanStd(shape=(1,))
+
+            # 从预训练 checkpoint 继承统计量
+            if value_norm_config is not None:
+                self.ret_rms.mean.fill_(value_norm_config.get('ret_mean', 0.0))
+                self.ret_rms.var.fill_(value_norm_config.get('ret_std', 1.0) ** 2)
+                self.ret_rms.count.fill_(1.0)  # 标记为已初始化
+                print(f"[MAPPO] Loaded value_norm stats: mean={self.ret_rms.mean.item():.4f}, std={self.ret_rms.std.item():.4f}")
+            else:
+                print(f"[MAPPO] Initialized value_norm with default: mean=0, std=1")
     
     def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> RolloutBatch:
         """
@@ -145,7 +165,13 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 truncated_2d = batch.truncated.view(T, N)
             
             with torch.no_grad():
-                values = self.critic(critic_input).squeeze(-1).view(T, N)
+                values_norm = self.critic(critic_input).squeeze(-1).view(T, N)
+
+                # 反归一化 value 用于 GAE 计算
+                if self.use_value_norm and self.ret_rms is not None:
+                    values = values_norm * self.ret_rms.std + self.ret_rms.mean
+                else:
+                    values = values_norm
                 
                 # 为每个环境计算 GAE，正确处理中间 truncation
                 all_env_adv, all_env_ret = [], []
@@ -177,7 +203,13 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             all_critic_input.append(critic_input)
             if batch.action_mask is not None:
                 all_action_mask.append(batch.action_mask)
-        
+
+        # 更新 Value Normalization 统计量
+        if self.use_value_norm and self.ret_rms is not None:
+            # Stack all returns: [num_agents, T*N] -> [T*N*num_agents]
+            all_ret_tensor = torch.cat(all_ret, dim=0)
+            self.ret_rms.update(all_ret_tensor)
+
         return RolloutBatch(
             obs=torch.cat(all_obs, dim=0),
             act=torch.cat(all_act, dim=0),
@@ -364,15 +396,23 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 
                 # ===== Critic update =====
                 new_value = self.critic(mb_critic_input).squeeze(-1)
+
+                # 归一化 target 用于 Critic loss
+                if self.use_value_norm and self.ret_rms is not None:
+                    target_norm = (mb_ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
+                    target = target_norm
+                else:
+                    target = mb_ret
+
                 if self.clip_vloss:
-                    v_loss_unclipped = (new_value - mb_ret) ** 2
+                    v_loss_unclipped = (new_value - target) ** 2
                     v_clipped = mb_value + torch.clamp(
                         new_value - mb_value, -self.clip_range, self.clip_range
                     )
-                    v_loss_clipped = (v_clipped - mb_ret) ** 2
+                    v_loss_clipped = (v_clipped - target) ** 2
                     v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
                 else:
-                    v_loss = 0.5 * ((new_value - mb_ret) ** 2).mean()
+                    v_loss = 0.5 * ((new_value - target) ** 2).mean()
                 
                 critic_loss = self.vf_coef * v_loss
                 

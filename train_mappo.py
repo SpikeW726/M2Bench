@@ -68,6 +68,9 @@ def main():
     critic_lr_end_factor = 0.1        # Critic 结束学习率因子
     critic_lr_decay_ratio = 0.8       # Critic 衰减占总训练的比例
 
+    # Value Normalization config
+    # use_value_norm 会自动从预训练 checkpoint 读取，这里无需手动设置
+
     # Logging
     exp_name = "mappo_patrol"
     track_wandb = True
@@ -158,8 +161,23 @@ def main():
         actor_net.load_state_dict(actor_sd)
         critic_net.load_state_dict(critic_sd)
         print(f"[Main] Loaded pretrained weights from {actor_path}")
+
+        # 尝试读取 value_normalization 配置
+        value_norm_config = None
+        config_dir = Path(actor_path).parent
+        config_file = config_dir / 'config.yaml'
+
+        if config_file.exists():
+            with open(config_file) as f:
+                import yaml
+                saved_config = yaml.safe_load(f)
+
+            if saved_config.get('value_normalization') is not None:
+                value_norm_config = saved_config['value_normalization']
+                print(f"[Main] Loaded value_norm config: mean={value_norm_config.get('ret_mean', 0.0):.4f}, std={value_norm_config.get('ret_std', 1.0):.4f}")
     else:
         print("[Main] Training from scratch (random initialization)")
+        value_norm_config = None
 
     # ========== Policy & Algorithm ==========
     # Compute max_iteration first (needed for LR scheduler)
@@ -198,6 +216,9 @@ def main():
         critic_lr_end_factor=critic_lr_end_factor,
         critic_lr_decay_ratio=critic_lr_decay_ratio,
         total_iterations=max_iteration,
+        # Value Normalization parameters
+        use_value_norm=value_norm_config is not None,
+        value_norm_config=value_norm_config,
     )
 
     # ========== Collector ==========
