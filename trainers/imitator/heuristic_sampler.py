@@ -73,7 +73,7 @@ class HeuristicSampler:
         """Centralized Critic 输入维度: global_state + agent_one_hot"""
         return self.state_dim + self.num_agents
     
-    def sample(self, num_episodes: int, save_path: str, gamma: float = 0.999, eps: float = 0.0) -> None:
+    def sample(self, num_episodes: int, save_path: str, gamma: float = 0.999, eps: float = 0.0, batch_size: Optional[int] = None) -> None:
         """
         采集指定数量的 episode 并保存
         
@@ -82,16 +82,24 @@ class HeuristicSampler:
             save_path: 保存路径 (.npz)
             gamma: 计算 returns 的折扣因子
             eps: epsilon-greedy 随机探索概率 (0.0=纯启发式, 1.0=纯随机)
+            batch_size: 分批处理大小，None 表示一次性处理所有数据（可能内存溢出）
+                       建议设置为 1000-5000，根据可用内存调整
         """
-        trajectories: List[EpisodeData] = []
-        
-        for ep_idx in tqdm(range(num_episodes), desc="Sampling episodes"):
-            episode_data = self._collect_episode(eps)
-            trajectories.append(episode_data)
-        
-        # 后处理并保存
-        self._pad_and_save(trajectories, save_path, gamma)
-        print(f"[HeuristicSampler] Saved {num_episodes} episodes to {save_path}")
+        if batch_size is None or batch_size >= num_episodes:
+            # 一次性处理（保持向后兼容）
+            trajectories: List[EpisodeData] = []
+            
+            for ep_idx in tqdm(range(num_episodes), desc="Sampling episodes"):
+                episode_data = self._collect_episode(eps)
+                trajectories.append(episode_data)
+            
+            # 后处理并保存
+            self._pad_and_save(trajectories, save_path, gamma)
+            print(f"[HeuristicSampler] Saved {num_episodes} episodes to {save_path}")
+        else:
+            # 分批处理，避免内存溢出
+            self._sample_in_batches(num_episodes, save_path, gamma, eps, batch_size)
+            print(f"[HeuristicSampler] Saved {num_episodes} episodes to {save_path} (in batches)")
     
     def _collect_episode(self, eps: float) -> EpisodeData:
         """
@@ -318,6 +326,143 @@ class HeuristicSampler:
         print(f"  padded_mask:   {padded_mask.shape}")
         print(f"  returns:       {returns.shape}")
         print(f"  max_episode_len: {max_len}")
+    
+    def _sample_in_batches(self, num_episodes: int, save_path: str, gamma: float, eps: float, batch_size: int) -> None:
+        """
+        分批采集并保存，避免内存溢出
+        
+        Args:
+            num_episodes: 总 episode 数量
+            save_path: 保存路径
+            gamma: 折扣因子
+            eps: epsilon-greedy 探索概率
+            batch_size: 每批处理的 episode 数量
+        """
+        import tempfile
+        import os
+        
+        # 使用临时文件存储各批次数据
+        temp_dir = Path(save_path).parent / ".temp_batches"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        batch_paths = []
+        all_max_lens = []
+        
+        # 分批采集
+        num_batches = (num_episodes + batch_size - 1) // batch_size
+        
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, num_episodes)
+            batch_episodes = end_idx - start_idx
+            
+            trajectories: List[EpisodeData] = []
+            
+            for ep_idx in tqdm(range(batch_episodes), desc=f"Batch {batch_idx+1}/{num_batches}"):
+                episode_data = self._collect_episode(eps)
+                trajectories.append(episode_data)
+            
+            # 保存当前批次到临时文件
+            batch_path = temp_dir / f"batch_{batch_idx:05d}.npz"
+            self._pad_and_save(trajectories, str(batch_path), gamma)
+            batch_paths.append(batch_path)
+            
+            # 记录最大长度
+            max_len = max(ep.length for ep in trajectories)
+            all_max_lens.append(max_len)
+            
+            # 清空内存
+            del trajectories
+        
+        # 合并所有批次前，重新检查所有批次文件的实际最大长度（更可靠）
+        # 这样可以确保使用真正的全局最大长度，避免形状不匹配
+        actual_max_lens = []
+        for batch_path in batch_paths:
+            with np.load(batch_path, mmap_mode='r') as batch_data:
+                actual_max_lens.append(batch_data['obs'].shape[1])  # T 维度
+        global_max_len = max(actual_max_lens)
+        
+        print(f"[HeuristicSampler] Batch max lengths: min={min(actual_max_lens)}, max={global_max_len}, mean={np.mean(actual_max_lens):.1f}")
+        
+        # 合并所有批次
+        self._merge_batches(batch_paths, save_path, global_max_len)
+        
+        # 清理临时文件
+        for batch_path in batch_paths:
+            batch_path.unlink()
+        temp_dir.rmdir()
+    
+    def _merge_batches(self, batch_paths: List[Path], save_path: str, max_len: int) -> None:
+        """
+        合并多个批次的 npz 文件
+        
+        Args:
+            batch_paths: 批次文件路径列表
+            save_path: 最终保存路径
+            max_len: 所有批次中的最大 episode 长度
+        """
+        # 加载第一个批次获取形状信息
+        with np.load(batch_paths[0], mmap_mode='r') as first_batch:
+            M = first_batch['obs'].shape[2]
+            obs_dim = first_batch['obs'].shape[3]
+            critic_state_dim = first_batch['critic_states'].shape[3]
+            act_dim = first_batch['action_masks'].shape[3]
+        
+        # 计算总 episode 数（在合并循环中计算，避免重复打开文件）
+        total_episodes = 0
+        for batch_path in batch_paths:
+            with np.load(batch_path, mmap_mode='r') as batch_data:
+                total_episodes += batch_data['obs'].shape[0]
+        
+        # 初始化最终数组
+        obs = np.zeros([total_episodes, max_len, M, obs_dim], dtype=np.float32)
+        critic_states = np.zeros([total_episodes, max_len, M, critic_state_dim], dtype=np.float32)
+        actions = np.zeros([total_episodes, max_len, M, 1], dtype=np.int64)
+        action_masks = np.zeros([total_episodes, max_len, M, act_dim], dtype=np.int8)
+        rewards = np.zeros([total_episodes, max_len, M, 1], dtype=np.float32)
+        padded_mask = np.zeros([total_episodes, max_len, 1], dtype=np.int8)
+        returns = np.zeros([total_episodes, max_len, M, 1], dtype=np.float32)
+        
+        # 合并所有批次
+        offset = 0
+        for batch_path in tqdm(batch_paths, desc="Merging batches"):
+            with np.load(batch_path, mmap_mode='r') as batch_data:
+                N_batch = batch_data['obs'].shape[0]
+                T_batch = batch_data['obs'].shape[1]
+                
+                # 复制数据
+                obs[offset:offset+N_batch, :T_batch] = batch_data['obs']
+                critic_states[offset:offset+N_batch, :T_batch] = batch_data['critic_states']
+                actions[offset:offset+N_batch, :T_batch] = batch_data['actions']
+                action_masks[offset:offset+N_batch, :T_batch] = batch_data['action_masks']
+                rewards[offset:offset+N_batch, :T_batch] = batch_data['rewards']
+                padded_mask[offset:offset+N_batch, :T_batch] = batch_data['padded_mask']
+                returns[offset:offset+N_batch, :T_batch] = batch_data['returns']
+                
+                offset += N_batch
+        
+        # 保存最终文件
+        np.savez(
+            save_path,
+            obs=obs,
+            critic_states=critic_states,
+            actions=actions,
+            action_masks=action_masks,
+            rewards=rewards,
+            padded_mask=padded_mask,
+            returns=returns
+        )
+        
+        # 打印统计信息
+        print(f"[HeuristicSampler] Merged data shapes:")
+        print(f"  obs:           {obs.shape}")
+        print(f"  critic_states: {critic_states.shape}")
+        print(f"  actions:       {actions.shape}")
+        print(f"  action_masks:  {action_masks.shape}")
+        print(f"  rewards:       {rewards.shape}")
+        print(f"  padded_mask:   {padded_mask.shape}")
+        print(f"  returns:       {returns.shape}")
+        print(f"  max_episode_len: {max_len}")
 
 
 if __name__ == "__main__":
@@ -341,4 +486,6 @@ if __name__ == "__main__":
 
     sampler = HeuristicSampler(policy=policy, env=env)
     
-    sampler.sample(num_episodes=100000, save_path="dataset/samples_pure_0.01reward_random.npz", gamma=0.999, eps=0.0)
+    # 使用 batch_size=2000 分批处理，避免内存溢出
+    # 如果内存充足，可以设置 batch_size=None 或更大的值
+    sampler.sample(num_episodes=50000, save_path="dataset/samples_pure_0.01reward_fixed.npz", gamma=0.999, eps=0.0, batch_size=1024)

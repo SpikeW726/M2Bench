@@ -4,21 +4,21 @@ import torch.nn as nn
 class RunningMeanStd(nn.Module):
     def __init__(self, shape=(), epsilon=1e-4):
         """
-        计算运行时的均值和标准差 (Welford's algorithm)
+        Running mean and std using Welford's algorithm
         Args:
-            shape: 统计量的形状，对于 Critic 的 Return 通常是 (1,)
-            epsilon: 防止除零的小数
+            shape: Shape of statistics, for Critic Return usually (1,)
+            epsilon: Small constant to prevent division by zero
         """
         super().__init__()
         self.register_buffer("mean", torch.zeros(shape))
         self.register_buffer("var", torch.ones(shape))
-        self.register_buffer("count", torch.tensor(1e-4)) # 防止初始除零
+        self.register_buffer("count", torch.tensor(1e-4))  # Prevent initial division by zero
         self.epsilon = epsilon
         self.shape = shape
 
     def update(self, x):
         """
-        接收一个 Batch 的数据 x，更新内部的 mean 和 var
+        Update with a batch of data x, update internal mean and var
         x: [Batch, ...]
         """
         batch_mean = torch.mean(x, dim=0)
@@ -28,7 +28,7 @@ class RunningMeanStd(nn.Module):
         self.update_from_moments(batch_mean, batch_var, batch_count)
 
     def update_from_moments(self, batch_mean, batch_var, batch_count):
-        """根据 Welford 算法合并两组统计量"""
+        """Merge statistics using Welford's algorithm"""
         delta = batch_mean - self.mean
         tot_count = self.count + batch_count
 

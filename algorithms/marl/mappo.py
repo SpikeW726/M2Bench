@@ -111,7 +111,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
 
         if self.use_value_norm:
             from utils.train_utils import RunningMeanStd
-            self.ret_rms = RunningMeanStd(shape=(1,))
+            self.ret_rms = RunningMeanStd(shape=(1,)).to(self.device)  # 移动到正确的设备
 
             # 从预训练 checkpoint 继承统计量
             if value_norm_config is not None:
@@ -125,12 +125,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
     def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> RolloutBatch:
         """
         计算 GAE 并合并所有 agent 数据
-        
-        处理向量化环境：数据排列为 (T*N, ...) 需要 reshape 为 (T, N, ...) 分别计算 GAE
-        
-        正确处理 truncation vs termination（包括中间的 done）:
-        - termination (真正结束): next_value = 0
-        - truncation (时间截断): next_value = critic(final_state)
+        [已修复 Bug]: batch.value 现在存储归一化尺度的值，以便在 PPO update 中与 critic 输出进行正确的 clipping。
         """
         agents = list(batch_dict.keys())
         num_agents = len(agents)
@@ -165,17 +160,19 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 truncated_2d = batch.truncated.view(T, N)
             
             with torch.no_grad():
+                # Raw output from critic (Normalized Scale if use_value_norm=True)
                 values_norm = self.critic(critic_input).squeeze(-1).view(T, N)
 
-                # 反归一化 value 用于 GAE 计算
+                # 反归一化 value 用于 GAE 计算 (Real Scale)
                 if self.use_value_norm and self.ret_rms is not None:
                     values = values_norm * self.ret_rms.std + self.ret_rms.mean
                 else:
                     values = values_norm
                 
-                # 为每个环境计算 GAE，正确处理中间 truncation
+                # 为每个环境计算 GAE
                 all_env_adv, all_env_ret = [], []
                 for env_idx in range(N):
+                    # 注意：这里传入的是 Real Scale 的 values，这是正确的！GAE 需要物理意义
                     adv, ret = self._compute_gae_with_truncation(
                         rewards=rew_2d[:, env_idx],
                         values=values[:, env_idx],
@@ -192,7 +189,10 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 # (T, N) -> (T*N,) 保持原始数据顺序
                 adv = torch.stack(all_env_adv, dim=1).view(-1)
                 ret = torch.stack(all_env_ret, dim=1).view(-1)
-                values_flat = values.view(-1)
+                
+                # [Fix Bug]: 存储到 Buffer 中的 Value 必须是归一化尺度的 (values_norm)
+                # 这样在 PPO Update 时，它才能和 Critic 的输出 (new_value) 进行正确的 clip 操作
+                values_flat = values_norm.view(-1) 
             
             all_obs.append(batch.obs)
             all_act.append(batch.act)
@@ -207,6 +207,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         # 更新 Value Normalization 统计量
         if self.use_value_norm and self.ret_rms is not None:
             # Stack all returns: [num_agents, T*N] -> [T*N*num_agents]
+            # 注意：这里的 ret 依然是 Real Scale (GAE 算出来的)，用来更新统计量是正确的
             all_ret_tensor = torch.cat(all_ret, dim=0)
             self.ret_rms.update(all_ret_tensor)
 
@@ -234,20 +235,6 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         计算 GAE，正确处理中间的 truncation
-        
-        Args:
-            rewards: (T,) 奖励序列
-            values: (T,) value 估计
-            dones: (T,) done 标志
-            truncateds: (T,) truncation 标志
-            final_global_states: 长度为 T 的列表，每个元素是 final_state 或 None
-            critic_input_last: 最后一步的 critic 输入（用于非 done 情况）
-            agent_idx: 当前 agent 索引（用于构建 one_hot）
-            num_agents: agent 总数
-        
-        Returns:
-            advantages: (T,)
-            returns: (T,)
         """
         T = len(rewards)
         advantages = torch.zeros_like(rewards)
@@ -257,44 +244,43 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             is_done = dones[t] > 0.5
             is_truncated = truncateds is not None and truncateds[t] > 0.5
             
+            # --- 计算 next_val (Bootstrap Value) ---
             if t == T - 1:
                 # 最后一步
                 if is_done and not is_truncated:
                     # termination: next_value = 0
                     next_val = torch.tensor(0.0, device=self.device)
                 elif is_done and is_truncated:
-                    # truncation: 使用 final_state 计算 next_value
+                    # truncation: 使用 final_state 计算 next_value (已修复内部反归一化)
                     next_val = self._get_truncation_value(
                         final_global_states[t], agent_idx, num_agents
                     )
                 else:
-                    # 未结束: 使用最后一步的 critic 输入
-                    next_val = self.critic(critic_input_last).squeeze()
+                    # 未结束: 使用最后一步的 critic 输入 (修复：增加反归一化)
+                    next_val = self._get_denormalized_value(critic_input_last)
             else:
                 # 中间步
                 if is_done and not is_truncated:
-                    # termination: next_value = 0，GAE 截断
+                    # termination: next_value = 0
                     next_val = torch.tensor(0.0, device=self.device)
                 elif is_done and is_truncated:
-                    # truncation: 使用 final_state 计算 next_value
+                    # truncation: 使用 final_state 计算 next_value (已修复内部反归一化)
                     next_val = self._get_truncation_value(
                         final_global_states[t], agent_idx, num_agents
                     )
                 else:
-                    # 正常情况: 使用下一步的 value
+                    # 正常情况: 使用下一步的 value (注意：这里的 values 已经在 prepare_batch 里反归一化过了，直接用)
                     next_val = values[t + 1]
             
-            # TD error
+            # --- 计算 TD Error 和 GAE ---
+            # ... (这部分逻辑保持不变，因为 next_val 现在的尺度是对的了)
             if is_done and not is_truncated:
-                # termination: 完全截断，不使用 next_val
                 delta = rewards[t] - values[t]
                 last_gae = delta
             elif is_done and is_truncated:
-                # truncation: 使用 bootstrapped next_val，但 GAE 在这里截断
                 delta = rewards[t] + self.gamma * next_val - values[t]
                 last_gae = delta
             else:
-                # 正常情况
                 delta = rewards[t] + self.gamma * next_val - values[t]
                 last_gae = delta + self.gamma * self.gae_lambda * last_gae
             
@@ -309,7 +295,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         agent_idx: int,
         num_agents: int,
     ) -> torch.Tensor:
-        """获取 truncation 时的 bootstrapped value"""
+        """获取 truncation 时的 bootstrapped value (已修复：增加反归一化)"""
         if final_state is None:
             # 如果没有 final_state，回退到 0
             return torch.tensor(0.0, device=self.device)
@@ -322,8 +308,17 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         one_hot[0, agent_idx] = 1.0
         critic_input = torch.cat([state_t, one_hot], dim=-1)
         
-        return self.critic(critic_input).squeeze()
+        # 修复：使用统一的反归一化逻辑
+        return self._get_denormalized_value(critic_input)
     
+    def _get_denormalized_value(self, critic_input: torch.Tensor) -> torch.Tensor:
+        """辅助函数：获取反归一化后的 Critic 价值"""
+        with torch.no_grad():
+            value_norm = self.critic(critic_input).squeeze()
+            if self.use_value_norm and self.ret_rms is not None:
+                return value_norm * self.ret_rms.std + self.ret_rms.mean
+            return value_norm
+
     def update(self, batch: RolloutBatch, update_actor: bool = True) -> TrainingStats:
         """
         PPO update with separate actor/critic optimization.

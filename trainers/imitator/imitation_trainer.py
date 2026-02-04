@@ -409,9 +409,9 @@ if __name__ == "__main__":
     config = {
         "actor_lr": 3e-4,
         "critic_lr": 3e-4,
-        "data_path": "dataset/samples_pure.npz",
+        "data_path": "dataset/samples_pure_0.01reward_random.npz",
         "batch_size": 1024,
-        "iteration": 25,  # 总训练轮数
+        "iteration": 35,  # 总训练轮数
         # Actor 早停配置
         "actor_patience": 5,  # 连续多少个epoch没有改善就早停
         "actor_min_delta": 1e-5,  # 最小改善量

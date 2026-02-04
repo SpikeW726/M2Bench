@@ -9,7 +9,7 @@ from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 
 from envs.mdps.masup_env import MASUPEnv
-from envs.venvs import DummyVectorEnv
+from envs.venvs import DummyVectorEnv, SubprocVectorEnv
 from networks.mlp import ActorMLP, CriticMLP
 from polocies.rl.rl_base import ActorPolicy
 from polocies.marl.marl_base import MultiAgentPolicy
@@ -21,17 +21,18 @@ from utils.model_io import save_model
 def main():
     # ========== 配置 ==========
     # 环境
-    num_envs = 4
+    num_envs = 12
+    use_subproc = True  # True: 多进程并行 (SubprocVectorEnv), False: 单进程串行 (DummyVectorEnv)
     
     # 网络隐藏层（需与预训练时一致）
     actor_hidden = [256, 256]
-    critic_hidden = [128, 256, 256, 128]
+    critic_hidden = [256, 256]
     
     # 训练超参数
     total_timesteps = 50000000
-    num_steps = 1024  # 每个 env 每次采集的步数
-    num_minibatches = 8
-    update_epochs = 10
+    num_steps = 2048  # 每个 env 每次采集的步数
+    num_minibatches = 16
+    update_epochs = 5
     actor_lr = 3e-5
     critic_lr = 3e-4
     gamma = 0.999
@@ -46,14 +47,14 @@ def main():
     wandb_project = "MAP-RL"
     
     # 预训练权重路径
-    actor_path = "models/imi_train__1769515607_actor_best.pt"
-    critic_path = "models/imi_train__1769515607_critic.pt"
-    # actor_path = ""
-    # critic_path = ""
+    actor_path = "models/imi-pure-norm-fixed-init/imi_train__1770179612_final/policy.pt"
+    critic_path = "models/imi-pure-norm-fixed-init/imi_train__1770179612_final/critic.pt"
+    # actor_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"
+    # critic_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"
 
     # 保存路径
     algo_name = "mappo"
-    exp_name = "imi"
+    exp_name = "imi-norm-fixed-init"
     now = datetime.now()
     run_name = f"{exp_name}_{now:%Y-%m-%d_%H-%M-%S}"
     save_dir = Path(f"models/{algo_name}/{run_name}")
@@ -84,7 +85,7 @@ def main():
                 "num_minibatches": num_minibatches,
                 "update_epochs": update_epochs,
             },
-            sync_tensorboard=True,
+            sync_tensorboard = False,
         )
     
     # ========== 环境 ==========
@@ -95,7 +96,13 @@ def main():
         return lambda: MASUPEnv(env_config, **custom_config)
     
     env_fns = [make_env(config["env_config"], config["custom_config"]) for _ in range(num_envs)]
-    vec_env = DummyVectorEnv(env_fns)
+    
+    if use_subproc:
+        vec_env = SubprocVectorEnv(env_fns)
+        print(f"[Main] Using SubprocVectorEnv (parallel, {num_envs} processes)")
+    else:
+        vec_env = DummyVectorEnv(env_fns)
+        print(f"[Main] Using DummyVectorEnv (sequential, single process)")
     
     # 从环境获取维度
     agent_ids = vec_env.agents
@@ -124,6 +131,7 @@ def main():
     critic_net = CriticMLP(critic_state_dim, critic_hidden, 1)
     
     # 加载预训练权重（可选）
+    value_norm_config = None  # 用于存储预训练时的归一化配置
     if actor_path and critic_path and Path(actor_path).exists() and Path(critic_path).exists():
         actor_ckpt = torch.load(actor_path, map_location=device, weights_only=True)
         critic_ckpt = torch.load(critic_path, map_location=device, weights_only=True)
@@ -132,6 +140,21 @@ def main():
         actor_net.load_state_dict(actor_sd)
         critic_net.load_state_dict(critic_sd)
         print(f"[Main] Loaded pretrained weights from {actor_path}")
+        
+        # 尝试读取 value_normalization 配置（从预训练 checkpoint 的 config.yaml）
+        config_dir = Path(actor_path).parent
+        config_file = config_dir / 'config.yaml'
+        if config_file.exists():
+            with open(config_file) as f:
+                saved_config = yaml.safe_load(f)
+            if saved_config.get('value_normalization') is not None:
+                value_norm_config = saved_config['value_normalization']
+                print(f"[Main] Loaded value_norm config: mean={value_norm_config.get('ret_mean', 0.0):.4f}, "
+                      f"std={value_norm_config.get('ret_std', 1.0):.4f}")
+            else:
+                print(f"[Main] No value_normalization config found, using raw values")
+        else:
+            print(f"[Main] No config.yaml found at {config_dir}, value normalization disabled")
     else:
         print(f"[Main] Training from scratch (random initialization)")
     
@@ -159,6 +182,9 @@ def main():
         num_minibatches=num_minibatches,
         update_epochs=update_epochs,
         clip_vloss=True,
+        # Value Normalization (从预训练 checkpoint 继承)
+        use_value_norm=value_norm_config is not None,
+        value_norm_config=value_norm_config,
     )
     
     # ========== Model Config (for saving) ==========
