@@ -917,7 +917,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Heuristic Sampler for Actor-Critic Pre-training")
     parser.add_argument("--num_episodes", type=int, default=50000, help="Number of episodes to collect")
-    parser.add_argument("--save_path", type=str, default="dataset/grid/samples_pure_0.01reward_random.npz", help="Save path for NPZ file")
+    parser.add_argument("--save_path", type=str, default="dataset/grid/samples_pure_0.01reward_random.h5", help="Save path for NPZ file")
     parser.add_argument("--gamma", type=float, default=0.999, help="Discount factor for returns")
     parser.add_argument("--eps", type=float, default=0.0, help="Epsilon-greedy exploration probability")
     parser.add_argument("--batch_size", type=int, default=2048, help="Batch size for memory-efficient processing")

@@ -21,7 +21,7 @@ from utils.model_io import save_model
 def main():
     # ========== 配置 ==========
     # 环境
-    num_envs = 12
+    num_envs = 24
     use_subproc = True  # True: 多进程并行 (SubprocVectorEnv), False: 单进程串行 (DummyVectorEnv)
     
     # 网络隐藏层（需与预训练时一致）
@@ -29,17 +29,17 @@ def main():
     critic_hidden = [256, 256]
     
     # 训练超参数
-    total_timesteps = 50000000
-    num_steps = 2048  # 每个 env 每次采集的步数
-    num_minibatches = 16
-    update_epochs = 5
+    total_timesteps = 40000000
+    num_steps = 512  # 每个 env 每次采集的步数
+    num_minibatches = 8
+    update_epochs = 3
     actor_lr = 3e-5
     critic_lr = 3e-4
     gamma = 0.999
     gae_lambda = 1.0
     clip_range = 0.2
     vf_coef = 1.0
-    ent_coef = 0.1
+    ent_coef = 0.02
     save_internal = 1000 # 每过xx个iteration保存一次模型参数
     
     # 日志配置
@@ -47,13 +47,15 @@ def main():
     wandb_project = "MAP-RL"
     
     # 预训练权重路径
-    # actor_path = "models/imi-pure-norm-fixed-init/imi_train__1770179612_final/policy.pt"
-    # critic_path = "models/imi-pure-norm-fixed-init/imi_train__1770179612_final/critic.pt"
-    actor_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"
-    critic_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"
+    actor_path = "models/grid-pure-norm-random-init/imi_train__1770315556_final/policy.pt"
+    critic_path = "models/grid-pure-norm-random-init/imi_train__1770315556_final/critic.pt"
+    # actor_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"
+    # critic_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"
+    # actor_path = ""
+    # critic_path = ""
 
     # 保存路径
-    algo_name = "mappo"
+    algo_name = "mappo-grid"
     exp_name = "imi-norm-random-init"
     now = datetime.now()
     run_name = f"{exp_name}_{now:%Y-%m-%d_%H-%M-%S}"
@@ -146,11 +148,16 @@ def main():
         config_file = config_dir / 'config.yaml'
         if config_file.exists():
             with open(config_file) as f:
-                saved_config = yaml.safe_load(f)
+                # 使用 full_load 以支持包含 numpy 类型的旧配置文件
+                saved_config = yaml.full_load(f)
             if saved_config.get('value_normalization') is not None:
                 value_norm_config = saved_config['value_normalization']
-                print(f"[Main] Loaded value_norm config: mean={value_norm_config.get('ret_mean', 0.0):.4f}, "
-                      f"std={value_norm_config.get('ret_std', 1.0):.4f}")
+                # 确保转换为 Python float（兼容 numpy 标量）
+                ret_mean = float(value_norm_config.get('ret_mean', 0.0))
+                ret_std = float(value_norm_config.get('ret_std', 1.0))
+                value_norm_config['ret_mean'] = ret_mean
+                value_norm_config['ret_std'] = ret_std
+                print(f"[Main] Loaded value_norm config: mean={ret_mean:.4f}, std={ret_std:.4f}")
             else:
                 print(f"[Main] No value_normalization config found, using raw values")
         else:

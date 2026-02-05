@@ -1,10 +1,12 @@
 env_config:
-  graph_path: "graphs/simple_TSP_12.json"
+  graph_path: "graphs/grid.json"
+
   
   enable_wait: False
   deltaT: 0.5
   
-  num_agents: 3
+  num_agents: 8
+  init_positions: [6, 12, 18, 24, 30, 36, 42, 48]
   
   episode_len: 1000 # 默认是一个episode的step数,在MASUP环境中若truncate_by_time为True,则是一个episode的最大时间
 

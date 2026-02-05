@@ -481,11 +481,11 @@ class imi_trainer:
                 'stopped_iteration': stopped_iter,
                 'run_name': self.run_name,
             },
-            # Value Normalization 统计量
+            # Value Normalization 统计量（转换为 Python 原生类型以兼容 yaml.safe_load）
             'value_normalization': {
                 'use_value_norm': self.use_value_norm,
-                'ret_mean': self.ret_mean,
-                'ret_std': self.ret_std,
+                'ret_mean': float(self.ret_mean),
+                'ret_std': float(self.ret_std),
             } if self.use_value_norm else None,
         }
         with open(actor_dir / 'config.yaml', 'w') as f:
@@ -534,11 +534,11 @@ class imi_trainer:
                 'total_iterations': total_iterations,
                 'run_name': self.run_name,
             },
-            # Value Normalization 统计量
+            # Value Normalization 统计量（转换为 Python 原生类型以兼容 yaml.safe_load）
             'value_normalization': {
                 'use_value_norm': self.use_value_norm,
-                'ret_mean': self.ret_mean,
-                'ret_std': self.ret_std,
+                'ret_mean': float(self.ret_mean),
+                'ret_std': float(self.ret_std),
             } if self.use_value_norm else None,
         }
         with open(ckpt_dir / 'config.yaml', 'w') as f:
@@ -569,15 +569,25 @@ if __name__ == "__main__":
 
     role_inf = "decision"
     
-    # 观测和动作维度均暂时硬编码TSP12 + 3agent
-    if role_inf == "agent-idx":
-        obs_dim = 27
-        critic_states_dim = 26
-    elif role_inf == "decision":
-        obs_dim = 26
-        critic_states_dim = 26
+    # # 观测和动作维度均暂时硬编码TSP12 + 3agent
+    # if role_inf == "agent-idx":
+    #     obs_dim = 27
+    #     critic_states_dim = 26
+    # elif role_inf == "decision":
+    #     obs_dim = 26
+    #     critic_states_dim = 26
 
-    action_dim = 7
+    # action_dim = 7
+
+    # Grid 图 + 8 agents
+    if role_inf == "agent-idx":
+        obs_dim = 78
+        critic_states_dim = 84
+    elif role_inf == "decision":
+        obs_dim = 79
+        critic_states_dim = 84
+
+    action_dim = 9
 
     actor_hidden_dim = [256, 256]
     critic_hidden_dim = [256, 256]
@@ -588,9 +598,9 @@ if __name__ == "__main__":
     config = {
         "actor_lr": 3e-4,
         "critic_lr": 3e-4,
-        "data_path": "dataset/samples_pure_0.01reward_random.npz",
+        "data_path": "dataset/grid/samples_pure_0.01reward_random.h5",
         "batch_size": 1024,
-        "iteration": 35,  # 总训练轮数
+        "iteration": 50,  # 总训练轮数
         # Actor 早停配置
         "actor_patience": 5,  # 连续多少个epoch没有改善就早停
         "actor_min_delta": 1e-5,  # 最小改善量
@@ -601,7 +611,7 @@ if __name__ == "__main__":
         "track": True,  # 设为 True 启用 wandb
         "wandb_project": "MAP-imitation",
         # 模型保存配置
-        "save_dir": "models/pure-norm-random-init",  # 模型保存目录
+        "save_dir": "models/grid-pure-norm-random-init",  # 模型保存目录
         "save_model": True,  # 是否保存模型
     }
 

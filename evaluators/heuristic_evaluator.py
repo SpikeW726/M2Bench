@@ -139,7 +139,7 @@ def main():
                         help='Path to environment config')
     parser.add_argument('--policy_config', type=str, default=None,
                         help='Path to policy config (default: configs/{POLICY}.yaml)')
-    parser.add_argument('--save_plot', type=str, default='evaluators/results/heuristic_eval_TSP12.png',
+    parser.add_argument('--save_plot', type=str, default='evaluators/results/heuristic_eval_grid.png',
                         help='Path to save plot (default: evaluators/results/heuristic_eval.png)')
     parser.add_argument('--no_show', action='store_true',
                         help='Do not display plot')
@@ -155,6 +155,7 @@ def main():
     # 从配置中提取终止条件参数
     episode_len = env_config.get('episode_len', 5000)
     truncate_by_time = custom_config.get('truncate_by_time', True)
+    init_positions = env_config.get('init_positions', None)
 
     # Load policy config
     policy_config_path = args.policy_config or f"configs/{args.policy}.yaml"
@@ -164,6 +165,7 @@ def main():
     # 直接创建 PatrolWorld（不需要 MDP 封装）
     print(f"Creating PatrolWorld with graph: {env_config['graph_path']}")
     print(f"  episode_len: {episode_len}, truncate_by_time: {truncate_by_time}")
+    print(f"  init_positions: {init_positions if init_positions else 'random'}")
     world = PatrolWorld(env_config)
 
     # Create policy
@@ -174,7 +176,8 @@ def main():
     evaluator = HeuristicEvaluator(
         world, policy, args.num_episodes,
         episode_len=episode_len,
-        truncate_by_time=truncate_by_time
+        truncate_by_time=truncate_by_time,
+        init_positions=init_positions
     )
     aggregated = evaluator.evaluate()
 
