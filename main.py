@@ -47,14 +47,14 @@ def main():
     wandb_project = "MAP-RL"
     
     # 预训练权重路径
-    actor_path = "models/imi-pure-norm-fixed-init/imi_train__1770179612_final/policy.pt"
-    critic_path = "models/imi-pure-norm-fixed-init/imi_train__1770179612_final/critic.pt"
-    # actor_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"
-    # critic_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"
+    # actor_path = "models/imi-pure-norm-fixed-init/imi_train__1770179612_final/policy.pt"
+    # critic_path = "models/imi-pure-norm-fixed-init/imi_train__1770179612_final/critic.pt"
+    actor_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"
+    critic_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"
 
     # 保存路径
     algo_name = "mappo"
-    exp_name = "imi-norm-fixed-init"
+    exp_name = "imi-norm-random-init"
     now = datetime.now()
     run_name = f"{exp_name}_{now:%Y-%m-%d_%H-%M-%S}"
     save_dir = Path(f"models/{algo_name}/{run_name}")
@@ -85,7 +85,7 @@ def main():
                 "num_minibatches": num_minibatches,
                 "update_epochs": update_epochs,
             },
-            sync_tensorboard = False,
+            sync_tensorboard = True,
         )
     
     # ========== 环境 ==========

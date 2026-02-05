@@ -21,6 +21,27 @@ from typing import Any, Dict, Optional, Tuple, Type
 import yaml
 import torch
 import torch.nn as nn
+import numpy as np
+
+
+def _convert_to_native_types(obj: Any) -> Any:
+    """
+    递归地将 numpy 类型转换为原生 Python 类型，确保 YAML 可以正确序列化。
+    """
+    if isinstance(obj, dict):
+        return {k: _convert_to_native_types(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_convert_to_native_types(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    else:
+        return obj
 
 
 def save_model(
@@ -56,6 +77,9 @@ def save_model(
     
     if extra_info:
         config['extra'] = extra_info
+    
+    # 将 numpy 类型转换为原生 Python 类型，避免 yaml.safe_load 无法解析
+    config = _convert_to_native_types(config)
     
     # Save config
     config_path = save_dir / 'config.yaml'

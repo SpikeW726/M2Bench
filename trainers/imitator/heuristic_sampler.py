@@ -9,6 +9,8 @@ HeuristicSampler: 使用启发式策略采集样本用于预训练 Actor/Critic 
 - rewards: [N, T, M, 1] Float32 - 每个智能体的奖励
 - padded_mask: [N, T, 1] Int8 - 填充掩码 (1=真实, 0=填充)
 - returns: [N, T, M, 1] Float32 - 每个智能体的累计折扣回报
+
+支持并行采样：使用 num_workers 参数启用多进程并行
 """
 import sys
 from pathlib import Path
@@ -18,10 +20,12 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
 import yaml
 from tqdm import tqdm
+import multiprocessing as mp
+from functools import partial
 
 from polocies.heuritic.heuristic_base import HeuriticBasePolicy
 from polocies.heuritic.er import ERPolicy
@@ -43,14 +47,154 @@ class EpisodeData:
         return len(self.rewards)
 
 
+def _worker_collect_episodes(
+    args: Tuple[int, int, float, Dict, Dict, Dict]
+) -> List[Dict[str, np.ndarray]]:
+    """
+    Worker 进程：采集指定数量的 episodes
+    
+    Args:
+        args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config)
+    
+    Returns:
+        List of episode data dicts (已转换为 numpy arrays)
+    """
+    num_episodes, worker_id, eps, env_config, custom_config, policy_config = args
+    
+    # 在 worker 进程中创建独立的环境和策略实例
+    env = MASUPEnv(env_config, **custom_config)
+    num_agents = env_config.get("num_agents", 3)
+    policy = ERPolicy(num_agents, policy_config)
+    
+    # 缓存维度信息
+    obs_dim = env.observation_space(env.possible_agents[0]).shape[0]
+    act_dim = env.action_space(env.possible_agents[0]).n
+    
+    # 获取 state_dim
+    env.reset()
+    state_dim = len(env.state())
+    critic_state_dim = state_dim + num_agents
+    
+    episodes_data = []
+    
+    for _ in range(num_episodes):
+        episode = _collect_single_episode(env, policy, num_agents, obs_dim, act_dim, eps)
+        episodes_data.append(episode)
+    
+    return episodes_data
+
+
+def _collect_single_episode(
+    env: MASUPEnv,
+    policy: HeuriticBasePolicy,
+    num_agents: int,
+    obs_dim: int,
+    act_dim: int,
+    eps: float
+) -> Dict[str, np.ndarray]:
+    """
+    采集单个 episode，返回 numpy arrays 字典
+    """
+    obs_list = []
+    critic_states_list = []
+    actions_list = []
+    action_masks_list = []
+    rewards_list = []
+    
+    obs_rl, info = env.reset()
+    policy.reset()
+    done = False
+    
+    while not done:
+        # 1. 获取启发式观测和决策
+        h_obs = env.world.get_heuristic_obs()
+        global_state = env.world.get_global_state_for_heuristic()
+        h_actions = policy.compute_actions(h_obs, global_state)
+        
+        # 2. 转换动作 + epsilon-greedy
+        masup_actions = {}
+        for agent_str, neighbor_idx in h_actions.items():
+            if np.random.random() < eps:
+                valid_actions = env.get_valid_actions(agent_str)
+                masup_actions[agent_str] = int(np.random.choice(valid_actions))
+            else:
+                masup_actions[agent_str] = env.convert_heuristic_action(agent_str, neighbor_idx)
+        
+        # 3. 填充 no-op
+        for agent_str in env.agents:
+            if agent_str not in masup_actions:
+                masup_actions[agent_str] = act_dim - 1
+        
+        # 4. 记录数据
+        # obs: [M, Obs_Dim]
+        obs_arr = np.stack([obs_rl[f"agent_{i}"] for i in range(num_agents)], axis=0)
+        obs_list.append(obs_arr)
+        
+        # critic_states: [M, State_Dim+M]
+        g_state = env.state()
+        critic_states = []
+        for agent_id in range(num_agents):
+            one_hot = np.zeros(num_agents, dtype=np.float32)
+            one_hot[agent_id] = 1.0
+            critic_states.append(np.concatenate([g_state, one_hot]))
+        critic_states_list.append(np.stack(critic_states, axis=0))
+        
+        # actions: [M, 1]
+        actions_arr = np.array([[masup_actions.get(f"agent_{i}", act_dim - 1)] for i in range(num_agents)], dtype=np.int64)
+        actions_list.append(actions_arr)
+        
+        # action_masks: [M, Act_Dim]
+        masks_arr = np.stack([info[f"agent_{i}"]['action_mask'] for i in range(num_agents)], axis=0).astype(np.int8)
+        action_masks_list.append(masks_arr)
+        
+        # 5. 执行动作
+        obs_rl, rewards, terms, truncs, info = env.step(masup_actions)
+        
+        # 6. 记录奖励: [M]
+        rewards_arr = np.array([rewards.get(f"agent_{i}", 0.0) for i in range(num_agents)], dtype=np.float32)
+        rewards_list.append(rewards_arr)
+        
+        # 7. 检查结束
+        done = any(truncs.values()) or any(terms.values())
+    
+    return {
+        'obs': np.stack(obs_list, axis=0),              # [T, M, Obs_Dim]
+        'critic_states': np.stack(critic_states_list, axis=0),  # [T, M, State_Dim+M]
+        'actions': np.stack(actions_list, axis=0),      # [T, M, 1]
+        'action_masks': np.stack(action_masks_list, axis=0),    # [T, M, Act_Dim]
+        'rewards': np.stack(rewards_list, axis=0),      # [T, M]
+    }
+
+
 class HeuristicSampler:
     """
     使用启发式策略在 MASUPEnv 中采集 Actor-Critic 监督学习样本
     支持 epsilon-greedy 探索增加数据多样性
+    支持多进程并行采样 (num_workers > 1)
     """
-    def __init__(self, policy: HeuriticBasePolicy, env: MASUPEnv) -> None:
+    def __init__(
+        self, 
+        policy: HeuriticBasePolicy, 
+        env: MASUPEnv,
+        env_config: Optional[Dict] = None,
+        custom_config: Optional[Dict] = None,
+        policy_config: Optional[Dict] = None,
+    ) -> None:
+        """
+        Args:
+            policy: 启发式策略实例
+            env: MASUPEnv 环境实例
+            env_config: 环境配置 (并行采样时用于创建 worker 环境)
+            custom_config: 环境自定义配置 (并行采样时使用)
+            policy_config: 策略配置 (并行采样时用于创建 worker 策略)
+        """
         self.policy = policy
         self.env = env
+        
+        # 保存配置用于并行采样
+        self._env_config = env_config
+        self._custom_config = custom_config or {}
+        self._policy_config = policy_config
         
         # 缓存环境维度信息
         self.num_agents = env.world.num_agents
@@ -73,7 +217,15 @@ class HeuristicSampler:
         """Centralized Critic 输入维度: global_state + agent_one_hot"""
         return self.state_dim + self.num_agents
     
-    def sample(self, num_episodes: int, save_path: str, gamma: float = 0.999, eps: float = 0.0, batch_size: Optional[int] = None) -> None:
+    def sample(
+        self, 
+        num_episodes: int, 
+        save_path: str, 
+        gamma: float = 0.999, 
+        eps: float = 0.0, 
+        batch_size: Optional[int] = None,
+        num_workers: int = 1,
+    ) -> None:
         """
         采集指定数量的 episode 并保存
         
@@ -84,8 +236,18 @@ class HeuristicSampler:
             eps: epsilon-greedy 随机探索概率 (0.0=纯启发式, 1.0=纯随机)
             batch_size: 分批处理大小，None 表示一次性处理所有数据（可能内存溢出）
                        建议设置为 1000-5000，根据可用内存调整
+            num_workers: 并行 worker 数量 (>1 启用多进程并行采样)
         """
-        if batch_size is None or batch_size >= num_episodes:
+        if num_workers > 1:
+            # 并行采样
+            if self._env_config is None or self._policy_config is None:
+                raise ValueError(
+                    "Parallel sampling requires env_config and policy_config. "
+                    "Please pass them to HeuristicSampler constructor."
+                )
+            self._sample_parallel(num_episodes, save_path, gamma, eps, batch_size, num_workers)
+            print(f"[HeuristicSampler] Saved {num_episodes} episodes to {save_path} (parallel, {num_workers} workers)")
+        elif batch_size is None or batch_size >= num_episodes:
             # 一次性处理（保持向后兼容）
             trajectories: List[EpisodeData] = []
             
@@ -327,6 +489,129 @@ class HeuristicSampler:
         print(f"  returns:       {returns.shape}")
         print(f"  max_episode_len: {max_len}")
     
+    def _sample_parallel(
+        self, 
+        num_episodes: int, 
+        save_path: str, 
+        gamma: float, 
+        eps: float, 
+        batch_size: Optional[int],
+        num_workers: int
+    ) -> None:
+        """
+        使用多进程并行采样
+        
+        Args:
+            num_episodes: 总 episode 数量
+            save_path: 保存路径
+            gamma: 折扣因子
+            eps: epsilon-greedy 探索概率
+            batch_size: 批大小 (用于分批保存)
+            num_workers: worker 进程数量
+        """
+        import tempfile
+        
+        # 计算每个 worker 负责的 episode 数量
+        episodes_per_worker = num_episodes // num_workers
+        remainder = num_episodes % num_workers
+        
+        # 构造 worker 参数
+        worker_args = []
+        for worker_id in range(num_workers):
+            n_eps = episodes_per_worker + (1 if worker_id < remainder else 0)
+            if n_eps > 0:
+                worker_args.append((
+                    n_eps,
+                    worker_id,
+                    eps,
+                    self._env_config,
+                    self._custom_config,
+                    self._policy_config,
+                ))
+        
+        print(f"[HeuristicSampler] Starting parallel sampling with {num_workers} workers...")
+        print(f"[HeuristicSampler] Episodes distribution: {[a[0] for a in worker_args]}")
+        
+        # 使用进程池并行采集
+        all_episodes = []
+        
+        # 使用 spawn 方式避免 CUDA/fork 问题
+        ctx = mp.get_context('spawn')
+        with ctx.Pool(processes=num_workers) as pool:
+            # imap_unordered 返回结果时显示进度
+            results = list(tqdm(
+                pool.imap(_worker_collect_episodes, worker_args),
+                total=len(worker_args),
+                desc="Workers completed"
+            ))
+            
+            for worker_episodes in results:
+                all_episodes.extend(worker_episodes)
+        
+        print(f"[HeuristicSampler] Collected {len(all_episodes)} episodes, processing...")
+        
+        # 将 dict 格式转换为 EpisodeData 格式并计算 returns
+        trajectories = []
+        for ep_dict in all_episodes:
+            ep = EpisodeData()
+            T = ep_dict['obs'].shape[0]
+            for t in range(T):
+                ep.obs.append(ep_dict['obs'][t])
+                ep.critic_states.append(ep_dict['critic_states'][t])
+                ep.actions.append(ep_dict['actions'][t])
+                ep.action_masks.append(ep_dict['action_masks'][t])
+                ep.rewards.append(ep_dict['rewards'][t])
+            trajectories.append(ep)
+        
+        # 清理中间数据节省内存
+        del all_episodes
+        
+        # 使用分批保存或一次性保存
+        if batch_size is not None and batch_size < num_episodes:
+            # 分批保存
+            temp_dir = Path(save_path).parent / ".temp_batches"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            batch_paths = []
+            all_max_lens = []
+            
+            num_batches = (num_episodes + batch_size - 1) // batch_size
+            
+            for batch_idx in range(num_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, num_episodes)
+                batch_trajectories = trajectories[start_idx:end_idx]
+                
+                batch_path = temp_dir / f"batch_{batch_idx:05d}.npz"
+                self._pad_and_save(batch_trajectories, str(batch_path), gamma)
+                batch_paths.append(batch_path)
+                
+                max_len = max(ep.length for ep in batch_trajectories)
+                all_max_lens.append(max_len)
+            
+            # 清理
+            del trajectories
+            
+            # 重新检查最大长度
+            actual_max_lens = []
+            for batch_path in batch_paths:
+                with np.load(batch_path, mmap_mode='r') as batch_data:
+                    actual_max_lens.append(batch_data['obs'].shape[1])
+            global_max_len = max(actual_max_lens)
+            
+            print(f"[HeuristicSampler] Batch max lengths: min={min(actual_max_lens)}, max={global_max_len}")
+            
+            # 合并批次
+            self._merge_batches(batch_paths, save_path, global_max_len)
+            
+            # 清理临时文件
+            for batch_path in batch_paths:
+                batch_path.unlink()
+            temp_dir.rmdir()
+        else:
+            # 一次性保存
+            self._pad_and_save(trajectories, save_path, gamma)
+    
     def _sample_in_batches(self, num_episodes: int, save_path: str, gamma: float, eps: float, batch_size: int) -> None:
         """
         分批采集并保存，避免内存溢出
@@ -467,25 +752,57 @@ class HeuristicSampler:
 
 if __name__ == "__main__":
     import os
+    import argparse
+    
     # 切换工作目录到项目根目录 (确保配置文件路径正确)
     os.chdir(_project_root)
     
-    policy_config_path = "configs/ER.yaml"
-    env_config_path = "configs/MASUPEnv.yaml"
-
-    with open(policy_config_path, 'r', encoding='utf-8') as f:
+    parser = argparse.ArgumentParser(description="Heuristic Sampler for Actor-Critic Pre-training")
+    parser.add_argument("--num_episodes", type=int, default=50000, help="Number of episodes to collect")
+    parser.add_argument("--save_path", type=str, default="dataset/grid/samples_pure_0.01reward_random.npz", help="Save path for NPZ file")
+    parser.add_argument("--gamma", type=float, default=0.999, help="Discount factor for returns")
+    parser.add_argument("--eps", type=float, default=0.0, help="Epsilon-greedy exploration probability")
+    parser.add_argument("--batch_size", type=int, default=2048, help="Batch size for memory-efficient processing")
+    parser.add_argument("--num_workers", type=int, default=1, help="Number of parallel workers (>1 for parallel sampling)")
+    parser.add_argument("--policy_config", type=str, default="configs/ER.yaml", help="Policy config file")
+    parser.add_argument("--env_config", type=str, default="configs/MASUPEnv.yaml", help="Environment config file")
+    args = parser.parse_args()
+    
+    with open(args.policy_config, 'r', encoding='utf-8') as f:
         ER_config = yaml.safe_load(f)
-    with open(env_config_path, 'r', encoding='utf-8') as f:
+    with open(args.env_config, 'r', encoding='utf-8') as f:
         MASUP_config = yaml.safe_load(f)
     custom_config = MASUP_config["custom_config"]
-    MASUP_config = MASUP_config["env_config"]
+    env_config = MASUP_config["env_config"]
 
-    num_agents = MASUP_config.get("num_agents", 3)
+    num_agents = env_config.get("num_agents", 3)
     policy = ERPolicy(num_agents, ER_config)
-    env = MASUPEnv(MASUP_config, **custom_config)
+    env = MASUPEnv(env_config, **custom_config)
 
-    sampler = HeuristicSampler(policy=policy, env=env)
+    # 创建采样器 (传入配置以支持并行采样)
+    sampler = HeuristicSampler(
+        policy=policy, 
+        env=env,
+        env_config=env_config,
+        custom_config=custom_config,
+        policy_config=ER_config,
+    )
     
-    # 使用 batch_size=2000 分批处理，避免内存溢出
-    # 如果内存充足，可以设置 batch_size=None 或更大的值
-    sampler.sample(num_episodes=50000, save_path="dataset/samples_pure_0.01reward_fixed.npz", gamma=0.999, eps=0.0, batch_size=1024)
+    # 开始采样
+    # - 单进程: num_workers=1 (默认)
+    # - 多进程: num_workers=4 或更多 (根据 CPU 核心数调整)
+    # - batch_size: 分批保存避免内存溢出
+    sampler.sample(
+        num_episodes=args.num_episodes, 
+        save_path=args.save_path, 
+        gamma=args.gamma, 
+        eps=args.eps, 
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+    )
+    
+    # 示例用法:
+    # 单进程采样:
+    #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 1
+    # 4进程并行采样:
+    #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 4
