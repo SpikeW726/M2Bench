@@ -26,6 +26,7 @@ import yaml
 from tqdm import tqdm
 import multiprocessing as mp
 from functools import partial
+import h5py
 
 from polocies.heuritic.heuristic_base import HeuriticBasePolicy
 from polocies.heuritic.er import ERPolicy
@@ -51,7 +52,7 @@ def _worker_collect_episodes(
     args: Tuple[int, int, float, Dict, Dict, Dict]
 ) -> List[Dict[str, np.ndarray]]:
     """
-    Worker 进程：采集指定数量的 episodes
+    Worker 进程：采集指定数量的 episodes (旧版本，保留向后兼容)
     
     Args:
         args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config)
@@ -82,6 +83,114 @@ def _worker_collect_episodes(
         episodes_data.append(episode)
     
     return episodes_data
+
+
+def _worker_collect_to_file(args: Tuple) -> str:
+    """
+    Worker 进程：采集 episodes 并直接写入临时文件（内存友好版本）
+    
+    Args:
+        args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config, 
+               temp_dir, chunk_size, gamma)
+    
+    Returns:
+        临时文件路径列表（逗号分隔）
+    """
+    (num_episodes, worker_id, eps, env_config, custom_config, policy_config, 
+     temp_dir, chunk_size, gamma) = args
+    
+    # 在 worker 进程中创建独立的环境和策略实例
+    env = MASUPEnv(env_config, **custom_config)
+    num_agents = env_config.get("num_agents", 3)
+    policy = ERPolicy(num_agents, policy_config)
+    
+    # 缓存维度信息
+    obs_dim = env.observation_space(env.possible_agents[0]).shape[0]
+    act_dim = env.action_space(env.possible_agents[0]).n
+    
+    # 获取 state_dim
+    env.reset()
+    state_dim = len(env.state())
+    critic_state_dim = state_dim + num_agents
+    
+    # 分 chunk 采集并保存
+    temp_dir_path = Path(temp_dir)
+    chunk_files = []
+    
+    collected = 0
+    while collected < num_episodes:
+        # 当前 chunk 要采集的 episodes 数量
+        chunk_eps = min(chunk_size, num_episodes - collected)
+        episodes_data = []
+        
+        for _ in range(chunk_eps):
+            episode = _collect_single_episode(env, policy, num_agents, obs_dim, act_dim, eps)
+            episodes_data.append(episode)
+        
+        # 保存当前 chunk 到临时文件
+        chunk_file = temp_dir_path / f"worker_{worker_id}_chunk_{len(chunk_files):05d}.npz"
+        _save_chunk_to_file(episodes_data, chunk_file, gamma, num_agents, obs_dim, act_dim, critic_state_dim)
+        chunk_files.append(str(chunk_file))
+        
+        collected += chunk_eps
+        
+        # 释放内存
+        del episodes_data
+    
+    # 返回 chunk 文件列表（用逗号分隔）
+    return ",".join(chunk_files)
+
+
+def _save_chunk_to_file(
+    episodes_data: List[Dict[str, np.ndarray]], 
+    save_path: Path,
+    gamma: float,
+    num_agents: int,
+    obs_dim: int,
+    act_dim: int,
+    critic_state_dim: int,
+) -> None:
+    """将一个 chunk 的 episodes 保存到 npz 文件"""
+    N = len(episodes_data)
+    max_len = max(ep['obs'].shape[0] for ep in episodes_data)
+    
+    # 初始化数组
+    obs = np.zeros([N, max_len, num_agents, obs_dim], dtype=np.float32)
+    critic_states = np.zeros([N, max_len, num_agents, critic_state_dim], dtype=np.float32)
+    actions = np.zeros([N, max_len, num_agents, 1], dtype=np.int64)
+    action_masks = np.zeros([N, max_len, num_agents, act_dim], dtype=np.int8)
+    rewards = np.zeros([N, max_len, num_agents, 1], dtype=np.float32)
+    padded_mask = np.zeros([N, max_len, 1], dtype=np.int8)
+    returns = np.zeros([N, max_len, num_agents, 1], dtype=np.float32)
+    
+    for i, ep in enumerate(episodes_data):
+        L = ep['obs'].shape[0]
+        obs[i, :L] = ep['obs']
+        critic_states[i, :L] = ep['critic_states']
+        actions[i, :L] = ep['actions']
+        action_masks[i, :L] = ep['action_masks']
+        rewards[i, :L, :, 0] = ep['rewards']
+        padded_mask[i, :L, 0] = 1
+        
+        # 计算 returns
+        ep_returns = _compute_returns_static(ep['rewards'], gamma)
+        returns[i, :L, :, 0] = ep_returns
+    
+    np.savez(save_path, obs=obs, critic_states=critic_states, actions=actions,
+             action_masks=action_masks, rewards=rewards, padded_mask=padded_mask, returns=returns)
+
+
+def _compute_returns_static(rewards: np.ndarray, gamma: float) -> np.ndarray:
+    """静态方法：计算 returns（可在 worker 进程中调用）"""
+    T, M = rewards.shape
+    returns = np.zeros((T, M), dtype=np.float32)
+    G = np.zeros(M, dtype=np.float32)
+    
+    for t in reversed(range(T)):
+        G = rewards[t] + gamma * G
+        returns[t] = G
+    
+    return returns
 
 
 def _collect_single_episode(
@@ -499,7 +608,7 @@ class HeuristicSampler:
         num_workers: int
     ) -> None:
         """
-        使用多进程并行采样
+        使用多进程并行采样（内存友好版本：Worker 直接写入临时文件）
         
         Args:
             num_episodes: 总 episode 数量
@@ -509,7 +618,15 @@ class HeuristicSampler:
             batch_size: 批大小 (用于分批保存)
             num_workers: worker 进程数量
         """
-        import tempfile
+        import time
+        
+        # 创建临时目录
+        temp_dir = Path(save_path).parent / ".temp_parallel"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 每个 worker 的 chunk 大小（每个 chunk 保存一次，避免内存爆炸）
+        # 建议：每个 chunk 500-1000 episodes，平衡内存和 I/O
+        chunk_size = min(500, max(100, num_episodes // (num_workers * 10)))
         
         # 计算每个 worker 负责的 episode 数量
         episodes_per_worker = num_episodes // num_workers
@@ -527,90 +644,67 @@ class HeuristicSampler:
                     self._env_config,
                     self._custom_config,
                     self._policy_config,
+                    str(temp_dir),
+                    chunk_size,
+                    gamma,
                 ))
         
         print(f"[HeuristicSampler] Starting parallel sampling with {num_workers} workers...")
-        print(f"[HeuristicSampler] Episodes distribution: {[a[0] for a in worker_args]}")
-        
-        # 使用进程池并行采集
-        all_episodes = []
+        print(f"[HeuristicSampler] Episodes per worker: {[a[0] for a in worker_args]}")
+        print(f"[HeuristicSampler] Chunk size: {chunk_size} episodes/chunk")
         
         # 使用 spawn 方式避免 CUDA/fork 问题
         ctx = mp.get_context('spawn')
+        
+        # 启动进程池
+        all_chunk_files = []
+        start_time = time.time()
+        
         with ctx.Pool(processes=num_workers) as pool:
-            # imap_unordered 返回结果时显示进度
+            # 使用 imap_unordered 以便尽早获取结果并显示进度
+            # 每个 worker 完成后返回其 chunk 文件路径
             results = list(tqdm(
-                pool.imap(_worker_collect_episodes, worker_args),
+                pool.imap_unordered(_worker_collect_to_file, worker_args),
                 total=len(worker_args),
-                desc="Workers completed"
+                desc=f"Workers (each ~{episodes_per_worker} eps)"
             ))
             
-            for worker_episodes in results:
-                all_episodes.extend(worker_episodes)
+            # 收集所有 chunk 文件路径
+            for chunk_files_str in results:
+                if chunk_files_str:
+                    all_chunk_files.extend(chunk_files_str.split(","))
         
-        print(f"[HeuristicSampler] Collected {len(all_episodes)} episodes, processing...")
+        elapsed = time.time() - start_time
+        print(f"[HeuristicSampler] Collected {num_episodes} episodes in {elapsed:.1f}s ({num_episodes/elapsed:.1f} eps/s)")
+        print(f"[HeuristicSampler] Generated {len(all_chunk_files)} chunk files, merging...")
         
-        # 将 dict 格式转换为 EpisodeData 格式并计算 returns
-        trajectories = []
-        for ep_dict in all_episodes:
-            ep = EpisodeData()
-            T = ep_dict['obs'].shape[0]
-            for t in range(T):
-                ep.obs.append(ep_dict['obs'][t])
-                ep.critic_states.append(ep_dict['critic_states'][t])
-                ep.actions.append(ep_dict['actions'][t])
-                ep.action_masks.append(ep_dict['action_masks'][t])
-                ep.rewards.append(ep_dict['rewards'][t])
-            trajectories.append(ep)
+        # 合并所有 chunk 文件
+        chunk_paths = [Path(f) for f in all_chunk_files]
         
-        # 清理中间数据节省内存
-        del all_episodes
+        # 获取全局最大长度
+        actual_max_lens = []
+        for chunk_path in chunk_paths:
+            with np.load(chunk_path, mmap_mode='r') as data:
+                actual_max_lens.append(data['obs'].shape[1])
+        global_max_len = max(actual_max_lens)
         
-        # 使用分批保存或一次性保存
-        if batch_size is not None and batch_size < num_episodes:
-            # 分批保存
-            temp_dir = Path(save_path).parent / ".temp_batches"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            
-            batch_paths = []
-            all_max_lens = []
-            
-            num_batches = (num_episodes + batch_size - 1) // batch_size
-            
-            for batch_idx in range(num_batches):
-                start_idx = batch_idx * batch_size
-                end_idx = min(start_idx + batch_size, num_episodes)
-                batch_trajectories = trajectories[start_idx:end_idx]
-                
-                batch_path = temp_dir / f"batch_{batch_idx:05d}.npz"
-                self._pad_and_save(batch_trajectories, str(batch_path), gamma)
-                batch_paths.append(batch_path)
-                
-                max_len = max(ep.length for ep in batch_trajectories)
-                all_max_lens.append(max_len)
-            
-            # 清理
-            del trajectories
-            
-            # 重新检查最大长度
-            actual_max_lens = []
-            for batch_path in batch_paths:
-                with np.load(batch_path, mmap_mode='r') as batch_data:
-                    actual_max_lens.append(batch_data['obs'].shape[1])
-            global_max_len = max(actual_max_lens)
-            
-            print(f"[HeuristicSampler] Batch max lengths: min={min(actual_max_lens)}, max={global_max_len}")
-            
-            # 合并批次
-            self._merge_batches(batch_paths, save_path, global_max_len)
-            
-            # 清理临时文件
-            for batch_path in batch_paths:
-                batch_path.unlink()
-            temp_dir.rmdir()
+        print(f"[HeuristicSampler] Episode lengths: min={min(actual_max_lens)}, max={global_max_len}, mean={np.mean(actual_max_lens):.1f}")
+        
+        # 根据文件后缀选择合并方法
+        if save_path.endswith('.h5') or save_path.endswith('.hdf5'):
+            self._merge_batches_to_hdf5(chunk_paths, save_path, global_max_len)
         else:
-            # 一次性保存
-            self._pad_and_save(trajectories, save_path, gamma)
+            self._merge_batches(chunk_paths, save_path, global_max_len)
+        
+        # 清理临时文件
+        for chunk_path in chunk_paths:
+            chunk_path.unlink()
+        
+        # 尝试删除临时目录（可能有子目录残留）
+        try:
+            temp_dir.rmdir()
+        except OSError:
+            pass
     
     def _sample_in_batches(self, num_episodes: int, save_path: str, gamma: float, eps: float, batch_size: int) -> None:
         """
@@ -669,8 +763,11 @@ class HeuristicSampler:
         
         print(f"[HeuristicSampler] Batch max lengths: min={min(actual_max_lens)}, max={global_max_len}, mean={np.mean(actual_max_lens):.1f}")
         
-        # 合并所有批次
-        self._merge_batches(batch_paths, save_path, global_max_len)
+        # 根据文件后缀选择合并方法
+        if save_path.endswith('.h5') or save_path.endswith('.hdf5'):
+            self._merge_batches_to_hdf5(batch_paths, save_path, global_max_len)
+        else:
+            self._merge_batches(batch_paths, save_path, global_max_len)
         
         # 清理临时文件
         for batch_path in batch_paths:
@@ -748,6 +845,67 @@ class HeuristicSampler:
         print(f"  padded_mask:   {padded_mask.shape}")
         print(f"  returns:       {returns.shape}")
         print(f"  max_episode_len: {max_len}")
+
+    def _merge_batches_to_hdf5(self, batch_paths: List[Path], save_path: str, max_len: int) -> None:
+        """
+        增量合并多个批次的 npz 文件到 HDF5（内存友好）
+        
+        与 _merge_batches 不同，此方法不会将所有数据加载到内存，
+        而是逐批次直接写入 HDF5 文件。
+        """
+        # 1. 扫描获取形状信息和总 episode 数
+        with np.load(batch_paths[0], mmap_mode='r') as first_batch:
+            M = first_batch['obs'].shape[2]
+            obs_dim = first_batch['obs'].shape[3]
+            critic_state_dim = first_batch['critic_states'].shape[3]
+            act_dim = first_batch['action_masks'].shape[3]
+        
+        total_episodes = 0
+        for batch_path in batch_paths:
+            with np.load(batch_path, mmap_mode='r') as data:
+                total_episodes += data['obs'].shape[0]
+        
+        # 2. 创建 HDF5 文件并预分配 datasets
+        with h5py.File(save_path, 'w') as hf:
+            # 创建 datasets (chunked for efficient I/O)
+            chunk_size = min(512, total_episodes)
+            hf.create_dataset('obs', shape=(total_episodes, max_len, M, obs_dim),
+                              dtype='float32', chunks=(chunk_size, max_len, M, obs_dim))
+            hf.create_dataset('critic_states', shape=(total_episodes, max_len, M, critic_state_dim),
+                              dtype='float32', chunks=(chunk_size, max_len, M, critic_state_dim))
+            hf.create_dataset('actions', shape=(total_episodes, max_len, M, 1),
+                              dtype='int64', chunks=(chunk_size, max_len, M, 1))
+            hf.create_dataset('action_masks', shape=(total_episodes, max_len, M, act_dim),
+                              dtype='int8', chunks=(chunk_size, max_len, M, act_dim))
+            hf.create_dataset('rewards', shape=(total_episodes, max_len, M, 1),
+                              dtype='float32', chunks=(chunk_size, max_len, M, 1))
+            hf.create_dataset('padded_mask', shape=(total_episodes, max_len, 1),
+                              dtype='int8', chunks=(chunk_size, max_len, 1))
+            hf.create_dataset('returns', shape=(total_episodes, max_len, M, 1),
+                              dtype='float32', chunks=(chunk_size, max_len, M, 1))
+            
+            # 3. 逐批次写入
+            offset = 0
+            for batch_path in tqdm(batch_paths, desc="Merging to HDF5"):
+                with np.load(batch_path, mmap_mode='r') as batch_data:
+                    N_batch = batch_data['obs'].shape[0]
+                    T_batch = batch_data['obs'].shape[1]
+                    
+                    # 直接写入 HDF5 (零拷贝到磁盘)
+                    hf['obs'][offset:offset+N_batch, :T_batch] = batch_data['obs']
+                    hf['critic_states'][offset:offset+N_batch, :T_batch] = batch_data['critic_states']
+                    hf['actions'][offset:offset+N_batch, :T_batch] = batch_data['actions']
+                    hf['action_masks'][offset:offset+N_batch, :T_batch] = batch_data['action_masks']
+                    hf['rewards'][offset:offset+N_batch, :T_batch] = batch_data['rewards']
+                    hf['padded_mask'][offset:offset+N_batch, :T_batch] = batch_data['padded_mask']
+                    hf['returns'][offset:offset+N_batch, :T_batch] = batch_data['returns']
+                    
+                    offset += N_batch
+        
+        # 打印统计信息
+        print(f"[HeuristicSampler] Saved HDF5: {save_path}")
+        print(f"  shape: ({total_episodes}, {max_len}, {M}, *)")
+        print(f"  datasets: obs, critic_states, actions, action_masks, rewards, padded_mask, returns")
 
 
 if __name__ == "__main__":

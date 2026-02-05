@@ -202,16 +202,46 @@ def main():
     }
     training_config = {
         'algorithm': 'MAPPO',
+        # 环境配置
+        'num_envs': num_envs,
+        'use_subproc': use_subproc,
+        # 训练超参数
+        'total_timesteps': total_timesteps,
+        'num_steps': num_steps,
+        'num_minibatches': num_minibatches,
+        'update_epochs': update_epochs,
+        'save_interval': save_internal,
+        # 优化器参数
         'actor_lr': actor_lr,
         'critic_lr': critic_lr,
+        # PPO 参数
         'gamma': gamma,
         'gae_lambda': gae_lambda,
         'clip_range': clip_range,
         'vf_coef': vf_coef,
         'ent_coef': ent_coef,
-        'num_minibatches': num_minibatches,
-        'update_epochs': update_epochs,
+        # 学习率调度器 (如果配置了)
+        # 'lr_scheduler': {...},  # 预留字段，如需启用可添加
     }
+    
+    def get_value_norm_config():
+        """获取当前 value normalization 配置（从 algorithm 中提取）"""
+        if algorithm.use_value_norm and algorithm.ret_rms is not None:
+            return {
+                'enabled': True,
+                'ret_mean': float(algorithm.ret_rms.mean.item()),
+                'ret_std': float(algorithm.ret_rms.std.item()),
+                'ret_count': float(algorithm.ret_rms.count.item()),
+            }
+        return {'enabled': False}
+    
+    def build_extra_info(iteration: int):
+        """构建保存时的 extra_info，包含 iteration、training_config 和 value_normalization"""
+        return {
+            'iteration': iteration,
+            'training': training_config,
+            'value_normalization': get_value_norm_config(),
+        }
 
     # ========== 训练循环 ==========
     collector = MACollector(algorithm, vec_env)
@@ -236,7 +266,7 @@ def main():
                 critic=critic_net,
                 actor_config=actor_config,
                 critic_config=critic_config,
-                extra_info={'iteration': iteration + 1, 'training': training_config},
+                extra_info=build_extra_info(iteration + 1),
             )
 
         # 1. 采集数据 (eval mode)
@@ -305,7 +335,7 @@ def main():
         critic=critic_net,
         actor_config=actor_config,
         critic_config=critic_config,
-        extra_info={'iteration': num_iterations, 'training': training_config},
+        extra_info=build_extra_info(num_iterations),
     )
     print(f"\n[Main] Saved final model to {final_dir}")
     

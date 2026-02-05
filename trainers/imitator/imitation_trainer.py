@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
+import h5py
 
 def layer_init(layer:nn.Linear, std=np.sqrt(2), bias_const=0.0):
     """
@@ -132,7 +133,15 @@ class imi_trainer:
                 sync_tensorboard=True,
             )
 
-    def train(self, data_path:str, batch_size:int = 32, iteration:int = 10):
+    def train(self, data_path: str, batch_size: int = 32, iteration: int = 10):
+        """根据文件格式自动选择训练方法"""
+        if data_path.endswith('.h5') or data_path.endswith('.hdf5'):
+            self._train_from_hdf5(data_path, batch_size, iteration)
+        else:
+            self._train_from_npz(data_path, batch_size, iteration)
+    
+    def _train_from_npz(self, data_path: str, batch_size: int, iteration: int):
+        """从 NPZ 文件训练（全量加载到内存）"""
         with np.load(data_path, mmap_mode='r') as data:
             raw_mask = data["padded_mask"]    # [N, T, 1]
             N, T, _ = raw_mask.shape
@@ -281,6 +290,176 @@ class imi_trainer:
                     self._save_actor(avg_actor_loss, actor_acc, iteration)
             
             self.writer.close()
+    
+    def _train_from_hdf5(self, data_path: str, batch_size: int, iteration: int):
+        """
+        从 HDF5 文件训练（按 episode 批量预读取）
+        
+        策略：每次从 HDF5 读取一批 episodes 到内存，训练完后释放，
+        这样既避免一次性加载全部数据，又比逐条读取高效。
+        """
+        # 预读取批次大小（episodes），可根据内存调整
+        episode_batch_size = min(500, 50000 // batch_size)
+        
+        with h5py.File(data_path, 'r') as hf:
+            N, T, M = hf['obs'].shape[:3]
+            raw_mask = hf['padded_mask'][:]  # [N, T, 1]
+            flat_mask = raw_mask[:, :, 0].astype(bool)  # [N, T]
+            
+            # 计算每个 episode 的有效样本数
+            valid_per_ep = flat_mask.sum(axis=1) * M  # [N]
+            total_samples = valid_per_ep.sum()
+            print(f"[ImiTrainer] HDF5 mode: {total_samples} valid samples from {N} episodes")
+            
+            # 计算 Value Normalization 统计量
+            if self.use_value_norm:
+                print("[ImiTrainer] Computing value normalization stats from HDF5...")
+                sum_ret, sum_sq_ret, count = 0.0, 0.0, 0
+                for n in range(N):
+                    valid_t = np.where(flat_mask[n])[0]
+                    if len(valid_t) == 0:
+                        continue
+                    ep_returns = hf['returns'][n, valid_t, :, 0].flatten()
+                    sum_ret += ep_returns.sum()
+                    sum_sq_ret += (ep_returns ** 2).sum()
+                    count += len(ep_returns)
+                self.ret_mean = sum_ret / count
+                self.ret_std = np.sqrt(sum_sq_ret / count - self.ret_mean ** 2)
+                print(f"[ImiTrainer] Value Normalization: mean={self.ret_mean:.4f}, std={self.ret_std:.4f}")
+            
+            global_step = 0
+            start_time = time.time()
+            
+            for itr in range(iteration):
+                # Shuffle episode order
+                ep_perm = np.random.permutation(N)
+                itr_actor_loss, itr_critic_loss, itr_correct, itr_total = 0.0, 0.0, 0, 0
+                
+                # 按 episode 批次读取
+                for ep_start in range(0, N, episode_batch_size):
+                    ep_end = min(ep_start + episode_batch_size, N)
+                    ep_indices = ep_perm[ep_start:ep_end]
+                    
+                    # 预读取这批 episodes 的所有数据
+                    batch_data = self._load_episodes_from_hdf5(hf, ep_indices, flat_mask)
+                    if batch_data is None:
+                        continue
+                    
+                    # Shuffle within this batch
+                    n_samples = len(batch_data['obs'])
+                    sample_perm = np.random.permutation(n_samples)
+                    
+                    for start in range(0, n_samples, batch_size):
+                        end = min(start + batch_size, n_samples)
+                        idx = sample_perm[start:end]
+                        global_step += len(idx)
+                        
+                        obs_batch = torch.tensor(batch_data['obs'][idx], dtype=torch.float32, device=self.device)
+                        actions_batch = torch.tensor(batch_data['actions'][idx], dtype=torch.long, device=self.device)
+                        action_masks_batch = torch.tensor(batch_data['action_masks'][idx], dtype=torch.long, device=self.device)
+                        returns_batch = torch.tensor(batch_data['returns'][idx], dtype=torch.float32, device=self.device)
+                        critic_states_batch = torch.tensor(batch_data['critic_states'][idx], dtype=torch.float32, device=self.device)
+                        
+                        # Actor 前向传播和更新
+                        if not self.actor_stopped:
+                            actor_logits = self.actor(obs_batch)
+                            actor_logits = actor_logits.masked_fill(~action_masks_batch.bool(), float('-inf'))
+                            actor_loss = nn.functional.cross_entropy(actor_logits, actions_batch.squeeze(-1))
+                            
+                            self.actor_optimizer.zero_grad()
+                            actor_loss.backward()
+                            self.actor_optimizer.step()
+                        else:
+                            with torch.no_grad():
+                                actor_logits = self.actor(obs_batch)
+                                actor_logits = actor_logits.masked_fill(~action_masks_batch.bool(), float('-inf'))
+                                actor_loss = nn.functional.cross_entropy(actor_logits, actions_batch.squeeze(-1))
+                        
+                        # Critic 前向传播和更新
+                        critic_pred = self.critic(critic_states_batch)
+                        if self.use_value_norm:
+                            target_norm = (returns_batch - self.ret_mean) / (self.ret_std + 1e-8)
+                            critic_loss = nn.functional.mse_loss(critic_pred, target_norm)
+                        else:
+                            critic_loss = nn.functional.mse_loss(critic_pred, returns_batch)
+                        
+                        self.critic_optimizer.zero_grad()
+                        critic_loss.backward()
+                        self.critic_optimizer.step()
+                        
+                        # 累计统计
+                        itr_actor_loss += actor_loss.item() * len(idx)
+                        itr_critic_loss += critic_loss.item() * len(idx)
+                        pred_actions = actor_logits.argmax(dim=-1)
+                        itr_correct += (pred_actions == actions_batch.squeeze(-1)).sum().item()
+                        itr_total += len(idx)
+                    
+                    # 释放内存
+                    del batch_data
+                
+                # 每个 iteration 结束后记录
+                avg_actor_loss = itr_actor_loss / itr_total
+                avg_critic_loss = itr_critic_loss / itr_total
+                actor_acc = itr_correct / itr_total
+                sps = int(global_step / (time.time() - start_time))
+                
+                self.writer.add_scalar("losses/actor_loss", avg_actor_loss, itr)
+                self.writer.add_scalar("losses/critic_loss", avg_critic_loss, itr)
+                self.writer.add_scalar("losses/total_loss", avg_actor_loss + avg_critic_loss, itr)
+                self.writer.add_scalar("metrics/actor_accuracy", actor_acc, itr)
+                self.writer.add_scalar("charts/SPS", sps, itr)
+                
+                actor_status = "[STOPPED]" if self.actor_stopped else ""
+                print(f"[Iter {itr+1}/{iteration}] actor_loss: {avg_actor_loss:.4f} {actor_status}, "
+                      f"critic_loss: {avg_critic_loss:.4f}, acc: {actor_acc:.4f}, SPS: {sps}")
+                
+                # Actor 早停检查
+                if not self.actor_stopped:
+                    if avg_actor_loss < self.best_actor_loss - self.actor_min_delta:
+                        self.best_actor_loss = avg_actor_loss
+                        self.actor_no_improve_count = 0
+                    else:
+                        self.actor_no_improve_count += 1
+                        if self.actor_no_improve_count >= self.actor_patience:
+                            self.actor_stopped = True
+                            print(f"\n[ImiTrainer] Actor early stopped at iter {itr+1}! "
+                                  f"Best actor_loss: {self.best_actor_loss:.6f}, acc: {actor_acc:.4f}")
+                            self._save_actor(avg_actor_loss, actor_acc, itr + 1)
+            
+            # 保存最终模型
+            if self.save_model:
+                self._save_checkpoint(avg_actor_loss, avg_critic_loss, actor_acc, iteration)
+                if not self.actor_stopped:
+                    self._save_actor(avg_actor_loss, actor_acc, iteration)
+            
+            self.writer.close()
+    
+    def _load_episodes_from_hdf5(self, hf: h5py.File, ep_indices: np.ndarray, 
+                                  flat_mask: np.ndarray) -> dict:
+        """从 HDF5 加载指定 episodes 的有效数据，展平为训练样本"""
+        obs_list, actions_list, masks_list, returns_list, critic_list = [], [], [], [], []
+        
+        for n in ep_indices:
+            valid_t = np.where(flat_mask[n])[0]
+            if len(valid_t) == 0:
+                continue
+            # 读取该 episode 的有效时间步数据
+            obs_list.append(hf['obs'][n, valid_t, :, :].reshape(-1, hf['obs'].shape[-1]))
+            actions_list.append(hf['actions'][n, valid_t, :, :].reshape(-1, 1))
+            masks_list.append(hf['action_masks'][n, valid_t, :, :].reshape(-1, hf['action_masks'].shape[-1]))
+            returns_list.append(hf['returns'][n, valid_t, :, :].reshape(-1, 1))
+            critic_list.append(hf['critic_states'][n, valid_t, :, :].reshape(-1, hf['critic_states'].shape[-1]))
+        
+        if not obs_list:
+            return None
+        
+        return {
+            'obs': np.concatenate(obs_list, axis=0),
+            'actions': np.concatenate(actions_list, axis=0),
+            'action_masks': np.concatenate(masks_list, axis=0),
+            'returns': np.concatenate(returns_list, axis=0),
+            'critic_states': np.concatenate(critic_list, axis=0),
+        }
     
     def _save_actor(self, actor_loss: float, actor_acc: float, stopped_iter: int):
         """Save best actor model (HuggingFace style + legacy format)."""
