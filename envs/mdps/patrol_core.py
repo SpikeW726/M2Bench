@@ -73,6 +73,7 @@ class PatrolWorld:
         
         # Episode 指标追踪器
         self.metrics_tracker = EpisodeMetricsTracker()
+        self.last_episode_metrics: Optional[IdlenessMetrics] = None  # 上一个 episode 终止时的指标
         self.step_count: int = 0 
      
         # 记录哪些节点当前有智能体"占据"（恰好有智能体到达或有智能体在该节点等待）
@@ -80,6 +81,10 @@ class PatrolWorld:
     
     def reset(self, initial_positions: Optional[List[int]] = None) -> None:
         """重置物理世界"""
+        # 保存上一个 episode 的终止指标（reset 前 history 非空时）
+        if self.metrics_tracker.history:
+            self.last_episode_metrics = self.metrics_tracker.current
+        
         self.current_time = 0.0
         self.step_count = 0
         self.worst_idleness = 0.0

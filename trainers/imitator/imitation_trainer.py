@@ -589,8 +589,8 @@ if __name__ == "__main__":
 
     action_dim = 9
 
-    actor_hidden_dim = [256, 256]
-    critic_hidden_dim = [256, 256]
+    actor_hidden_dim = [512, 256, 128]
+    critic_hidden_dim = [512, 256, 128]
 
     actor = ActorMLP(obs_dim, actor_hidden_dim, action_dim)
     critic = CriticMLP(critic_states_dim, critic_hidden_dim, 1)
@@ -600,7 +600,7 @@ if __name__ == "__main__":
         "critic_lr": 3e-4,
         "data_path": "dataset/grid/samples_pure_0.01reward_random.h5",
         "batch_size": 1024,
-        "iteration": 50,  # 总训练轮数
+        "iteration": 100,  # 总训练轮数
         # Actor 早停配置
         "actor_patience": 5,  # 连续多少个epoch没有改善就早停
         "actor_min_delta": 1e-5,  # 最小改善量
@@ -611,7 +611,7 @@ if __name__ == "__main__":
         "track": True,  # 设为 True 启用 wandb
         "wandb_project": "MAP-imitation",
         # 模型保存配置
-        "save_dir": "models/grid-pure-norm-random-init",  # 模型保存目录
+        "save_dir": "models/grid-pure-norm-random-512",  # 模型保存目录
         "save_model": True,  # 是否保存模型
     }
 

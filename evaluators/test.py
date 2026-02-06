@@ -108,7 +108,7 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
         save_plot: Path to save plot
         show_plot: Whether to display plot
     """
-    # Load environment config
+    # Load environment config 暂时硬编码！！！
     with open("configs/MASUPEnv.yaml") as f:
         env_config_data = yaml.safe_load(f)
         env_config = env_config_data['env_config']

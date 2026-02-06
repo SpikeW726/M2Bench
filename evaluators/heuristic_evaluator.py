@@ -139,7 +139,7 @@ def main():
                         help='Path to environment config')
     parser.add_argument('--policy_config', type=str, default=None,
                         help='Path to policy config (default: configs/{POLICY}.yaml)')
-    parser.add_argument('--save_plot', type=str, default='evaluators/results/heuristic_eval_grid.png',
+    parser.add_argument('--save_plot', type=str, default='evaluators/results/ER_eval_grid_random.png',
                         help='Path to save plot (default: evaluators/results/heuristic_eval.png)')
     parser.add_argument('--no_show', action='store_true',
                         help='Do not display plot')

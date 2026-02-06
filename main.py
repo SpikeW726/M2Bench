@@ -47,16 +47,18 @@ def main():
     wandb_project = "MAP-RL"
     
     # 预训练权重路径
-    actor_path = "models/grid-pure-norm-random-init/imi_train__1770315556_final/policy.pt"
-    critic_path = "models/grid-pure-norm-random-init/imi_train__1770315556_final/critic.pt"
+    # actor_path = "models/grid-pure-norm-random-init/imi_train__1770315556_final/policy.pt"
+    # critic_path = "models/grid-pure-norm-random-init/imi_train__1770315556_final/critic.pt"
     # actor_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"
     # critic_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"
+    actor_path = "models/grid-pure-norm-random-512/imi_train__1770361116_final/policy.pt"
+    critic_path = "models/grid-pure-norm-random-512/imi_train__1770361116_final/critic.pt"
     # actor_path = ""
     # critic_path = ""
 
     # 保存路径
     algo_name = "mappo-grid"
-    exp_name = "imi-norm-random-init"
+    exp_name = "imi-norm-random-512"
     now = datetime.now()
     run_name = f"{exp_name}_{now:%Y-%m-%d_%H-%M-%S}"
     save_dir = Path(f"models/{algo_name}/{run_name}")
@@ -287,8 +289,18 @@ def main():
         stats = algorithm.update(batch)
         collector.reset_buffer()
         
-        # 3. 从环境获取 idleness 指标（取第一个环境的当前指标）
-        env_metrics = vec_env.get_env_attr("world")[0].current_metrics
+        # 3. 从所有环境获取上一个完成 episode 的终止指标，取均值
+        worlds = vec_env.get_env_attr("world")
+        finished = [w.last_episode_metrics for w in worlds if w.last_episode_metrics is not None]
+        if finished:
+            env_metrics_igi = np.mean([m.igi for m in finished])
+            env_metrics_agi = np.mean([m.agi for m in finished])
+            env_metrics_iwi = np.mean([m.iwi for m in finished])
+            env_metrics_wi = np.mean([m.wi for m in finished])
+        else:
+            # 首次迭代尚无完成的 episode，取当前指标作为 fallback
+            m = worlds[0].current_metrics
+            env_metrics_igi, env_metrics_agi, env_metrics_iwi, env_metrics_wi = m.igi, m.agi, m.iwi, m.wi
         
         # 4. 记录日志
         sps = int(global_step / (time.time() - start_time))
@@ -299,10 +311,10 @@ def main():
             "losses/value_loss": stats.value_loss,
             "losses/entropy": stats.entropy,
             "losses/total_loss": stats.loss,
-            "env/igi": env_metrics.igi,
-            "env/agi": env_metrics.agi,
-            "env/iwi": env_metrics.iwi,
-            "env/wi": env_metrics.wi,
+            "env/igi": env_metrics_igi,
+            "env/agi": env_metrics_agi,
+            "env/iwi": env_metrics_iwi,
+            "env/wi": env_metrics_wi,
             "charts/SPS": sps,
             "charts/actor_lr": actor_lr,
             "charts/critic_lr": critic_lr,
@@ -332,7 +344,7 @@ def main():
             print(f"[Iter {iteration}/{num_iterations}] "
                   f"steps={global_step}, reward={reward_str}, "
                   f"pg_loss={stats.policy_loss:.4f}, v_loss={stats.value_loss:.4f}, "
-                  f"iwi={env_metrics.iwi:.2f}, SPS={sps}")
+                  f"iwi={env_metrics_iwi:.2f}, SPS={sps}")
     
     # ========== Save final model (HuggingFace style) ==========
     final_dir = save_dir / "final"
