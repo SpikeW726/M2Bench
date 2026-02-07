@@ -297,7 +297,28 @@ class PatrolWorld:
     def get_agent_status(self, agent_id: int) -> AgentStatus:
         """获取智能体完整状态"""
         return self.agents[agent_id]
-    
+
+    def snapshot_agent_positions(self) -> Dict[int, tuple]:
+        """
+        获取当前时刻所有智能体的位置快照，用于动画可视化。
+        
+        Returns:
+            {agent_id: (start_node, end_node, progress)}
+            - 在节点上: (node, node, 0.0)
+            - 在边上移动: (src, dst, progress ∈ [0,1])
+        """
+        snapshot = {}
+        for agent_id, status in self.agents.items():
+            if status.state == AgentState.ON_EDGE:
+                edge_len = self.graph.get_edge_length(status.position, status.target_node)
+                progress = 1.0 - status.action_remaining / edge_len if edge_len > 0 else 1.0
+                progress = max(0.0, min(1.0, progress))
+                snapshot[agent_id] = (status.position, status.target_node, progress)
+            else:
+                # READY / WAITING: 在节点上
+                snapshot[agent_id] = (status.position, status.position, 0.0)
+        return snapshot
+
     # ==================== 指标相关方法 ====================
     
     @property

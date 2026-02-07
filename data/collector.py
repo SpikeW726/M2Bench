@@ -369,11 +369,14 @@ class MACollector(BaseCollector):
     def _get_global_states(self) -> Optional[np.ndarray]:
         """获取 global_state（如果环境支持 state() 方法）"""
         try:
-            states = self.env.get_env_attr("state")
+            # 优先使用 call_env_method（SubprocVectorEnv 并行执行，避免传 bound method）
+            if hasattr(self.env, 'call_env_method'):
+                states = self.env.call_env_method("state")
+            else:
+                states = self.env.get_env_attr("state")
+                states = [s() if callable(s) else s for s in states]
             if states is None or states[0] is None:
                 return None
-            # state 是方法时调用它，否则直接使用
-            result = [s() if callable(s) else s for s in states]
-            return np.stack(result)
+            return np.stack(states)
         except Exception:
             return None

@@ -19,7 +19,7 @@ os.chdir(project_root)
 import argparse
 import yaml
 import random
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 from envs.mdps.patrol_core import PatrolWorld
 from polocies.heuritic.heuristic_base import HeuriticBasePolicy
@@ -41,6 +41,8 @@ class HeuristicEvaluator:
         episode_len: float = 5000,
         truncate_by_time: bool = True,
         init_positions: Optional[List[int]] = None,
+        record_animation: bool = False,
+        event_driven: bool = True,
     ):
         """
         Args:
@@ -50,6 +52,8 @@ class HeuristicEvaluator:
             episode_len: episode 长度（时间或步数，取决于 truncate_by_time）
             truncate_by_time: True=按物理时间截断，False=按步数截断
             init_positions: 初始位置（可选，None 则随机）
+            record_animation: 是否录制最后一个 episode 的动画
+            event_driven: True=事件驱动环境（不等间隔），False=固定步长环境
         """
         self.world = world
         self.policy = policy
@@ -57,7 +61,12 @@ class HeuristicEvaluator:
         self.episode_len = episode_len
         self.truncate_by_time = truncate_by_time
         self.init_positions = init_positions
+        self.record_animation = record_animation
+        self.event_driven = event_driven
         self.metrics_history: List[Dict[str, List[float]]] = []
+        # 动画录制数据（仅保留最后一个 episode）
+        self.last_positions_history: List[Dict[int, Tuple[int, int, float]]] = []
+        self.last_time_intervals: List[float] = []
 
     def _is_truncated(self) -> bool:
         """检查是否达到终止条件"""
@@ -66,8 +75,13 @@ class HeuristicEvaluator:
         else:
             return self.world.step_count >= self.episode_len
 
-    def run_episode(self) -> Dict[str, List[float]]:
-        """Run single episode, return time-series metrics"""
+    def run_episode(self, record: bool = False) -> Dict[str, List[float]]:
+        """
+        Run single episode, return time-series metrics.
+        
+        Args:
+            record: 是否录制位置快照用于动画
+        """
         # 重置物理世界和策略
         if self.init_positions:
             self.world.reset(initial_positions=self.init_positions)
@@ -78,19 +92,30 @@ class HeuristicEvaluator:
         
         self.policy.reset()
 
+        # 录制初始化
+        positions_history: List[Dict[int, Tuple[int, int, float]]] = []
+        time_intervals: List[float] = []
+        if record:
+            positions_history.append(self.world.snapshot_agent_positions())
+
         # 运行 episode 直到达到终止条件
         while not self._is_truncated():
-            # 获取启发式观测和全局状态
             obs_dict = self.world.get_heuristic_obs()
             global_state = self.world.get_global_state_for_heuristic()
-
-            # 计算启发式动作
             heuristic_actions = self.policy.compute_actions(obs_dict, global_state)
 
-            # 执行动作并推进环境
-            self.world.step_heuristic(heuristic_actions)
+            # step_heuristic 返回 TickResult，包含 dt
+            result = self.world.step_heuristic(heuristic_actions)
 
-        # 返回整个 episode 的指标历史
+            if record:
+                time_intervals.append(result.dt)
+                positions_history.append(self.world.snapshot_agent_positions())
+
+        # 保存录制数据
+        if record:
+            self.last_positions_history = positions_history
+            self.last_time_intervals = time_intervals
+
         return self.world.metrics_tracker.get_history_dict()
 
     def evaluate(self) -> Dict[str, Any]:
@@ -99,13 +124,54 @@ class HeuristicEvaluator:
         print(f"Running {self.num_episodes} episodes (episode_len={self.episode_len}, truncate_by={truncate_mode})...")
 
         for ep in range(self.num_episodes):
-            metrics = self.run_episode()
+            # 最后一个 episode 时录制动画数据
+            is_last = (ep == self.num_episodes - 1)
+            record = self.record_animation and is_last
+
+            metrics = self.run_episode(record=record)
             self.metrics_history.append(metrics)
             print(f"  Episode {ep + 1}/{self.num_episodes}: "
                   f"Final WI={metrics['wi'][-1]:.4f}, "
                   f"Final IGI={metrics['igi'][-1]:.4f}")
 
         return self._aggregate_metrics()
+
+    def generate_animation(self, algorithm_name: str, map_name: str, save_dir: str, max_frames: int = None):
+        """
+        用录制的最后一个 episode 数据生成动画视频。
+        
+        Args:
+            algorithm_name: 算法名称（用于标题和文件名）
+            map_name: 地图名称
+            save_dir: 保存目录
+            max_frames: 最大帧数限制（None=不限制），控制视频时长
+        """
+        if not self.last_positions_history:
+            print("Warning: 没有录制数据，请先运行 evaluate() 且 record_animation=True")
+            return
+
+        if self.event_driven:
+            from utils.vis_utils import create_event_driven_animation
+            create_event_driven_animation(
+                map_graph=self.world.graph,
+                agent_positions_history=self.last_positions_history,
+                time_intervals=self.last_time_intervals,
+                algorithm_name=algorithm_name,
+                map_name=map_name,
+                save_dir=save_dir,
+                max_frames=max_frames,
+            )
+        else:
+            from utils.vis_utils import create_animation
+            create_animation(
+                map_graph=self.world.graph,
+                agent_positions_history=self.last_positions_history,
+                total_frames=len(self.last_positions_history),
+                algorithm_name=algorithm_name,
+                map_name=map_name,
+                max_frames=max_frames,
+                save_dir=save_dir,
+            )
 
     def _aggregate_metrics(self) -> Dict[str, Any]:
         """Compute mean and std across episodes"""
@@ -143,6 +209,12 @@ def main():
                         help='Path to save plot (default: evaluators/results/heuristic_eval.png)')
     parser.add_argument('--no_show', action='store_true',
                         help='Do not display plot')
+    parser.add_argument('--animation', action='store_true',
+                        help='录制最后一个 episode 的动画视频')
+    parser.add_argument('--no_event_driven', action='store_true',
+                        help='使用固定步长动画（默认为事件驱动动画）')
+    parser.add_argument('--max_frames', type=int, default=None,
+                        help='动画最大帧数限制（默认不限制，推荐 300~600）')
 
     args = parser.parse_args()
 
@@ -156,6 +228,8 @@ def main():
     episode_len = env_config.get('episode_len', 5000)
     truncate_by_time = custom_config.get('truncate_by_time', True)
     init_positions = env_config.get('init_positions', None)
+    graph_path = env_config['graph_path']
+    graph_name = Path(graph_path).stem
 
     # Load policy config
     policy_config_path = args.policy_config or f"configs/{args.policy}.yaml"
@@ -163,7 +237,7 @@ def main():
         policy_config = yaml.safe_load(f)
 
     # 直接创建 PatrolWorld（不需要 MDP 封装）
-    print(f"Creating PatrolWorld with graph: {env_config['graph_path']}")
+    print(f"Creating PatrolWorld with graph: {graph_path}")
     print(f"  episode_len: {episode_len}, truncate_by_time: {truncate_by_time}")
     print(f"  init_positions: {init_positions if init_positions else 'random'}")
     world = PatrolWorld(env_config)
@@ -177,7 +251,9 @@ def main():
         world, policy, args.num_episodes,
         episode_len=episode_len,
         truncate_by_time=truncate_by_time,
-        init_positions=init_positions
+        init_positions=init_positions,
+        record_animation=args.animation,
+        event_driven=not args.no_event_driven,
     )
     aggregated = evaluator.evaluate()
 
@@ -190,12 +266,23 @@ def main():
 
     # Plot results
     print(f"\nPlotting results...")
+    save_dir = str(Path(args.save_plot).parent)
     plot_aggregated_metrics(
         aggregated,
         title=f'{args.policy} Policy Evaluation ({args.num_episodes} episodes)',
         save_path=args.save_plot,
         show=not args.no_show
     )
+
+    # 生成动画
+    if args.animation:
+        print(f"\nGenerating animation for last episode...")
+        evaluator.generate_animation(
+            algorithm_name=args.policy,
+            map_name=graph_name,
+            save_dir=save_dir,
+            max_frames=args.max_frames,
+        )
 
 
 if __name__ == '__main__':

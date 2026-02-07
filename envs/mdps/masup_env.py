@@ -207,13 +207,21 @@ class MASUPEnv(EventDrivenEnv):
         
         初始化物理世界和 MASUP 特有的状态变量
         """
-        # 1. 确定初始位置
+        # 1. 在重置前计算并保存 wait_ratio 到当前 metrics（用于 last_episode_metrics）
+        if hasattr(self, 'wait_action_count') and self.world.metrics_tracker.history:
+            total_wait = sum(self.wait_action_count.values())
+            total_move = sum(self.move_action_count.values())
+            total_decisions = total_wait + total_move
+            wait_ratio = total_wait / total_decisions if total_decisions > 0 else 0.0
+            self.world.metrics_tracker.current.wait_ratio = wait_ratio
+        
+        # 2. 确定初始位置
         if self.init_pos:
             initial_positions = self.init_pos
         else:
             initial_positions = random.sample(list(self.world.graph.nodes), self.world.num_agents)
         
-        # 2. 重置物理世界
+        # 3. 重置物理世界
         self.world.reset(initial_positions=initial_positions)
         self.agents = self.possible_agents[:]
         
@@ -237,6 +245,23 @@ class MASUPEnv(EventDrivenEnv):
         infos = self._build_info(result=None)
         
         return obs, infos
+    
+    def get_episode_metrics(self) -> Optional[dict]:
+        """返回上一个完成 episode 的指标（轻量方法，用于 SubprocVectorEnv 避免 pickle 整个 world）"""
+        m = self.world.last_episode_metrics
+        if m is None:
+            return None
+        return {"igi": m.igi, "agi": m.agi, "iwi": m.iwi, "wi": m.wi, "wait_ratio": m.wait_ratio}
+    
+    def get_current_metrics(self) -> dict:
+        """返回当前 episode 的实时指标"""
+        m = self.world.metrics_tracker.current
+        # 实时计算当前 wait_ratio
+        total_wait = sum(self.wait_action_count.values())
+        total_move = sum(self.move_action_count.values())
+        total_decisions = total_wait + total_move
+        current_wait_ratio = total_wait / total_decisions if total_decisions > 0 else 0.0
+        return {"igi": m.igi, "agi": m.agi, "iwi": m.iwi, "wi": m.wi, "wait_ratio": current_wait_ratio}
     
     def state(self) -> np.ndarray:
         """为MAPPO/QMIX等算法提供全局观测"""

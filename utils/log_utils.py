@@ -64,6 +64,7 @@ class IdlenessMetrics:
     AGI: Average graph idleness  IGI关于时间的均值 \sum_{t=0}^T{IGI(t)} / T
     IWI: Instaneous worst idleness  记录时刻全图节点瞬时idleness的最大值
     WI: Worst idlenss  整个episode中历史最大IWI
+    wait_ratio: 等待动作占比 (wait_actions / total_actions)
     """
     igi: float = 0.0
     agi: float = 0.0
@@ -71,6 +72,7 @@ class IdlenessMetrics:
     wi: float = 0.0
     step: int = 0
     time: float = 0.0
+    wait_ratio: float = 0.0  # 等待动作占比
 
 
 class EpisodeMetricsTracker:

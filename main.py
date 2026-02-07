@@ -21,25 +21,27 @@ from utils.model_io import save_model
 def main():
     # ========== 配置 ==========
     # 环境
-    num_envs = 24
+    num_envs = 12
     use_subproc = True  # True: 多进程并行 (SubprocVectorEnv), False: 单进程串行 (DummyVectorEnv)
-    
+
     # 网络隐藏层（需与预训练时一致）
     actor_hidden = [256, 256]
     critic_hidden = [256, 256]
-    
+    # actor_hidden = [512, 256, 128]
+    # critic_hidden = [512, 256, 128]
+
     # 训练超参数
-    total_timesteps = 40000000
-    num_steps = 512  # 每个 env 每次采集的步数
-    num_minibatches = 8
-    update_epochs = 3
+    total_timesteps = 100000000
+    num_steps = 2048  # 每个 env 每次采集的步数
+    num_minibatches = 16
+    update_epochs = 5
     actor_lr = 3e-5
     critic_lr = 3e-4
     gamma = 0.999
     gae_lambda = 1.0
     clip_range = 0.2
     vf_coef = 1.0
-    ent_coef = 0.02
+    ent_coef = 0.1
     save_internal = 1000 # 每过xx个iteration保存一次模型参数
     
     # 日志配置
@@ -49,19 +51,20 @@ def main():
     # 预训练权重路径
     # actor_path = "models/grid-pure-norm-random-init/imi_train__1770315556_final/policy.pt"
     # critic_path = "models/grid-pure-norm-random-init/imi_train__1770315556_final/critic.pt"
-    # actor_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"
-    # critic_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"
-    actor_path = "models/grid-pure-norm-random-512/imi_train__1770361116_final/policy.pt"
-    critic_path = "models/grid-pure-norm-random-512/imi_train__1770361116_final/critic.pt"
+    actor_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"
+    critic_path = "models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"
+    # actor_path = "models/grid-pure-norm-random-512/imi_train__1770361116_final/policy.pt"
+    # critic_path = "models/grid-pure-norm-random-512/imi_train__1770361116_final/critic.pt"
     # actor_path = ""
     # critic_path = ""
 
     # 保存路径
-    algo_name = "mappo-grid"
-    exp_name = "imi-norm-random-512"
+    algo_name = "mappo"
+    graph_name = "TSP12"
+    exp_name = "imi-norm-random-init-longtrain"
     now = datetime.now()
-    run_name = f"{exp_name}_{now:%Y-%m-%d_%H-%M-%S}"
-    save_dir = Path(f"models/{algo_name}/{run_name}")
+    run_name = f"{graph_name}_{exp_name}_{now:%Y-%m-%d_%H-%M-%S}"
+    save_dir = Path(f"models/{algo_name}-{graph_name}/{run_name}")
     save_dir.mkdir(parents=True, exist_ok=True)
     
     # ========== 日志初始化 ==========
@@ -279,28 +282,37 @@ def main():
             )
 
         # 1. 采集数据 (eval mode)
+        t0 = time.time()
         algorithm.set_training_mode(False)
         result = collector.collect(n_steps=step_per_epoch)
         global_step += result.n_steps
+        t_collect = time.time() - t0
         
         # 2. 计算 GAE 并更新
+        t0 = time.time()
         batch = algorithm.prepare_batch(result.batch)
         algorithm.set_training_mode(True)
         stats = algorithm.update(batch)
         collector.reset_buffer()
+        t_update = time.time() - t0
         
-        # 3. 从所有环境获取上一个完成 episode 的终止指标，取均值
-        worlds = vec_env.get_env_attr("world")
-        finished = [w.last_episode_metrics for w in worlds if w.last_episode_metrics is not None]
+        # 3. 从所有环境获取上一个完成 episode 的终止指标（轻量 IPC，不传整个 world）
+        t0 = time.time()
+        metrics_list = vec_env.call_env_method("get_episode_metrics")
+        finished = [m for m in metrics_list if m is not None]
         if finished:
-            env_metrics_igi = np.mean([m.igi for m in finished])
-            env_metrics_agi = np.mean([m.agi for m in finished])
-            env_metrics_iwi = np.mean([m.iwi for m in finished])
-            env_metrics_wi = np.mean([m.wi for m in finished])
+            env_metrics_igi = np.mean([m["igi"] for m in finished])
+            env_metrics_agi = np.mean([m["agi"] for m in finished])
+            env_metrics_iwi = np.mean([m["iwi"] for m in finished])
+            env_metrics_wi = np.mean([m["wi"] for m in finished])
+            env_metrics_wait_ratio = np.mean([m["wait_ratio"] for m in finished])
         else:
             # 首次迭代尚无完成的 episode，取当前指标作为 fallback
-            m = worlds[0].current_metrics
-            env_metrics_igi, env_metrics_agi, env_metrics_iwi, env_metrics_wi = m.igi, m.agi, m.iwi, m.wi
+            cur_list = vec_env.call_env_method("get_current_metrics")
+            m = cur_list[0]
+            env_metrics_igi, env_metrics_agi, env_metrics_iwi, env_metrics_wi = m["igi"], m["agi"], m["iwi"], m["wi"]
+            env_metrics_wait_ratio = m["wait_ratio"]
+        t_metrics = time.time() - t0
         
         # 4. 记录日志
         sps = int(global_step / (time.time() - start_time))
@@ -315,6 +327,7 @@ def main():
             "env/agi": env_metrics_agi,
             "env/iwi": env_metrics_iwi,
             "env/wi": env_metrics_wi,
+            "env/wait_ratio": env_metrics_wait_ratio,
             "charts/SPS": sps,
             "charts/actor_lr": actor_lr,
             "charts/critic_lr": critic_lr,
@@ -344,7 +357,8 @@ def main():
             print(f"[Iter {iteration}/{num_iterations}] "
                   f"steps={global_step}, reward={reward_str}, "
                   f"pg_loss={stats.policy_loss:.4f}, v_loss={stats.value_loss:.4f}, "
-                  f"iwi={env_metrics_iwi:.2f}, SPS={sps}")
+                  f"iwi={env_metrics_iwi:.2f}, SPS={sps} "
+                  f"(collect={t_collect:.1f}s update={t_update:.1f}s metrics={t_metrics:.2f}s)")
     
     # ========== Save final model (HuggingFace style) ==========
     final_dir = save_dir / "final"

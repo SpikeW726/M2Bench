@@ -97,7 +97,10 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
                        num_episodes: int = 5,
                        max_steps: int = 1000,
                        save_plot: str = None,
-                       show_plot: bool = True):
+                       show_plot: bool = True,
+                       record_animation: bool = False,
+                       event_driven: bool = True,
+                       max_frames: int = None):
     """
     Test trained actor policy in MASUPEnv.
     
@@ -107,6 +110,9 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
         max_steps: Fixed step count per episode (ensures consistent length for visualization)
         save_plot: Path to save plot
         show_plot: Whether to display plot
+        record_animation: 是否录制最后一个 episode 的动画视频
+        event_driven: True=事件驱动环境（不等间隔），False=固定步长环境
+        max_frames: 动画最大帧数限制（None=不限制）
     """
     # Load environment config 暂时硬编码！！！
     with open("configs/MASUPEnv.yaml") as f:
@@ -156,9 +162,21 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
     metrics_history = []
     episode_times = []  # Physical time for each episode
 
+    # 动画录制数据（仅最后一个 episode）
+    anim_positions_history = []
+    anim_time_intervals = []
+
     for ep in range(num_episodes):
         obs, infos = env.reset()
         step_count = 0
+
+        # 判断是否需要录制当前 episode（仅最后一个）
+        is_last = (ep == num_episodes - 1)
+        record = record_animation and is_last
+
+        if record:
+            anim_positions_history = [env.world.snapshot_agent_positions()]
+            anim_time_intervals = []
 
         while step_count < max_steps:
             # Get action masks and convert to tensor
@@ -183,6 +201,11 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
             # Step environment
             obs, _, _, _, infos = env.step(actions)
             step_count += 1
+
+            # 录制快照
+            if record:
+                anim_time_intervals.append(env.last_time_interval)
+                anim_positions_history.append(env.world.snapshot_agent_positions())
 
         # Get final metrics
         final_metrics = env.world.current_metrics
@@ -211,6 +234,8 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
         print(f"{metric_name}: {mean_val:.4f} ± {std_val:.4f}")
 
     # Aggregate and visualize metrics (no padding needed since all episodes have same length)
+    save_dir = str(Path(save_plot).parent) if save_plot else 'evaluators/results'
+
     if metrics_history:
         print(f"\n=== Generating aggregated visualization ===")
         aggregated = aggregate_episode_metrics(metrics_history)
@@ -226,6 +251,33 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
             save_path=save_plot,
             show=show_plot
         )
+
+    # 生成动画
+    if record_animation and anim_positions_history:
+        print(f"\n=== Generating animation for last episode ===")
+        algorithm_name = Path(checkpoint_path).stem
+        if event_driven:
+            from utils.vis_utils import create_event_driven_animation
+            create_event_driven_animation(
+                map_graph=env.world.graph,
+                agent_positions_history=anim_positions_history,
+                time_intervals=anim_time_intervals,
+                algorithm_name=algorithm_name,
+                map_name=graph_name,
+                save_dir=save_dir,
+                max_frames=max_frames,
+            )
+        else:
+            from utils.vis_utils import create_animation
+            create_animation(
+                map_graph=env.world.graph,
+                agent_positions_history=anim_positions_history,
+                total_frames=len(anim_positions_history),
+                algorithm_name=algorithm_name,
+                map_name=graph_name,
+                save_dir=save_dir,
+                max_frames=max_frames,
+            )
 
     return episode_metrics
 
@@ -245,6 +297,12 @@ if __name__ == '__main__':
                         help='Path to save plot')
     parser.add_argument('--no_show', action='store_true',
                         help='Do not display plot')
+    parser.add_argument('--animation', action='store_true',
+                        help='录制最后一个 episode 的动画视频')
+    parser.add_argument('--no_event_driven', action='store_true',
+                        help='使用固定步长动画（默认为事件驱动动画）')
+    parser.add_argument('--max_frames', type=int, default=None,
+                        help='动画最大帧数限制（默认不限制，推荐 300~600）')
 
     args = parser.parse_args()
 
@@ -253,5 +311,8 @@ if __name__ == '__main__':
         num_episodes=args.num_episodes,
         max_steps=args.max_steps,
         save_plot=args.save_plot,
-        show_plot=not args.no_show
+        show_plot=not args.no_show,
+        record_animation=args.animation,
+        event_driven=not args.no_event_driven,
+        max_frames=args.max_frames,
     )

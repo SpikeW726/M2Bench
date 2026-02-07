@@ -60,6 +60,14 @@ def _worker(
             elif cmd == "setattr":
                 setattr(env.unwrapped, data["key"], data["value"])
                 child_conn.send(None)
+            elif cmd == "call_method":
+                # 在子进程中调用方法并返回结果（避免通过管道传递 bound method）
+                method_name, args, kwargs = data
+                method = getattr(env, method_name, None)
+                if method is not None and callable(method):
+                    child_conn.send(method(*args, **kwargs))
+                else:
+                    child_conn.send(None)
             else:
                 raise NotImplementedError(f"Unknown command: {cmd}")
     except KeyboardInterrupt:
@@ -100,6 +108,31 @@ class SubprocEnvWorker(EnvWorker):
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, dict]:
         self.parent_conn.send(("step", action))
+        return self.parent_conn.recv()
+    
+    # ---- 异步 step: 拆分为 send + recv，支持并行 ----
+    def send_step(self, action: np.ndarray) -> None:
+        """发送 step 命令，不等待结果"""
+        self.parent_conn.send(("step", action))
+    
+    def recv_step(self) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        """接收 step 结果"""
+        return self.parent_conn.recv()
+    
+    def send_reset(self, **kwargs) -> None:
+        """发送 reset 命令，不等待结果"""
+        self.parent_conn.send(("reset", kwargs))
+    
+    def recv_reset(self) -> Tuple[np.ndarray, dict]:
+        """接收 reset 结果"""
+        return self.parent_conn.recv()
+    
+    def send_call_method(self, method_name: str, *args, **kwargs) -> None:
+        """发送 call_method 命令，在子进程中调用方法"""
+        self.parent_conn.send(("call_method", (method_name, args, kwargs)))
+    
+    def recv_call_method(self) -> Any:
+        """接收 call_method 结果"""
         return self.parent_conn.recv()
     
     def get_env_attr(self, key: str) -> Any:
