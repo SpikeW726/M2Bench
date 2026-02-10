@@ -13,8 +13,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      Policy 层                               │
-│  /polocies/heuritic/      启发式策略 (ER, HPCC)              │
-│  /polocies/rl/           强化学习策略 (A2C, PPO, D3QN)       │
+│  /policies/heuritic/      启发式策略 (ER, HPCC)              │
+│  /policies/rl/           强化学习策略 (ActorPolicy)          │
+│  /policies/marl/         多智能体策略 (MultiAgentPolicy)     │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -40,7 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 环境不是固定时间步推进，而是推进到"下一个事件"（智能体到达目标或等待完成）。只有状态为 `READY` 的智能体才需要决策。
 
 ```python
-# envs/BaseEnvs.py:44-71
+# envs/mdps/base_envs.py:44-71
 # 智能体在边上的不会接收动作，只有 READY 状态的会决策
 def step(self, actions: Dict[str, int]):
     # 1. 只为"可以决策的智能体"设置动作
@@ -56,7 +57,7 @@ def step(self, actions: Dict[str, int]):
 启发式策略采用顺序决策：Agent 0 → Agent 1 → Agent 2 → ...，每个智能体的意图立即记录，后续智能体可以看到并避免冲突。
 
 ```python
-# polocies/heuritic/ER.py:80-105
+# policies/heuritic/er.py:80-105
 # 每个 agent 决策后立即更新 er_intention_eta
 for agent_str, obs in obs_dict.items():
     result = self._compute_action(agent_id, obs, global_state)
@@ -86,7 +87,7 @@ custom_config:
 
 ## 核心类说明
 
-### PatrolWorld (`envs/PatrolCore.py`)
+### PatrolWorld (`envs/mdps/patrol_core.py`)
 
 物理世界模拟器，职责：
 - 管理图结构和智能体位置
@@ -99,7 +100,7 @@ custom_config:
 - `set_wait_action(agent_id)`: 设置等待动作
 - `is_ready(agent_id)`: 智能体是否可以决策
 
-### EventDrivenEnv (`envs/BaseEnvs.py`)
+### EventDrivenEnv (`envs/mdps/base_envs.py`)
 
 抽象基类，继承自 `PettingZoo.ParallelEnv`。子类必须实现：
 - `observation_space(agent)`: 观测空间
@@ -109,14 +110,15 @@ custom_config:
 - `_compute_rewards(result)`: 计算奖励
 - `_action_to_target(agent_id, action_idx)`: 动作索引 → 目标节点
 
-### MASUPEnv (`envs/MASUPEnv.py`)
+### MASUPEnv (`envs/mdps/masup_env.py`)
 
 主要环境实现，特点：
 - **T_time 截断**：`obs_timer < T_time` 时 `worst_idleness` 保持为 0
 - **两种截断模式**：按时间 (`truncate_by_time=True`) 或按步数
-- **观测空间类型**：`agent-index`（one-hot 编码）或 `position`（位置信息）
+- **观测空间类型**：`agent-index`（one-hot 编码）、`position`（位置信息）或 `decision`（决策导向观测）
+- **奖励缩放**：支持 `reward_scale`、`idi_scale`、`contribution_scale` 参数调节奖励权重
 
-### HeuristicBasePolicy (`polocies/heuritic/HeuristicBase.py`)
+### HeuristicBasePolicy (`policies/heuritic/heuristic_base.py`)
 
 启发式策略基类，子类必须实现：
 - `compute_actions(obs_dict, global_state)`: 为所有智能体计算动作
@@ -146,7 +148,7 @@ custom_config:
 }
 ```
 
-### ERPolicy (`polocies/heuritic/ER.py`)
+### ERPolicy (`policies/heuritic/er.py`)
 
 Expected Idleness 启发式策略：
 - 对每个邻居 v，计算到达时的预期空闲度 `I_exp`
@@ -154,10 +156,22 @@ Expected Idleness 启发式策略：
 - 否则 `I_exp = t_next - last_visit_time[v]`
 - 选择效用最大的邻居：`U = |I_exp| / travel_time`
 
+### HPCCPolicy (`policies/heuritic/hpcc.py`)
+
+Hierarchical Priority-based Coordination Control 启发式策略：
+- 基于优先级的协调控制算法
+- 加权效用函数：`U = w_idl * U_idl + w_dist * U_dist + w_conflict * U_conflict`
+  - `U_idl`: 空闲度效用
+  - `U_dist`: 距离效用（支持最短路径 `sp` 或欧几里得距离 `euclidean`）
+  - `U_conflict`: 冲突效用（通过 ETA 机制避免冲突）
+- 支持认知协调参数：
+  - `conflict_eta_margin`: 允许的 ETA 余量
+  - `eta_clip_min`: ETA 最小值裁剪
+
 ## 运行命令
 
 ```bash
-# 启发式策略采样 - 收集专家演示数据
+# 启发式策略采样 - 收集专家演示数据（支持并行采样）
 python trainers/imitator/heuristic_sampler.py
 
 # MAPPO 训练 - 使用 OnPolicyTrainer（推荐）
@@ -171,6 +185,9 @@ python evaluators/test.py --model models/mappo/imi/final --num_episodes 10
 
 # 测试并保存可视化结果
 python evaluators/test.py --model models/mappo/imi/final --num_episodes 10 --save_plot evaluators/results/rl_eval.png --no_show
+
+# 生成 MP4 动画（启发式策略）
+python evaluators/heuristic_evaluator.py --policy ER --save_animation evaluators/results/ER_animation.mp4
 ```
 
 ## 完整训练流程
@@ -183,7 +200,11 @@ python evaluators/test.py --model models/mappo/imi/final --num_episodes 10 --sav
 
 ### 1. 启发式采样 (`trainers/imitator/heuristic_sampler.py`)
 
-使用启发式策略（如 ER）收集专家演示数据，保存为 NPZ 格式：
+使用启发式策略（如 ER）收集专家演示数据，保存为 NPZ/HDF5 格式。
+
+**支持并行采样**：
+- 使用 `num_workers` 参数启用多进程并行采集
+- 内存优化的分块收集机制，支持大规模数据采集
 
 ```python
 # 数据格式:
@@ -192,6 +213,7 @@ python evaluators/test.py --model models/mappo/imi/final --num_episodes 10 --sav
 - actions: [N, T, M, 1] - 动作索引
 - action_masks: [N, T, M, Act_Dim] - 动作掩码
 - rewards: [N, T, M, 1] - 每个智能体的奖励
+- padded_mask: [N, T, 1] - 填充掩码 (1=真实, 0=填充)
 - returns: [N, T, M, 1] - 累计折扣回报
 ```
 
@@ -209,8 +231,8 @@ python evaluators/test.py --model models/mappo/imi/final --num_episodes 10 --sav
 ## 代码使用示例
 
 ```python
-from polocies.heuritic.ER import ERPolicy
-from envs.MASUPEnv import MASUPEnv
+from policies.heuritic.er import ERPolicy
+from envs.mdps.masup_env import MASUPEnv
 import yaml
 
 with open("configs/ER.yaml") as f:
@@ -268,7 +290,7 @@ for _ in range(100):
 
 ### 修改观测空间
 
-编辑 `MASUPEnv._build_obs()` 和 `observation_space()`，注意保持上下界一致。
+编辑 `envs/mdps/masup_env.py` 中的 `_build_obs()` 和 `observation_space()`，注意保持上下界一致。
 
 ## 重要约束
 
@@ -312,7 +334,7 @@ save_model(save_dir, policy=ma_policy, critic=critic_net,
 actor, critic = load_model(model_dir, device='cuda')
 ```
 
-### 多智能体策略 (`polocies/marl/`)
+### 多智能体策略 (`policies/marl/`)
 
 - **MultiAgentPolicy**: 包装单个 Policy 实现多智能体接口
   - `shared=True`: 所有智能体共享参数
@@ -322,4 +344,73 @@ actor, critic = load_model(model_dir, device='cuda')
 
 - **MACollector** (`data/collector.py`): 多智能体数据采集器
 - **CollectResult** (`data/batch.py`): 采集结果数据类，包含 transitions、episode_rewards 等
+
+### 可视化工具 (`utils/vis_utils.py`)
+
+- **create_nx_layout()**: 使用 NetworkX 的 kamada_kawai_layout 算法创建高质量节点布局
+- **plot_training_curve()**: 绘制训练曲线（平均空闲度）
+- **plot_training_curves()**: 绘制双曲线（平均空闲度和最大延迟）
+- **MP4 动画生成**: 支持生成智能体巡逻过程的 MP4 动画
+
+### 图工具 (`utils/graph_utils.py`)
+
+- **Graph**: 图数据结构，包含节点、边、权重和优先级
+- 支持最短路径计算和邻居查询
+
+### 评估工具 (`utils/eval_utils.py`)
+
+- **aggregate_episode_metrics()**: 聚合 episode 指标
+- **plot_aggregated_metrics()**: 绘制聚合指标图表
+
+### 日志工具 (`utils/log_utils.py`)
+
+- 训练日志记录和 TensorBoard 集成
+- 指标追踪和可视化
+
+## 新增功能（近期更新）
+
+### MP4 可视化动画
+
+框架支持生成智能体巡逻过程的 MP4 动画，直观展示策略性能：
+
+```python
+from utils.vis_utils import create_animation
+
+# 生成动画
+create_animation(
+    env=env,
+    policy=policy,
+    save_path="evaluators/results/patrol_animation.mp4",
+    num_episodes=1
+)
+```
+
+动画特性：
+- 使用 NetworkX kamada_kawai_layout 高质量布局
+- 节点大小根据优先级动态调整
+- 边的视觉长度与权重成正比
+- 智能体位置实时更新
+- 节点空闲度颜色编码
+
+### 并行采样优化
+
+HeuristicSampler 支持多进程并行数据采集：
+
+```python
+# configs/HeuristicSampler.yaml
+num_workers: 4  # 使用 4 个进程并行采集
+```
+
+并行特性：
+- 每个 worker 进程独立环境和策略实例
+- 内存优化的分块收集机制
+- 支持 HDF5 格式大规模数据存储
+- 自动处理进程间数据汇总
+
+### 值归一化
+
+训练过程中支持 Critic 值归一化，提高训练稳定性：
+- 模仿学习预训练时启用值归一化
+- RL 微调时保持归一化统计量
+- 自动更新 running mean/std
 

@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import gymnasium as gym
 
-from polocies.rl.rl_base import RLBasePolicy
+from policies.rl.rl_base import RLBasePolicy
 
 
 class MultiAgentPolicy(nn.Module):

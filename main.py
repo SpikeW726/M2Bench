@@ -11,8 +11,8 @@ from torch.utils.tensorboard import SummaryWriter
 from envs.mdps.masup_env import MASUPEnv
 from envs.venvs import DummyVectorEnv, SubprocVectorEnv
 from networks.mlp import ActorMLP, CriticMLP
-from polocies.rl.rl_base import ActorPolicy
-from polocies.marl.marl_base import MultiAgentPolicy
+from policies.rl.rl_base import ActorPolicy
+from policies.marl.marl_base import MultiAgentPolicy
 from algorithms.marl.mappo import MAPPOAlgo
 from data.collector import MACollector
 from utils.model_io import save_model

@@ -12,8 +12,8 @@ from algorithms.marl.mappo import MAPPOAlgo
 from data.collector import MACollector
 from envs.mdps.masup_env import MASUPEnv
 from envs.venvs import DummyVectorEnv
-from polocies.marl.marl_base import MultiAgentPolicy
-from polocies.rl.rl_base import ActorPolicy
+from policies.marl.marl_base import MultiAgentPolicy
+from policies.rl.rl_base import ActorPolicy
 from networks.mlp import ActorMLP, CriticMLP
 from trainers.rl_trainer import OnPolicyTrainer
 from utils.model_io import save_model

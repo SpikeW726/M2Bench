@@ -21,8 +21,8 @@ import torch
 import numpy as np
 
 from envs.mdps.masup_env import MASUPEnv
-from polocies.rl.rl_base import ActorPolicy
-from polocies.marl.marl_base import MultiAgentPolicy
+from policies.rl.rl_base import ActorPolicy
+from policies.marl.marl_base import MultiAgentPolicy
 from networks.mlp import ActorMLP
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
 from utils.model_io import load_actor_only, get_model_config
@@ -289,7 +289,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str,
                         default='models/mappo/imi/final',
                         help='Path to model directory (HuggingFace style) or checkpoint file (legacy)')
-    parser.add_argument('--num_episodes', type=int, default=10,
+    parser.add_argument('--num_episodes', type=int, default=5,
                         help='Number of episodes to run')
     parser.add_argument('--max_steps', type=int, default=1000,
                         help='Fixed steps per episode')

@@ -4077,7 +4077,7 @@ MAP-imitation-framework/
 
 ```python
 from envs.MASUP_env import MASUPEnv
-from polocies.heuritic.HPCC import HPCCPolicy
+from policies.heuritic.HPCC import HPCCPolicy
 from trainers.BaseTrainer import HeuristicSamplerTrainer
 
 # 创建环境（不需要传入 agent 实例了！）

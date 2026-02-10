@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from algorithms.algorithm_base import ActorCriticOnPolicyAlgo, TrainingStats
-from polocies.marl.marl_base import MultiAgentPolicy
+from policies.marl.marl_base import MultiAgentPolicy
 from data.batch import RolloutBatch
 
 

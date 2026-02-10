@@ -28,8 +28,8 @@ import multiprocessing as mp
 from functools import partial
 import h5py
 
-from polocies.heuritic.heuristic_base import HeuriticBasePolicy
-from polocies.heuritic.er import ERPolicy
+from policies.heuritic.heuristic_base import HeuriticBasePolicy
+from policies.heuritic.er import ERPolicy
 from envs.mdps.base_envs import EventDrivenEnv
 from envs.mdps.masup_env import MASUPEnv
 

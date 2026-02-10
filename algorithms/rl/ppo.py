@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from algorithm_base import ActorCriticOnPolicyAlgo
-from polocies.rl.rl_base import ActorPolicy
+from policies.rl.rl_base import ActorPolicy
 from data.batch import RolloutBatch
 
 class PPOAlgo(ActorCriticOnPolicyAlgo):

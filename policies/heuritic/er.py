@@ -9,7 +9,7 @@ Core idea:
   Select the neighbor with maximum utility U = |I_exp| / travel_time
 """
 from typing import Dict, Optional, Any
-from polocies.heuritic.heuristic_base import HeuriticBasePolicy
+from policies.heuritic.heuristic_base import HeuriticBasePolicy
 
 
 class ERPolicy(HeuriticBasePolicy):

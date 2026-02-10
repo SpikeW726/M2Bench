@@ -22,7 +22,7 @@ import random
 from typing import Dict, List, Any, Optional, Tuple
 
 from envs.mdps.patrol_core import PatrolWorld
-from polocies.heuritic.heuristic_base import HeuriticBasePolicy
+from policies.heuritic.heuristic_base import HeuriticBasePolicy
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
 
 

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from polocies.rl.rl_base import RLBasePolicy, ActorPolicy
+from policies.rl.rl_base import RLBasePolicy, ActorPolicy
 from data.batch import BaseBatch, RolloutBatch, TransitionBatch
 
 
