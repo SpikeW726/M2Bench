@@ -6,118 +6,91 @@ import torch
 import torch.nn as nn
 
 from algorithms.algorithm_base import ActorCriticOnPolicyAlgo, TrainingStats
+from configs.algo_configs import MAPPOParams
 from policies.marl.marl_base import MultiAgentPolicy
 from data.batch import RolloutBatch
 
 
 class MAPPOAlgo(ActorCriticOnPolicyAlgo):
     """
-    MAPPO: Multi-Agent PPO with Parameter Sharing and Centralized Critic
-    
+    MAPPO: Multi-Agent PPO with Parameter Sharing and Centralized Critic.
+
     Features:
     - Separate optimizers for actor and critic (dual timescale update)
     - Minibatch-level advantage normalization
     - Optional value loss clipping
     - Entropy loss only added to policy loss (not critic loss)
     """
-    
+
     def __init__(
         self,
         policy: MultiAgentPolicy,
         critic: nn.Module,
+        params: MAPPOParams,
+        # 运行时上下文（由调用方从 TrainerConfig 计算后传入）
         num_envs: int,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 3e-4,
-        gamma: float = 0.99,
-        gae_lambda: float = 0.95,
-        clip_range: float = 0.2,
-        vf_coef: float = 0.5,
-        ent_coef: float = 0.01,
-        max_grad_norm: float = 0.5,
-        normalize_advantage: bool = True,
-        num_minibatches: int = 4,
-        update_epochs: int = 10,
-        clip_vloss: bool = True,
-        target_kl: Optional[float] = None,
-        # Learning rate scheduler parameters
-        use_lr_scheduler: bool = False,
-        actor_lr_start_factor: float = 1.0,
-        actor_lr_end_factor: float = 0.1,
-        actor_lr_decay_ratio: float = 0.8,
-        critic_lr_start_factor: float = 1.0,
-        critic_lr_end_factor: float = 0.1,
-        critic_lr_decay_ratio: float = 0.8,
         total_iterations: Optional[int] = None,
-        # Value Normalization parameters
-        use_value_norm: bool = False,
+        optimizer_steps_per_iter: Optional[int] = None,
+        # 运行时数据（从预训练 checkpoint 加载）
         value_norm_config: Optional[Dict] = None,
     ):
         nn.Module.__init__(self)
-        
+
         self.policy = policy
         self.critic = critic.to(policy.device)
         self.device = policy.device
         self.num_envs = num_envs
-        
-        # PPO hyperparams
-        self.gamma = gamma
-        self.gae_lambda = gae_lambda
-        self.clip_range = clip_range
-        self.vf_coef = vf_coef
-        self.ent_coef = ent_coef
-        self.max_grad_norm = max_grad_norm
-        self.normalize_advantage = normalize_advantage
-        
-        # Minibatch and epochs
-        self.num_minibatches = num_minibatches
-        self.update_epochs = update_epochs
-        self.clip_vloss = clip_vloss
-        self.target_kl = target_kl
-        
-        # Separate optimizers for actor and critic
-        self.actor_optimizer = torch.optim.Adam(policy.parameters(), lr=actor_lr)
-        self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=critic_lr)
 
-        # Learning rate schedulers
-        self.use_lr_scheduler = use_lr_scheduler
+        # 从 params 解包 PPO 超参
+        self.gamma = params.gamma
+        self.gae_lambda = params.gae_lambda
+        self.clip_range = params.clip_range
+        self.vf_coef = params.vf_coef
+        self.ent_coef = params.ent_coef
+        self.max_grad_norm = params.max_grad_norm
+        self.normalize_advantage = params.normalize_advantage
+
+        self.clip_vloss = params.clip_vloss
+        self.target_kl = params.target_kl
+
+        # 双优化器
+        self.actor_optimizer = torch.optim.Adam(policy.parameters(), lr=params.actor_lr)
+        self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=params.critic_lr)
+
+        # LR scheduler
+        self.use_lr_scheduler = params.use_lr_scheduler
         self.actor_scheduler = None
         self.critic_scheduler = None
 
-        if use_lr_scheduler and total_iterations is not None:
-            # 计算 total optimizer step 次数
-            steps_per_iteration = self.update_epochs * self.num_minibatches
-
-            # Actor scheduler
-            actor_decay_steps = int(total_iterations * actor_lr_decay_ratio * steps_per_iteration)
+        if params.use_lr_scheduler and total_iterations is not None and optimizer_steps_per_iter is not None:
+            actor_decay_steps = int(total_iterations * params.actor_lr_decay_ratio * optimizer_steps_per_iter)
             self.actor_scheduler = torch.optim.lr_scheduler.LinearLR(
                 self.actor_optimizer,
-                start_factor=actor_lr_start_factor,
-                end_factor=actor_lr_end_factor,
+                start_factor=params.actor_lr_start_factor,
+                end_factor=params.actor_lr_end_factor,
                 total_iters=actor_decay_steps,
             )
 
-            # Critic scheduler
-            critic_decay_steps = int(total_iterations * critic_lr_decay_ratio * steps_per_iteration)
+            critic_decay_steps = int(total_iterations * params.critic_lr_decay_ratio * optimizer_steps_per_iter)
             self.critic_scheduler = torch.optim.lr_scheduler.LinearLR(
                 self.critic_optimizer,
-                start_factor=critic_lr_start_factor,
-                end_factor=critic_lr_end_factor,
+                start_factor=params.critic_lr_start_factor,
+                end_factor=params.critic_lr_end_factor,
                 total_iters=critic_decay_steps,
             )
 
         # Value Normalization
-        self.use_value_norm = use_value_norm
+        self.use_value_norm = params.use_value_norm
         self.ret_rms = None
 
         if self.use_value_norm:
             from utils.train_utils import RunningMeanStd
-            self.ret_rms = RunningMeanStd(shape=(1,)).to(self.device)  # 移动到正确的设备
+            self.ret_rms = RunningMeanStd(shape=(1,)).to(self.device)
 
-            # 从预训练 checkpoint 继承统计量
             if value_norm_config is not None:
                 self.ret_rms.mean.fill_(value_norm_config.get('ret_mean', 0.0))
                 self.ret_rms.var.fill_(value_norm_config.get('ret_std', 1.0) ** 2)
-                self.ret_rms.count.fill_(1.0)  # 标记为已初始化
+                self.ret_rms.count.fill_(1.0)
                 print(f"[MAPPO] Loaded value_norm stats: mean={self.ret_rms.mean.item():.4f}, std={self.ret_rms.std.item():.4f}")
             else:
                 print(f"[MAPPO] Initialized value_norm with default: mean=0, std=1")
@@ -325,56 +298,47 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         returns = advantages + values
         return advantages.view(-1), returns.view(-1)
 
-    def update(self, batch: RolloutBatch, update_actor: bool = True) -> TrainingStats:
+    def update(
+        self,
+        batch: RolloutBatch,
+        minibatch_size: int,
+        update_epochs: int,
+        update_actor: bool = True,
+    ) -> TrainingStats:
         """
         PPO update with separate actor/critic optimization.
         
         Args:
             batch: RolloutBatch with computed advantages and returns
+            minibatch_size: 每个 minibatch 的样本数，-1 表示不切分
+            update_epochs: 对同一批数据重复更新的轮数
             update_actor: whether to update actor (for dual timescale update)
         
         Features:
-            - Shuffle + minibatch split
+            - 使用 Batch.split() 进行 shuffle + minibatch 切分
             - Minibatch-level advantage normalization
             - Optional value loss clipping
             - Entropy loss only added to actor loss
             - KL early stopping based on epoch average
         """
-        batch_size = len(batch)
-        minibatch_size = batch_size // self.num_minibatches
-        
         all_pg_loss, all_v_loss, all_entropy, all_clipfrac = [], [], [], []
         all_approx_kl = []
         all_actor_grad_norm, all_critic_grad_norm = [], []
-        indices = np.arange(batch_size)
         
-        for epoch in range(self.update_epochs):
-            np.random.shuffle(indices)
+        for epoch in range(update_epochs):
             epoch_approx_kl = []
             
-            for start in range(0, batch_size, minibatch_size):
-                end = start + minibatch_size
-                mb_inds = indices[start:end]
-                
-                # Get minibatch data
-                mb_obs = batch.obs[mb_inds]
-                mb_act = batch.act[mb_inds]
-                mb_log_prob = batch.log_prob[mb_inds]
-                mb_adv = batch.adv[mb_inds]
-                mb_ret = batch.ret[mb_inds]
-                mb_value = batch.value[mb_inds]
-                mb_critic_input = batch.global_state[mb_inds]
-                mb_action_mask = batch.action_mask[mb_inds] if batch.action_mask is not None else None
-                
+            for mb in batch.split(size=minibatch_size, shuffle=True, merge_last=True):
                 # Minibatch-level advantage normalization
+                mb_adv = mb.adv
                 if self.normalize_advantage:
                     mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
                 
                 # ===== Actor update =====
                 new_log_prob, entropy = self.policy.evaluate_actions_flat(
-                    mb_obs, mb_act, action_mask=mb_action_mask
+                    mb.obs, mb.act, action_mask=mb.action_mask
                 )
-                logratio = new_log_prob - mb_log_prob
+                logratio = new_log_prob - mb.log_prob
                 ratio = logratio.exp()
                 
                 # Policy loss (clipped surrogate)
@@ -396,19 +360,19 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                     all_actor_grad_norm.append(actor_grad_norm.item())
                 
                 # ===== Critic update =====
-                new_value = self.critic(mb_critic_input).squeeze(-1)
+                new_value = self.critic(mb.global_state).squeeze(-1)
 
                 # 归一化 target 用于 Critic loss
                 if self.use_value_norm and self.ret_rms is not None:
-                    target_norm = (mb_ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
+                    target_norm = (mb.ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
                     target = target_norm
                 else:
-                    target = mb_ret
+                    target = mb.ret
 
                 if self.clip_vloss:
                     v_loss_unclipped = (new_value - target) ** 2
-                    v_clipped = mb_value + torch.clamp(
-                        new_value - mb_value, -self.clip_range, self.clip_range
+                    v_clipped = mb.value + torch.clamp(
+                        new_value - mb.value, -self.clip_range, self.clip_range
                     )
                     v_loss_clipped = (v_clipped - target) ** 2
                     v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()

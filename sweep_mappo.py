@@ -16,6 +16,7 @@ from networks.mlp import ActorMLP, CriticMLP
 from policies.rl.rl_base import ActorPolicy
 from policies.marl.marl_base import MultiAgentPolicy
 from algorithms.marl.mappo import MAPPOAlgo
+from configs.algo_configs import MAPPOParams
 from data.collector import MACollector
 from utils.model_io import save_model
 
@@ -138,10 +139,7 @@ def train():
             shared=True,
         )
 
-        algorithm = MAPPOAlgo(
-            policy=ma_policy,
-            critic=critic_net,
-            num_envs=num_envs,
+        algo_params = MAPPOParams(
             actor_lr=config.actor_lr,
             critic_lr=config.critic_lr,
             gamma=config.gamma,
@@ -149,10 +147,15 @@ def train():
             clip_range=config.clip_range,
             vf_coef=config.vf_coef,
             ent_coef=config.ent_coef,
-            num_minibatches=config.num_minibatches,
-            update_epochs=config.update_epochs,
             clip_vloss=True,
             use_value_norm=value_norm_config is not None,
+        )
+
+        algorithm = MAPPOAlgo(
+            policy=ma_policy,
+            critic=critic_net,
+            params=algo_params,
+            num_envs=num_envs,
             value_norm_config=value_norm_config,
         )
 
@@ -212,15 +215,19 @@ def train():
         num_steps = config.num_steps
         total_timesteps = config.total_timesteps
         save_interval = config.get("save_interval", 500)  # 单位: iteration
+        update_epochs = config.update_epochs
+        num_minibatches = config.num_minibatches
 
         step_per_epoch = num_envs * num_steps
         num_iterations = total_timesteps // step_per_epoch
+        batch_size = step_per_epoch * num_agents
+        minibatch_size = batch_size // num_minibatches
         global_step = 0
         start_time = time.time()
 
         print(f"\n[Sweep] Starting MAPPO training")
         print(f"  Total timesteps: {total_timesteps}, Iterations: {num_iterations}")
-        print(f"  Batch size: {step_per_epoch * num_agents}, Device: {device}")
+        print(f"  Batch size: {batch_size}, Device: {device}")
 
         for iteration in range(1, num_iterations + 1):
             # Checkpoint
@@ -246,7 +253,7 @@ def train():
             t0 = time.time()
             batch = algorithm.prepare_batch(result.batch)
             algorithm.set_training_mode(True)
-            stats = algorithm.update(batch)
+            stats = algorithm.update(batch, minibatch_size=minibatch_size, update_epochs=update_epochs)
             collector.reset_buffer()
             t_update = time.time() - t0
 

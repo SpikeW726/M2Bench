@@ -14,6 +14,7 @@ from networks.mlp import ActorMLP, CriticMLP
 from policies.rl.rl_base import ActorPolicy
 from policies.marl.marl_base import MultiAgentPolicy
 from algorithms.marl.mappo import MAPPOAlgo
+from configs.algo_configs import MAPPOParams
 from data.collector import MACollector
 from utils.model_io import save_model
 
@@ -31,10 +32,12 @@ def main():
     # critic_hidden = [512, 256, 128]
 
     # 训练超参数
-    total_timesteps = 100000000
+    max_iterations = 500
     num_steps = 2048  # 每个 env 每次采集的步数
     num_minibatches = 16
     update_epochs = 5
+
+    # mappo算法超参数
     actor_lr = 3e-5
     critic_lr = 3e-4
     gamma = 0.999
@@ -42,9 +45,9 @@ def main():
     clip_range = 0.2
     vf_coef = 1.0
     ent_coef = 0.1
-    save_internal = 1000 # 每过xx个iteration保存一次模型参数
-    
-    # 日志配置
+
+    # 实验配置
+    save_interval = 1000 # 每过xx个iteration保存一次模型参数
     track_wandb = True  # 是否使用 wandb
     wandb_project = "MAP-RL"
     
@@ -79,7 +82,7 @@ def main():
             project=wandb_project,
             name=run_name,
             config={
-                "total_timesteps": total_timesteps,
+                "max_iterations": max_iterations,
                 "num_envs": num_envs,
                 "num_steps": num_steps,
                 "actor_lr": actor_lr,
@@ -180,10 +183,12 @@ def main():
         shared=True,
     )
     
-    algorithm = MAPPOAlgo(
-        policy=ma_policy,
-        critic=critic_net,
-        num_envs=num_envs,
+    # 计算 minibatch_size 和 optimizer_steps_per_iter
+    batch_size = num_envs * num_steps * num_agents  # 1个iter收集的总样本数
+    minibatch_size = batch_size // num_minibatches
+    optimizer_steps_per_iter = update_epochs * num_minibatches  # 每轮 iteration 的优化器步数
+
+    algo_params = MAPPOParams(
         actor_lr=actor_lr,
         critic_lr=critic_lr,
         gamma=gamma,
@@ -191,11 +196,16 @@ def main():
         clip_range=clip_range,
         vf_coef=vf_coef,
         ent_coef=ent_coef,
-        num_minibatches=num_minibatches,
-        update_epochs=update_epochs,
         clip_vloss=True,
-        # Value Normalization (从预训练 checkpoint 继承)
         use_value_norm=value_norm_config is not None,
+    )
+
+    algorithm = MAPPOAlgo(
+        policy=ma_policy,
+        critic=critic_net,
+        params=algo_params,
+        num_envs=num_envs,
+        optimizer_steps_per_iter=optimizer_steps_per_iter,
         value_norm_config=value_norm_config,
     )
     
@@ -218,11 +228,11 @@ def main():
         'num_envs': num_envs,
         'use_subproc': use_subproc,
         # 训练超参数
-        'total_timesteps': total_timesteps,
+        'max_iterations': max_iterations,
         'num_steps': num_steps,
         'num_minibatches': num_minibatches,
         'update_epochs': update_epochs,
-        'save_interval': save_internal,
+        'save_interval': save_interval,
         # 优化器参数
         'actor_lr': actor_lr,
         'critic_lr': critic_lr,
@@ -259,18 +269,17 @@ def main():
     collector = MACollector(algorithm, vec_env)
     collector.reset()
     
-    step_per_epoch = num_envs * num_steps
-    num_iterations = total_timesteps // step_per_epoch
+    step_per_iteration = num_envs * num_steps
     global_step = 0
     start_time = time.time()
     
     print(f"\n[Main] Starting MAPPO training")
-    print(f"  Total timesteps: {total_timesteps}, Iterations: {num_iterations}")
-    print(f"  Batch size: {step_per_epoch * num_agents}, Device: {device}")
+    print(f"  Max iterations: {max_iterations}")
+    print(f"  Batch size: {step_per_iteration * num_agents}, Device: {device}")
     
-    for iteration in range(1, num_iterations + 1):
+    for iteration in range(1, max_iterations + 1):
         # 0. Checkpoint (HuggingFace style)
-        if (iteration + 1) % save_internal == 0:
+        if (iteration + 1) % save_interval == 0:
             ckpt_dir = save_dir / f"iter_{iteration + 1}"
             save_model(
                 save_dir=ckpt_dir,
@@ -284,7 +293,7 @@ def main():
         # 1. 采集数据 (eval mode)
         t0 = time.time()
         algorithm.set_training_mode(False)
-        result = collector.collect(n_steps=step_per_epoch)
+        result = collector.collect(n_steps=step_per_iteration)
         global_step += result.n_steps
         t_collect = time.time() - t0
         
@@ -292,7 +301,7 @@ def main():
         t0 = time.time()
         batch = algorithm.prepare_batch(result.batch)
         algorithm.set_training_mode(True)
-        stats = algorithm.update(batch)
+        stats = algorithm.update(batch, minibatch_size=minibatch_size, update_epochs=update_epochs)
         collector.reset_buffer()
         t_update = time.time() - t0
         
@@ -354,7 +363,7 @@ def main():
         # 打印进度
         if iteration % 10 == 0 or iteration == 1:
             reward_str = f"{np.mean(result.episode_rewards):.2f}" if result.episode_rewards else "N/A"
-            print(f"[Iter {iteration}/{num_iterations}] "
+            print(f"[Iter {iteration}/{max_iterations}] "
                   f"steps={global_step}, reward={reward_str}, "
                   f"pg_loss={stats.policy_loss:.4f}, v_loss={stats.value_loss:.4f}, "
                   f"iwi={env_metrics_iwi:.2f}, SPS={sps} "
@@ -368,7 +377,7 @@ def main():
         critic=critic_net,
         actor_config=actor_config,
         critic_config=critic_config,
-        extra_info=build_extra_info(num_iterations),
+        extra_info=build_extra_info(max_iterations),
     )
     print(f"\n[Main] Saved final model to {final_dir}")
     

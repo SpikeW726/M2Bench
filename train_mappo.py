@@ -9,6 +9,8 @@ import yaml
 from torch.utils.tensorboard import SummaryWriter
 
 from algorithms.marl.mappo import MAPPOAlgo
+from configs.algo_configs import MAPPOParams
+from configs.training_configs import OnPolicyTrainerConfig
 from data.collector import MACollector
 from envs.mdps.masup_env import MASUPEnv
 from envs.venvs import DummyVectorEnv
@@ -44,7 +46,7 @@ def main():
     critic_hidden = [128, 256, 256, 128]
 
     # Training hyperparams
-    total_timesteps = 50_000_000
+    max_iterations = 500
     num_steps = 1024  # steps per env per collection
     num_minibatches = 8
     update_epochs = 10  # epochs inside algorithm.update()
@@ -98,7 +100,7 @@ def main():
             project=wandb_project,
             name=run_name,
             config={
-                "total_timesteps": total_timesteps,
+                "max_iterations": max_iterations,
                 "num_envs": num_envs,
                 "num_steps": num_steps,
                 "actor_lr": actor_lr,
@@ -180,9 +182,11 @@ def main():
         value_norm_config = None
 
     # ========== Policy & Algorithm ==========
-    # Compute max_iteration first (needed for LR scheduler)
+    # 计算训练调度参数
     step_per_iteration = num_envs * num_steps
-    max_iteration = total_timesteps // step_per_iteration
+    batch_size = step_per_iteration * num_agents  # 总样本数 = num_envs * num_steps * num_agents
+    minibatch_size = batch_size // num_minibatches
+    optimizer_steps_per_iter = update_epochs * num_minibatches  # 每轮 iteration 的优化器步数
 
     ma_policy = MultiAgentPolicy(
         agent_ids=agent_ids,
@@ -193,10 +197,7 @@ def main():
         shared=True,
     )
 
-    algorithm = MAPPOAlgo(
-        policy=ma_policy,
-        critic=critic_net,
-        num_envs=num_envs,
+    algo_params = MAPPOParams(
         actor_lr=actor_lr,
         critic_lr=critic_lr,
         gamma=gamma,
@@ -204,10 +205,7 @@ def main():
         clip_range=clip_range,
         vf_coef=vf_coef,
         ent_coef=ent_coef,
-        num_minibatches=num_minibatches,
-        update_epochs=update_epochs,
         clip_vloss=True,
-        # Learning rate scheduler parameters
         use_lr_scheduler=use_lr_scheduler,
         actor_lr_start_factor=actor_lr_start_factor,
         actor_lr_end_factor=actor_lr_end_factor,
@@ -215,9 +213,16 @@ def main():
         critic_lr_start_factor=critic_lr_start_factor,
         critic_lr_end_factor=critic_lr_end_factor,
         critic_lr_decay_ratio=critic_lr_decay_ratio,
-        total_iterations=max_iteration,
-        # Value Normalization parameters
         use_value_norm=value_norm_config is not None,
+    )
+
+    algorithm = MAPPOAlgo(
+        policy=ma_policy,
+        critic=critic_net,
+        params=algo_params,
+        num_envs=num_envs,
+        total_iterations=max_iterations,
+        optimizer_steps_per_iter=optimizer_steps_per_iter,
         value_norm_config=value_norm_config,
     )
 
@@ -281,20 +286,26 @@ def main():
         return {}
 
     # ========== Trainer ==========
+    trainer_config = OnPolicyTrainerConfig(
+        num_envs=num_envs,
+        num_steps=num_steps,
+        max_iterations=max_iterations,
+        save_interval=save_interval,
+        minibatch_size=minibatch_size,
+        update_epochs=update_epochs,
+    )
+
     trainer = OnPolicyTrainer(
         algorithm=algorithm,
         collector=collector,
-        max_iteration=max_iteration,
-        step_per_iteration=step_per_iteration,
+        config=trainer_config,
         save_checkpoint_fn=save_checkpoint_fn,
-        save_interval=save_interval,
         log_extra_fn=log_extra_fn,
         logger=logger,
-        verbose=True,
     )
 
     print(f"\n[Main] Starting MAPPO training")
-    print(f"  Total timesteps: {total_timesteps}, Iterations: {max_iteration}")
+    print(f"  Max iterations: {max_iterations}")
     print(f"  Batch size: {step_per_iteration * num_agents}, Device: {device}")
 
     # ========== Train ==========

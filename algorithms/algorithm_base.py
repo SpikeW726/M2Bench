@@ -109,8 +109,6 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         ent_coef: float = 0.01,
         max_grad_norm: float = 0.5,
         normalize_advantage: bool = True,
-        num_minibatches: int = 4,
-        update_epochs: int = 10,
     ):
         super().__init__(policy, lr, gamma, max_grad_norm)
         self.critic = critic.to(self.device)
@@ -118,8 +116,6 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         self.vf_coef = vf_coef
         self.ent_coef = ent_coef
         self.normalize_advantage = normalize_advantage
-        self.num_minibatches = num_minibatches
-        self.update_epochs = update_epochs
         
         # Add critic params to optimizer
         self.optimizer = torch.optim.Adam(
@@ -246,41 +242,27 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         
         return loss, stats
     
-    def update(self, batch: RolloutBatch) -> TrainingStats:
+    def update(
+        self,
+        batch: RolloutBatch,
+        minibatch_size: int,
+        update_epochs: int,
+    ) -> TrainingStats:
         """
         Multi-epoch minibatch update.
-        内部处理 minibatch 切分和多轮更新。
+        
+        Args:
+            batch: 完整 rollout 数据
+            minibatch_size: 每个 minibatch 的样本数，-1 表示不切分
+            update_epochs: 对同一批数据重复更新的轮数
         """
         import numpy as np
         
         batch = batch.to_tensor(self.device)
-        batch_size = len(batch)
-        minibatch_size = batch_size // self.num_minibatches
-        
         all_stats = []
-        indices = np.arange(batch_size)
         
-        for _ in range(self.update_epochs):
-            np.random.shuffle(indices)
-            
-            for start in range(0, batch_size, minibatch_size):
-                end = start + minibatch_size
-                mb_inds = indices[start:end]
-                
-                # 构造 minibatch（复用 batch 属性）
-                minibatch = RolloutBatch(
-                    obs=batch.obs[mb_inds],
-                    act=batch.act[mb_inds],
-                    rew=batch.rew[mb_inds] if batch.rew is not None else None,
-                    done=batch.done[mb_inds] if batch.done is not None else None,
-                    log_prob=batch.log_prob[mb_inds],
-                    value=batch.value[mb_inds] if batch.value is not None else None,
-                    adv=batch.adv[mb_inds].clone(),  # clone for normalization
-                    ret=batch.ret[mb_inds],
-                    global_state=batch.global_state[mb_inds] if batch.global_state is not None else None,
-                    action_mask=batch.action_mask[mb_inds] if batch.action_mask is not None else None,
-                )
-                
+        for _ in range(update_epochs):
+            for minibatch in batch.split(size=minibatch_size, shuffle=True, merge_last=True):
                 # Compute loss and update
                 loss, stats = self.compute_loss(minibatch)
                 
