@@ -142,12 +142,13 @@ def train(config: ExperimentConfig):
 
     if config.track_wandb:
         import wandb
-        wandb.init(
-            project=config.wandb_project,
-            name=config.run_name,
-            config=asdict(config),
-            sync_tensorboard=True,
-        )
+        if wandb.run is None:  # sweep 模式下由 wandb.agent 负责 init
+            wandb.init(
+                project=config.wandb_project,
+                name=config.run_name,
+                config=asdict(config),
+                sync_tensorboard=True,
+            )
 
     logger = SimpleLogger(tb_writer, use_wandb=config.track_wandb)
 
@@ -314,7 +315,9 @@ def train(config: ExperimentConfig):
     tb_writer.close()
     if config.track_wandb:
         import wandb
-        wandb.finish()
+        if wandb.run is not None and wandb.run.sweep_id is None:
+            # 非 sweep 模式才主动 finish，sweep 由 wandb.agent 管理生命周期
+            wandb.finish()
     vec_env.close()
 
 

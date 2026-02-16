@@ -1,4 +1,6 @@
 # WandB Sweep 配置文件
+# 用法: python sweep.py --base-config configs/experiments/mappo_tsp12_imi.yaml \
+#                       --sweep-config configs/sweep/mappo_hparam.yaml
 
 method: random
 
@@ -12,7 +14,7 @@ early_terminate:
   min_samples_to_check: 8
 
 parameters:
-  # 学习率 (对数均匀分布)
+  # ---- algo params (映射到 MAPPOParams) ----
   actor_lr:
     min: 0.00001
     max: 0.001
@@ -22,7 +24,6 @@ parameters:
     max: 0.003
     distribution: log_uniform_values
 
-  # PPO 参数
   clip_range:
     min: 0.1
     max: 0.4
@@ -35,29 +36,17 @@ parameters:
   gae_lambda:
     min: 0.9
     max: 1.0
+  gamma:
+    value: 0.999
 
-  # 批次配置
-  num_minibatches:
-    values: [4, 8, 16, 32]
+  # ---- training params (映射到 OnPolicyTrainerConfig) ----
+  minibatch_size:
+    values: [256, 512, 1024, 2048]
   update_epochs:
     values: [3, 5, 10]
   num_steps:
     values: [1024, 2048, 4096]
-
-  # 折扣因子
-  gamma:
-    value: 0.999
-
-  # 训练长度
-  total_timesteps:
-    value: 40000000  # 50M 步
-
-  # 预训练权重
-  actor_path:
-    values: ["models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt"]
-  critic_path:
-    values: ["models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt"]
-
-  # 保存间隔
+  max_iterations:
+    value: 500
   save_interval:
     value: 500

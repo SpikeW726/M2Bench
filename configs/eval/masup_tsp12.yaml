@@ -1,0 +1,16 @@
+# MASUPEnv TSP12 评估配置
+# 用法:
+#   python evaluators/test.py --env_config configs/eval/masup_tsp12.yaml --model models/xxx/final
+#   python evaluators/heuristic_evaluator.py --env_config configs/eval/masup_tsp12.yaml --policy ER
+
+env:
+  graph_path: graphs/simple_TSP_12.json
+  enable_wait: true
+  deltaT: 0.333
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 300
+  custom_configs:
+    T: 20.0
+    role_imformation: decision
+    truncate_by_time: true

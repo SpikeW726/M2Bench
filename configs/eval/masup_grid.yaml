@@ -1,0 +1,14 @@
+# MASUPEnv Grid 评估配置（启发式策略常用）
+# 用法:
+#   python evaluators/heuristic_evaluator.py --env_config configs/eval/masup_grid.yaml --policy ER
+#   python evaluators/test.py --env_config configs/eval/masup_grid.yaml --model models/xxx/final
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: true
+  deltaT: 1.0
+  num_agents: 8
+  init_positions: [6, 12, 18, 24, 30, 36, 42, 48]
+  episode_len: 1000
+  custom_configs:
+    truncate_by_time: true

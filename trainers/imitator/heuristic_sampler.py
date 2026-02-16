@@ -911,56 +911,56 @@ class HeuristicSampler:
 if __name__ == "__main__":
     import os
     import argparse
-    
-    # 切换工作目录到项目根目录 (确保配置文件路径正确)
+
+    # 切换工作目录到项目根目录（确保配置文件路径正确）
     os.chdir(_project_root)
-    
+
+    from configs.registry import load_env_config, _env_config_to_dicts
+
     parser = argparse.ArgumentParser(description="Heuristic Sampler for Actor-Critic Pre-training")
-    parser.add_argument("--num_episodes", type=int, default=50000, help="Number of episodes to collect")
-    parser.add_argument("--save_path", type=str, default="dataset/grid/samples_pure_0.01reward_random.h5", help="Save path for NPZ file")
-    parser.add_argument("--gamma", type=float, default=0.999, help="Discount factor for returns")
-    parser.add_argument("--eps", type=float, default=0.0, help="Epsilon-greedy exploration probability")
-    parser.add_argument("--batch_size", type=int, default=2048, help="Batch size for memory-efficient processing")
-    parser.add_argument("--num_workers", type=int, default=1, help="Number of parallel workers (>1 for parallel sampling)")
-    parser.add_argument("--policy_config", type=str, default="configs/ER.yaml", help="Policy config file")
-    parser.add_argument("--env_config", type=str, default="configs/MASUPEnv.yaml", help="Environment config file")
+    parser.add_argument("--num_episodes", type=int, default=50000, help="采集 episode 数量")
+    parser.add_argument("--save_path", type=str, default="dataset/samples.h5", help="保存路径 (.npz/.h5)")
+    parser.add_argument("--gamma", type=float, default=0.999, help="折扣因子")
+    parser.add_argument("--eps", type=float, default=0.0, help="Epsilon-greedy 随机探索概率")
+    parser.add_argument("--batch_size", type=int, default=2048, help="分批大小（避免内存溢出）")
+    parser.add_argument("--num_workers", type=int, default=1, help="并行 worker 数量 (>1 启用多进程)")
+    parser.add_argument("--policy_config", type=str, default="configs/policies/ER.yaml",
+                        help="策略配置 YAML")
+    parser.add_argument("--env_config", type=str, default="configs/eval/masup_tsp12.yaml",
+                        help="环境配置 YAML (experiment YAML 或独立 eval YAML)")
     args = parser.parse_args()
-    
+
+    # 加载策略配置
     with open(args.policy_config, 'r', encoding='utf-8') as f:
-        ER_config = yaml.safe_load(f)
-    with open(args.env_config, 'r', encoding='utf-8') as f:
-        MASUP_config = yaml.safe_load(f)
-    custom_config = MASUP_config["custom_config"]
-    env_config = MASUP_config["env_config"]
+        policy_config = yaml.safe_load(f)
+
+    # 加载环境配置（使用统一的 EnvConfig 体系）
+    env_cfg = load_env_config(args.env_config)
+    env_config, custom_config = _env_config_to_dicts(env_cfg)
 
     num_agents = env_config.get("num_agents", 3)
-    policy = ERPolicy(num_agents, ER_config)
+    policy = ERPolicy(num_agents, policy_config)
     env = MASUPEnv(env_config, **custom_config)
 
-    # 创建采样器 (传入配置以支持并行采样)
+    # 创建采样器（传入 dict 配置以支持并行采样中 worker 进程创建独立环境）
     sampler = HeuristicSampler(
-        policy=policy, 
+        policy=policy,
         env=env,
         env_config=env_config,
         custom_config=custom_config,
-        policy_config=ER_config,
+        policy_config=policy_config,
     )
-    
+
     # 开始采样
-    # - 单进程: num_workers=1 (默认)
-    # - 多进程: num_workers=4 或更多 (根据 CPU 核心数调整)
-    # - batch_size: 分批保存避免内存溢出
     sampler.sample(
-        num_episodes=args.num_episodes, 
-        save_path=args.save_path, 
-        gamma=args.gamma, 
-        eps=args.eps, 
+        num_episodes=args.num_episodes,
+        save_path=args.save_path,
+        gamma=args.gamma,
+        eps=args.eps,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
-    
-    # 示例用法:
-    # 单进程采样:
+
+    # 用法示例:
     #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 1
-    # 4进程并行采样:
     #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 4

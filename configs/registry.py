@@ -15,6 +15,7 @@ from configs.training_configs import (
     TrainerConfig, OnPolicyTrainerConfig, OffPolicyTrainerConfig,
 )
 from configs.network_configs import NetworkConfig, MLPNetworkConfig
+from configs.exp_configs import ExperimentConfig
 
 
 # =============================================================================
@@ -91,9 +92,14 @@ def _import_class(module_path: str, class_name: str) -> Type:
 
 
 def _env_config_to_dicts(env_config: EnvConfig) -> Tuple[dict, dict]:
-    """将 EnvConfig 拆为 (env_config_dict, custom_config_dict)"""
+    """将 EnvConfig 拆为 (env_config_dict, custom_config_dict)。
+
+    值为 None 的字段会被移除，以确保下游代码的 dict.get(key, default)
+    能正确回退到默认值。
+    """
     d = asdict(env_config)
     custom = d.pop("custom_configs", None) or {}
+    d = {k: v for k, v in d.items() if v is not None}
     return d, custom
 
 
@@ -118,9 +124,6 @@ def load_config(yaml_path: str | Path) -> "ExperimentConfig":
         config = load_config("configs/experiments/mappo_tsp12.yaml")
         train(config)
     """
-    # 延迟导入避免循环引用
-    from configs.exp_configs import ExperimentConfig
-
     with open(yaml_path) as f:
         raw = yaml.safe_load(f)
 
@@ -262,6 +265,28 @@ def create_trainer(
         config=training_config,
         **callbacks,
     )
+
+
+# =============================================================================
+#                          环境配置加载（评估用）
+# =============================================================================
+
+def load_env_config(yaml_path: str | Path) -> EnvConfig:
+    """
+    从 YAML 加载 EnvConfig（供评估脚本使用）。
+
+    支持两种 YAML 格式：
+    1. 完整 experiment YAML（含 env: 嵌套） → 提取 env 部分
+    2. 独立 eval YAML（仅含 env: 嵌套）  → 同上
+
+    用法:
+        env_cfg = load_env_config("configs/experiments/mappo_tsp12_imi.yaml")
+        env_cfg = load_env_config("configs/eval/masup_tsp12.yaml")
+    """
+    with open(yaml_path) as f:
+        raw = yaml.safe_load(f)
+    env_raw = raw.get("env", raw)  # 有 env: 则取之，否则整个 YAML 作为 env 字段
+    return EnvConfig(**_filter_dataclass_kwargs(EnvConfig, env_raw))
 
 
 # =============================================================================

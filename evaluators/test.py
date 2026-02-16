@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Test script for trained RL actor policy
+RL 策略评估脚本。
 
-Supports two loading modes:
-1. HuggingFace style: model_dir/ with config.yaml + policy.pt
-2. Legacy: single checkpoint file (.pt)
+支持两种模型加载方式：
+1. HuggingFace 风格：model_dir/ 含 config.yaml + policy.pt
+2. Legacy：单 checkpoint 文件 (.pt)
+
+环境配置通过 --env_config 指定 YAML 文件加载（支持 experiment YAML 或独立 eval YAML）。
 """
 import os
 import sys
 from pathlib import Path
 
-# Add project root to Python path
+# 添加项目根目录
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 os.chdir(project_root)
 
-import yaml
 import torch
 import numpy as np
 
 from envs.mdps.masup_env import MASUPEnv
+from configs.registry import load_env_config, _env_config_to_dicts
 from policies.rl.rl_base import ActorPolicy
 from policies.marl.marl_base import MultiAgentPolicy
 from networks.mlp import ActorMLP
@@ -28,40 +30,40 @@ from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
 from utils.model_io import load_actor_only, get_model_config
 
 
+# =============================================================================
+#                          模型加载
+# =============================================================================
+
 def load_trained_actor(model_path: str, obs_dim: int, action_dim: int) -> ActorMLP:
     """
-    Load actor network from model directory or legacy checkpoint file.
-    
-    Supports:
-    1. HuggingFace style: model_path is a directory with config.yaml + policy.pt
-    2. Legacy formats: model_path is a .pt file
-       - Pretrain format: {'actor_state_dict': ..., 'hidden_sizes': ...}
-       - MAPPO MultiAgentPolicy format: {'_shared_policy.actor.network.0.weight': ...}
-       - Direct state_dict format: {'network.0.weight': ...}
+    从模型目录或 legacy checkpoint 文件加载 actor 网络。
+
+    支持格式：
+    1. HuggingFace 风格目录 (config.yaml + policy.pt)
+    2. Pretrain 格式 {'actor_state_dict': ..., 'hidden_sizes': ...}
+    3. MAPPO MultiAgentPolicy 格式 {'_shared_policy.actor.network.0.weight': ...}
+    4. 直接 state_dict 格式 {'network.0.weight': ...}
     """
     model_path = Path(model_path)
-    
-    # Check if HuggingFace style directory
+
+    # HuggingFace 风格目录
     if model_path.is_dir() and (model_path / 'config.yaml').exists():
         print(f"Loading from HuggingFace style directory: {model_path}")
         actor = load_actor_only(model_path, device='cpu')
         config = get_model_config(model_path)
         print(f"Actor config: {config.get('actor', {})}")
         return actor
-    
-    # Legacy: single checkpoint file
+
+    # Legacy: 单 checkpoint 文件
     print(f"Loading from legacy checkpoint: {model_path}")
     checkpoint = torch.load(model_path, map_location='cpu')
-    
-    # Determine format and extract actor state_dict
+
     if 'actor_state_dict' in checkpoint:
-        # Pretrain format
         actor_sd = checkpoint['actor_state_dict']
         hidden_sizes = checkpoint.get('hidden_sizes', _infer_hidden_sizes(actor_sd))
         print(f"Format: Pretrain, hidden_sizes={hidden_sizes}")
-    
+
     elif '_shared_policy.actor.network.0.weight' in checkpoint:
-        # MAPPO MultiAgentPolicy format
         actor_sd = {}
         prefix = '_shared_policy.actor.'
         for k, v in checkpoint.items():
@@ -69,14 +71,12 @@ def load_trained_actor(model_path: str, obs_dim: int, action_dim: int) -> ActorM
                 actor_sd[k[len(prefix):]] = v
         hidden_sizes = _infer_hidden_sizes(actor_sd)
         print(f"Format: MAPPO MultiAgentPolicy, hidden_sizes={hidden_sizes}")
-    
+
     else:
-        # Direct state_dict format
         actor_sd = checkpoint
         hidden_sizes = _infer_hidden_sizes(actor_sd)
         print(f"Format: Direct state_dict, hidden_sizes={hidden_sizes}")
-    
-    # Create and load actor
+
     actor = ActorMLP(obs_dim, hidden_sizes, action_dim)
     actor.load_state_dict(actor_sd)
     actor.eval()
@@ -84,7 +84,7 @@ def load_trained_actor(model_path: str, obs_dim: int, action_dim: int) -> ActorM
 
 
 def _infer_hidden_sizes(state_dict: dict) -> list:
-    """Infer hidden sizes from MLP state_dict (fallback for legacy checkpoints)."""
+    """从 MLP state_dict 推断 hidden_sizes（legacy checkpoint 降级路径）。"""
     hidden_sizes = []
     idx = 0
     while f'network.{idx}.weight' in state_dict:
@@ -93,45 +93,50 @@ def _infer_hidden_sizes(state_dict: dict) -> list:
     return hidden_sizes[:-1] if hidden_sizes else []
 
 
-def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__1769274544_actor_best.pt',
-                       num_episodes: int = 5,
-                       max_steps: int = 1000,
-                       save_plot: str = None,
-                       show_plot: bool = True,
-                       record_animation: bool = False,
-                       event_driven: bool = True,
-                       max_frames: int = None):
+# =============================================================================
+#                          评估主函数
+# =============================================================================
+
+def test_trained_policy(
+    checkpoint_path: str,
+    env_config_path: str,
+    num_episodes: int = 5,
+    max_steps: int = 1000,
+    save_plot: str = None,
+    show_plot: bool = True,
+    record_animation: bool = False,
+    event_driven: bool = True,
+    max_frames: int = None,
+):
     """
-    Test trained actor policy in MASUPEnv.
-    
+    在 MASUPEnv 中评估训练好的 actor 策略。
+
     Args:
-        checkpoint_path: Path to model directory or checkpoint file
-        num_episodes: Number of episodes to run
-        max_steps: Fixed step count per episode (ensures consistent length for visualization)
-        save_plot: Path to save plot
-        show_plot: Whether to display plot
+        checkpoint_path: 模型目录或 checkpoint 文件路径
+        env_config_path: 环境配置 YAML 路径（experiment YAML 或独立 eval YAML）
+        num_episodes: 评估 episode 数量
+        max_steps: 每个 episode 的固定步数
+        save_plot: 图表保存路径
+        show_plot: 是否显示图表
         record_animation: 是否录制最后一个 episode 的动画视频
-        event_driven: True=事件驱动环境（不等间隔），False=固定步长环境
-        max_frames: 动画最大帧数限制（None=不限制）
+        event_driven: True=事件驱动动画，False=固定步长动画
+        max_frames: 动画最大帧数限制
     """
-    # Load environment config 暂时硬编码！！！
-    with open("configs/MASUPEnv.yaml") as f:
-        env_config_data = yaml.safe_load(f)
-        env_config = env_config_data['env_config']
-        custom_config = env_config_data.get('custom_config', {})
+    # ---- 加载环境配置 ----
+    env_cfg = load_env_config(env_config_path)
+    cfg_dict, custom_dict = _env_config_to_dicts(env_cfg)
 
-    # Extract info for plotting
-    graph_path = env_config['graph_path']
-    graph_name = Path(graph_path).stem  # Get filename without extension
-    num_agents = env_config['num_agents']
+    graph_path = cfg_dict['graph_path']
+    graph_name = Path(graph_path).stem
+    num_agents = cfg_dict['num_agents']
 
-    # Create environment
+    # ---- 创建环境 ----
     print(f"\n=== Creating MASUPEnv ===")
     print(f"Graph: {graph_path} ({graph_name})")
     print(f"Num agents: {num_agents}")
-    env = MASUPEnv(env_config, **custom_config)
+    env = MASUPEnv(cfg_dict, **custom_dict)
 
-    # Get network dimensions from environment
+    # 从环境推断网络维度
     sample_agent = env.possible_agents[0]
     obs_dim = env.observation_space(sample_agent).shape[0]
     action_dim = env.action_space(sample_agent).n
@@ -141,26 +146,25 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
     print(f"Action dim: {action_dim}")
     print(f"Max neighbors: {env.world.max_neighbors}")
 
-    # Load trained actor (hidden_sizes inferred from checkpoint)
+    # ---- 加载 actor ----
     actor = load_trained_actor(checkpoint_path, obs_dim, action_dim)
 
-    # Create MultiAgentPolicy with shared strategy
+    # ---- 构建 MultiAgentPolicy ----
     multi_policy = MultiAgentPolicy(
         agent_ids=env.possible_agents,
         obs_space=env.observation_space(env.possible_agents[0]),
         action_space=env.action_space(env.possible_agents[0]),
         policy_class=ActorPolicy,
         policy_kwargs={'actor': actor, 'deterministic_eval': True},
-        shared=True
+        shared=True,
     )
     multi_policy.set_training_mode(False)
 
     print(f"\n=== Running {num_episodes} episodes (fixed {max_steps} steps each) ===")
 
-    # Track metrics across episodes
     episode_metrics = []
     metrics_history = []
-    episode_times = []  # Physical time for each episode
+    episode_times = []
 
     # 动画录制数据（仅最后一个 episode）
     anim_positions_history = []
@@ -170,51 +174,38 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
         obs, infos = env.reset()
         step_count = 0
 
-        # 判断是否需要录制当前 episode（仅最后一个）
         is_last = (ep == num_episodes - 1)
         record = record_animation and is_last
-
         if record:
             anim_positions_history = [env.world.snapshot_agent_positions()]
             anim_time_intervals = []
 
         while step_count < max_steps:
-            # Get action masks and convert to tensor
             action_masks = {
                 aid: torch.as_tensor(info['action_mask'], dtype=torch.bool, device=multi_policy.device)
                 for aid, info in infos.items()
             }
-            
-            # Convert obs to tensor
             obs_tensor = {
                 aid: torch.as_tensor(o, dtype=torch.float32, device=multi_policy.device)
                 for aid, o in obs.items()
             }
-            
-            # Forward pass with action_mask
+
             with torch.no_grad():
                 outputs = multi_policy.forward(obs_tensor, action_mask=action_masks)
-            
-            # Extract actions
             actions = {aid: out['act'].cpu().numpy() for aid, out in outputs.items()}
 
-            # Step environment
             obs, _, _, _, infos = env.step(actions)
             step_count += 1
 
-            # 录制快照
             if record:
                 anim_time_intervals.append(env.last_time_interval)
                 anim_positions_history.append(env.world.snapshot_agent_positions())
 
-        # Get final metrics
+        # Episode 结束：收集指标
         final_metrics = env.world.current_metrics
         episode_metrics.append(final_metrics)
         episode_times.append(final_metrics.time)
-        
-        # Collect episode metrics history for visualization
-        episode_history = env.world.metrics_tracker.get_history_dict()
-        metrics_history.append(episode_history)
+        metrics_history.append(env.world.metrics_tracker.get_history_dict())
 
         print(f"Episode {ep + 1}/{num_episodes}: "
               f"IGI={final_metrics.igi:.4f}, "
@@ -224,35 +215,30 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
               f"time={final_metrics.time:.2f}s, "
               f"steps={step_count}")
 
-    # Print summary statistics
+    # ---- 汇总统计 ----
     print(f"\n=== Summary Statistics ({num_episodes} episodes, {max_steps} steps) ===")
-
     for metric_name in ['IGI', 'AGI', 'IWI', 'WI']:
         values = [getattr(m, metric_name.lower()) for m in episode_metrics]
-        mean_val = np.mean(values)
-        std_val = np.std(values)
-        print(f"{metric_name}: {mean_val:.4f} ± {std_val:.4f}")
+        print(f"{metric_name}: {np.mean(values):.4f} ± {np.std(values):.4f}")
 
-    # Aggregate and visualize metrics (no padding needed since all episodes have same length)
+    # ---- 可视化 ----
     save_dir = str(Path(save_plot).parent) if save_plot else 'evaluators/results'
 
     if metrics_history:
         print(f"\n=== Generating aggregated visualization ===")
         aggregated = aggregate_episode_metrics(metrics_history)
-        
-        # Build subtitle with extra info
         avg_time = np.mean(episode_times)
         subtitle = f"Graph: {graph_name} | Agents: {num_agents} | Avg Time: {avg_time:.2f}s"
-        
+
         plot_aggregated_metrics(
             aggregated,
             title=f'RL Policy Evaluation ({num_episodes} episodes, {max_steps} steps)',
             subtitle=subtitle,
             save_path=save_plot,
-            show=show_plot
+            show=show_plot,
         )
 
-    # 生成动画
+    # ---- 动画 ----
     if record_animation and anim_positions_history:
         print(f"\n=== Generating animation for last episode ===")
         algorithm_name = Path(checkpoint_path).stem
@@ -282,21 +268,28 @@ def test_trained_policy(checkpoint_path: str = 'models/pure/imi_train__176927454
     return episode_metrics
 
 
+# =============================================================================
+#                              CLI 入口
+# =============================================================================
+
 if __name__ == '__main__':
     import argparse
 
-    parser = argparse.ArgumentParser(description='Test trained RL policy')
+    parser = argparse.ArgumentParser(description='RL 策略评估')
     parser.add_argument('--model', type=str,
                         default='models/mappo/imi/final',
-                        help='Path to model directory (HuggingFace style) or checkpoint file (legacy)')
+                        help='模型目录 (HuggingFace 风格) 或 checkpoint 文件 (legacy)')
+    parser.add_argument('--env_config', type=str,
+                        default='configs/eval/masup_tsp12.yaml',
+                        help='环境配置 YAML (experiment YAML 或独立 eval YAML)')
     parser.add_argument('--num_episodes', type=int, default=5,
-                        help='Number of episodes to run')
+                        help='评估 episode 数量')
     parser.add_argument('--max_steps', type=int, default=1000,
-                        help='Fixed steps per episode')
+                        help='每个 episode 的固定步数')
     parser.add_argument('--save_plot', type=str, default='evaluators/results/rl_eval.png',
-                        help='Path to save plot')
+                        help='图表保存路径')
     parser.add_argument('--no_show', action='store_true',
-                        help='Do not display plot')
+                        help='不显示图表')
     parser.add_argument('--animation', action='store_true',
                         help='录制最后一个 episode 的动画视频')
     parser.add_argument('--no_event_driven', action='store_true',
@@ -308,6 +301,7 @@ if __name__ == '__main__':
 
     test_trained_policy(
         checkpoint_path=args.model,
+        env_config_path=args.env_config,
         num_episodes=args.num_episodes,
         max_steps=args.max_steps,
         save_plot=args.save_plot,

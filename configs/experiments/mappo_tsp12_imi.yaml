@@ -11,8 +11,8 @@ exp_name: mappo-imi
 graph_name: TSP12
 track_wandb: true
 wandb_project: MAP-RL
-actor_path: models/imi_train__1769515607_actor_best.pt
-critic_path: models/imi_train__1769515607_critic.pt
+actor_path: models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt
+critic_path: models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt
 
 # ---- 环境 ----
 env:
@@ -33,7 +33,7 @@ env:
 # ---- 算法 (自动映射到 MAPPOParams) ----
 algo:
   actor_lr: 3.0e-5
-  critic_lr: 3.0e-5
+  critic_lr: 3.0e-4
   gamma: 0.999
   gae_lambda: 1.0
   clip_range: 0.2
@@ -51,7 +51,7 @@ algo:
 # ---- 训练 (自动映射到 OnPolicyTrainerConfig) ----
 training:
   num_envs: 4
-  use_subproc: false
+  use_subproc: True
   num_steps: 1024
   max_iterations: 500
   save_interval: 100
@@ -61,4 +61,4 @@ training:
 # ---- 网络 (自动映射到 MLPNetworkConfig) ----
 network:
   actor_hidden: [256, 256]
-  critic_hidden: [128, 256, 256, 128]
+  critic_hidden: [256, 256]
