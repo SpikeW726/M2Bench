@@ -206,4 +206,15 @@ class Graph:
                 weight_mat[node_to_idx[i], node_to_idx[j]] = weight
 
         return adj_mat, weight_mat
+
+    def neighbor_to_edge(self, pos:int, neighbor:int):
+        """将邻居节点序号转换为邻边序号 0-max_degree"""
+        neighbors = self.get_neighbors(pos)
+        
+        if neighbor in neighbors:
+            edge_id = neighbors.index(neighbor)
+            if edge_id < self.get_max_degree():
+                return edge_id
+            
+        raise ValueError(f"Invalid neighbor {neighbor} for node {pos}")
     

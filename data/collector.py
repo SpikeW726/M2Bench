@@ -237,6 +237,7 @@ class MACollector(BaseCollector):
                 'truncated': [],  # 区分 truncation 和 termination，用于正确的 value bootstrap
                 'log_prob': [],
                 'action_mask': [],
+                'active_mask': [],  # 1=READY 需要决策, 0=ON_EDGE 跳过
                 'global_state': [],
                 'final_global_state': [],  # 用于中间 truncation 的 value bootstrap
             }
@@ -287,15 +288,18 @@ class MACollector(BaseCollector):
                 if global_states is not None:
                     buf['global_state'].append(global_states.copy())
                 
-                # action_mask from info
+                # action_mask & active_mask from info
                 if self._info is not None and agent in self._info:
                     info_arr = self._info[agent]
                     masks = []
+                    actives = []
                     for i in range(self.num_envs):
                         if 'action_mask' in info_arr[i]:
                             masks.append(info_arr[i]['action_mask'])
+                        actives.append(info_arr[i].get('active_mask', 1))
                     if masks:
                         buf['action_mask'].append(np.stack(masks))
+                    buf['active_mask'].append(np.array(actives, dtype=np.float32))
             
             # 执行动作
             next_obs, rew, term, trunc, info = self.env.step(actions)
@@ -353,6 +357,7 @@ class MACollector(BaseCollector):
                 log_prob=np.concatenate(buf['log_prob'], axis=0),
                 global_state=np.concatenate(buf['global_state'], axis=0) if buf['global_state'] else None,
                 action_mask=np.concatenate(buf['action_mask'], axis=0) if buf['action_mask'] else None,
+                active_mask=np.concatenate(buf['active_mask'], axis=0) if buf['active_mask'] else None,
                 final_global_state=final_gs,  # List[List[ndarray or None]]，保持原始结构
             )
         

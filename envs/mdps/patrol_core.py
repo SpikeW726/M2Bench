@@ -15,7 +15,7 @@ class AgentState(Enum):
 @dataclass
 class AgentStatus:
     """Status of an agent"""
-    position: int                       # Current node (source node if on an edge)
+    position: int = -1                     # Current node (source node if on an edge)
     last_position: int = -1             # Last node
     state: AgentState = AgentState.READY
     target_node: int = -1            
@@ -30,6 +30,7 @@ class TickResult:
     arrivals: Dict[int, int] = field(default_factory=dict)  # {agent_id: arrived_node}
     wait_completed: Set[int] = field(default_factory=set)   # Agents that finish waiting
     raw_rewards: Dict[int, float] = field(default_factory=dict)  # arrived_node_idleness*phi or waitT*phi or 0.0
+    pre_arrival_igi: float = 0.0                            # 到达清零前的 IGI（所有节点空闲度均值）
     
     @property
     def ready_agents(self) -> Set[int]:
@@ -137,6 +138,9 @@ class PatrolWorld:
                 self.node_idleness[node] += dt
         current_worst_idleness = max(self.node_idleness.values())
         self.worst_idleness = max(self.worst_idleness, current_worst_idleness)
+        
+        # 1.5 快照：到达清零前的 IGI（所有节点空闲度均值）
+        result.pre_arrival_igi = sum(self.node_idleness.values()) / len(self.node_idleness)
         
         # 2. 更新智能体状态
         for agent_id, status in self.agents.items():

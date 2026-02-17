@@ -106,7 +106,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         
         all_obs, all_act, all_log_prob = [], [], []
         all_adv, all_ret, all_value = [], [], []
-        all_critic_input, all_action_mask = [], []
+        all_critic_input, all_action_mask, all_active_mask = [], [], []
         
         for i, agent in enumerate(agents):
             batch = batch_dict[agent]
@@ -131,6 +131,11 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             if batch.truncated is not None:
                 truncated_2d = batch.truncated.view(T, N)
             
+            # 提取 active_mask (T, N)
+            active_mask_2d = None
+            if batch.active_mask is not None:
+                active_mask_2d = batch.active_mask.view(T, N)
+            
             with torch.no_grad():
                 # Raw output from critic (Normalized Scale if use_value_norm=True)
                 values_norm = self.critic(critic_input).squeeze(-1).view(T, N)
@@ -150,6 +155,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                     final_global_states=final_gs,  # T x N nested list
                     agent_idx=i,
                     num_agents=num_agents,
+                    active_mask=active_mask_2d,  # (T, N) or None
                 )
                 
                 # [Fix Bug]: 存储到 Buffer 中的 Value 必须是归一化尺度的 (values_norm)
@@ -165,13 +171,19 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             all_critic_input.append(critic_input)
             if batch.action_mask is not None:
                 all_action_mask.append(batch.action_mask)
+            if batch.active_mask is not None:
+                all_active_mask.append(batch.active_mask)
 
-        # 更新 Value Normalization 统计量
+        # 更新 Value Normalization 统计量（仅用 active 步的 return）
         if self.use_value_norm and self.ret_rms is not None:
-            # Stack all returns: [num_agents, T*N] -> [T*N*num_agents]
-            # 注意：这里的 ret 依然是 Real Scale (GAE 算出来的)，用来更新统计量是正确的
             all_ret_tensor = torch.cat(all_ret, dim=0)
-            self.ret_rms.update(all_ret_tensor)
+            if all_active_mask:
+                active_flat = torch.cat(all_active_mask, dim=0) > 0.5
+                active_ret = all_ret_tensor[active_flat]
+                if active_ret.numel() > 0:
+                    self.ret_rms.update(active_ret)
+            else:
+                self.ret_rms.update(all_ret_tensor)
 
         return RolloutBatch(
             obs=torch.cat(all_obs, dim=0),
@@ -182,6 +194,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             value=torch.cat(all_value, dim=0),
             global_state=torch.cat(all_critic_input, dim=0),
             action_mask=torch.cat(all_action_mask, dim=0) if all_action_mask else None,
+            active_mask=torch.cat(all_active_mask, dim=0) if all_active_mask else None,
         )
     
     def _compute_gae_vectorized(
@@ -193,17 +206,16 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         final_global_states,                            # T x N nested list
         agent_idx: int,
         num_agents: int,
+        active_mask: Optional[torch.Tensor] = None,     # (T, N) or None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         向量化 GAE 计算，沿 env 维度并行。
         
-        逻辑与原 _compute_gae_with_truncation 完全等价，但消除了 per-env 的
-        Python for-loop，仅保留时间维度 T 的反向循环。
+        支持 A+ 透明 GAE：当 active_mask 存在时，ON_EDGE（inactive）步的奖励
+        被累积到前一个 READY（active）步的 δ 中，GAE 的 λ-衰减跨越 inactive 步。
+        inactive 步的 advantage 始终为 0，loss 中也会被 mask 掉。
         
-        三种情况统一为:
-            next_val:  terminated→0,  truncated→V(final_state),  normal→V[t+1]
-            delta   =  r[t] + γ * next_val - V[t]   （统一公式）
-            last_gae:  done→δ（重置）,  ¬done→δ + γλ·last_gae
+        无 active_mask 时退化为标准 GAE，完全向后兼容。
         
         Returns:
             advantages: (T*N,)
@@ -212,7 +224,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         T, N = rewards.shape
         device = rewards.device
 
-        # ---- 1. 构建 truncation mask (T, N) ----
+        # ---- 1. 构建 truncation / done mask (T, N) ----
         if truncateds is not None:
             trunc_mask = truncateds > 0.5                # (T, N) bool
         else:
@@ -222,15 +234,13 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
         term_mask = done_mask & ~trunc_mask              # terminated: done 且非 truncated
 
         # ---- 2. 批量预计算所有 truncation 处的 bootstrap value ----
-        #   收集所有 (t, env) 处的 final_state，一次 critic forward 替代逐个调用
         trunc_bootstrap = torch.zeros(T, N, device=device)
 
         if trunc_mask.any():
             trunc_positions = trunc_mask.nonzero(as_tuple=False)  # (K, 2)
 
-            # 收集有效的 final_state
             batch_states = []
-            valid_k_indices = []                          # 在 trunc_positions 中的行号
+            valid_k_indices = []
             for k in range(len(trunc_positions)):
                 t_idx = trunc_positions[k, 0].item()
                 e_idx = trunc_positions[k, 1].item()
@@ -240,60 +250,108 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                         torch.as_tensor(fs, dtype=torch.float32, device=device)
                     )
                     valid_k_indices.append(k)
-                # fs 为 None 时保持 trunc_bootstrap[t,e]=0（与原 _get_truncation_value 一致）
 
             if batch_states:
-                states_t = torch.stack(batch_states)          # (K_valid, state_dim)
+                states_t = torch.stack(batch_states)
                 one_hot = torch.zeros(len(batch_states), num_agents, device=device)
                 one_hot[:, agent_idx] = 1.0
                 critic_in = torch.cat([states_t, one_hot], dim=-1)
 
-                v_norm = self.critic(critic_in).squeeze(-1)   # (K_valid,)
+                v_norm = self.critic(critic_in).squeeze(-1)
                 if self.use_value_norm and self.ret_rms is not None:
                     v_real = v_norm * self.ret_rms.std + self.ret_rms.mean
                 else:
                     v_real = v_norm
 
-                # 填入 trunc_bootstrap
                 for vi, k in enumerate(valid_k_indices):
                     t_idx = trunc_positions[k, 0].item()
                     e_idx = trunc_positions[k, 1].item()
                     trunc_bootstrap[t_idx, e_idx] = v_real[vi]
 
         # ---- 3. 最后一步 (t=T-1) 的 bootstrap value ----
-        #   原始代码: _get_denormalized_value(critic_input_last)
-        #   ≡ values[-1] (因为 critic 输入相同，denormalize 相同)
         last_step_bootstrap = values[-1].clone()              # (N,)
 
-        # ---- 4. 反向循环（仅沿 T 维度，N 维度完全向量化） ----
+        # ---- 4. 反向循环 ----
+        use_transparent = active_mask is not None
+        active_bool = active_mask > 0.5 if use_transparent else None  # (T, N) bool
+
         advantages = torch.zeros(T, N, device=device)
         last_gae = torch.zeros(N, device=device)
 
-        for t in reversed(range(T)):
-            # 4a. 计算 next_val (N,)
-            if t == T - 1:
-                next_val = last_step_bootstrap.clone()
-            else:
-                next_val = values[t + 1].clone()              # normal: V[t+1]
+        if not use_transparent:
+            # ===== 标准 GAE（无 active_mask，完全向后兼容）=====
+            for t in reversed(range(T)):
+                if t == T - 1:
+                    next_val = last_step_bootstrap.clone()
+                else:
+                    next_val = values[t + 1].clone()
 
-            # terminated → next_val = 0
-            next_val = torch.where(term_mask[t], torch.zeros_like(next_val), next_val)
+                next_val = torch.where(term_mask[t], torch.zeros_like(next_val), next_val)
+                if trunc_mask[t].any():
+                    next_val = torch.where(trunc_mask[t], trunc_bootstrap[t], next_val)
 
-            # truncated → next_val = V(final_state)
-            if trunc_mask[t].any():
-                next_val = torch.where(trunc_mask[t], trunc_bootstrap[t], next_val)
+                delta = rewards[t] + self.gamma * next_val - values[t]
+                last_gae = torch.where(
+                    done_mask[t],
+                    delta,
+                    delta + self.gamma * self.gae_lambda * last_gae,
+                )
+                advantages[t] = last_gae
+        else:
+            # ===== A+ 透明 GAE =====
+            # ON_EDGE 步的奖励被累积到前一个 READY 步的多步 TD-error 中。
+            #
+            # 维护三个累积器 (N,)：
+            #   acc_reward:     累积 inactive 步的折扣奖励
+            #   acc_discount:   累积纯折扣因子 γ^k（用于 δ_eff）
+            #   acc_gae_decay:  累积 GAE 衰减 (γλ)^k（用于 λ-加权递推）
+            # 以及:
+            #   next_active_val: 时间上最近的 active 步的 V 或 bootstrap (N,)
+            next_active_val = last_step_bootstrap.clone()     # (N,)
+            acc_reward = torch.zeros(N, device=device)
+            acc_discount = torch.ones(N, device=device)
+            acc_gae_decay = torch.ones(N, device=device)
 
-            # 4b. TD error: δ = r + γ·next_val − V  （三种情况的统一公式）
-            delta = rewards[t] + self.gamma * next_val - values[t]
+            for t in reversed(range(T)):
+                active_t = active_bool[t]                     # (N,) bool
 
-            # 4c. GAE 更新: done 时重置为 δ，否则 δ + γλ·last_gae
-            last_gae = torch.where(
-                done_mask[t],
-                delta,
-                delta + self.gamma * self.gae_lambda * last_gae,
-            )
+                # ---- 4a. done 边界处理 ----
+                # done 时：重置累积器 + 注入 terminal/trunc 的 bootstrap value
+                if done_mask[t].any():
+                    done_val = torch.where(
+                        term_mask[t],
+                        torch.zeros_like(next_active_val),
+                        torch.where(trunc_mask[t], trunc_bootstrap[t], next_active_val),
+                    )
+                    next_active_val = torch.where(done_mask[t], done_val, next_active_val)
+                    last_gae = torch.where(done_mask[t], torch.zeros_like(last_gae), last_gae)
+                    acc_reward = torch.where(done_mask[t], torch.zeros_like(acc_reward), acc_reward)
+                    acc_discount = torch.where(done_mask[t], torch.ones_like(acc_discount), acc_discount)
+                    acc_gae_decay = torch.where(done_mask[t], torch.ones_like(acc_gae_decay), acc_gae_decay)
 
-            advantages[t] = last_gae
+                # ---- 4b. active 步：用累积量计算多步 δ + GAE ----
+                # δ_eff = r_t + γ*(acc_reward + acc_discount * V_next_active) - V_t
+                #       = r_t + γ*r_{t+1} + γ²*r_{t+2} + ... + γ^K * V_next_active - V_t
+                effective_next_val = acc_reward + acc_discount * next_active_val
+                delta_active = rewards[t] + self.gamma * effective_next_val - values[t]
+                gae_active = delta_active + self.gamma * self.gae_lambda * acc_gae_decay * last_gae
+
+                # ---- 4c. inactive 步：累积奖励和折扣 ----
+                new_acc_reward = rewards[t] + self.gamma * acc_reward
+                new_acc_discount = self.gamma * acc_discount
+                new_acc_gae_decay = self.gamma * self.gae_lambda * acc_gae_decay
+
+                # ---- 4d. 根据 active/inactive 选择性更新 ----
+                last_gae = torch.where(active_t, gae_active, last_gae)
+                advantages[t] = torch.where(active_t, gae_active, torch.zeros_like(gae_active))
+
+                # next_active_val: active 步更新为 V[t]
+                next_active_val = torch.where(active_t, values[t], next_active_val)
+
+                # 累积器: active 步重置, inactive 步累积
+                acc_reward = torch.where(active_t, torch.zeros_like(acc_reward), new_acc_reward)
+                acc_discount = torch.where(active_t, torch.ones_like(acc_discount), new_acc_discount)
+                acc_gae_decay = torch.where(active_t, torch.ones_like(acc_gae_decay), new_acc_gae_decay)
 
         returns = advantages + values
         return advantages.view(-1), returns.view(-1)
@@ -329,10 +387,22 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
             epoch_approx_kl = []
             
             for mb in batch.split(size=minibatch_size, shuffle=True, merge_last=True):
-                # Minibatch-level advantage normalization
+                # 构建 active_mask 权重 (1=active, 0=inactive)
+                if mb.active_mask is not None:
+                    am = mb.active_mask.float()               # (B,)
+                    am_sum = am.sum().clamp(min=1.0)          # 避免除零
+                else:
+                    am = None
+                
+                # Minibatch-level advantage normalization（仅对 active 样本归一化）
                 mb_adv = mb.adv
                 if self.normalize_advantage:
-                    mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                    if am is not None:
+                        active_adv = mb_adv[am > 0.5]
+                        if active_adv.numel() > 1:
+                            mb_adv = (mb_adv - active_adv.mean()) / (active_adv.std() + 1e-8)
+                    else:
+                        mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
                 
                 # ===== Actor update =====
                 new_log_prob, entropy = self.policy.evaluate_actions_flat(
@@ -341,13 +411,18 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                 logratio = new_log_prob - mb.log_prob
                 ratio = logratio.exp()
                 
-                # Policy loss (clipped surrogate)
+                # Policy loss (clipped surrogate, masked by active_mask)
                 pg_loss1 = -mb_adv * ratio
                 pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - self.clip_range, 1 + self.clip_range)
-                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                pg_loss_per_sample = torch.max(pg_loss1, pg_loss2)
                 
-                # Entropy loss (only for actor)
-                entropy_loss = entropy.mean()
+                if am is not None:
+                    pg_loss = (pg_loss_per_sample * am).sum() / am_sum
+                    entropy_loss = (entropy * am).sum() / am_sum
+                else:
+                    pg_loss = pg_loss_per_sample.mean()
+                    entropy_loss = entropy.mean()
+                
                 actor_loss = pg_loss - self.ent_coef * entropy_loss
                 
                 self.actor_optimizer.zero_grad()
@@ -359,7 +434,7 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                     self.actor_optimizer.step()
                     all_actor_grad_norm.append(actor_grad_norm.item())
                 
-                # ===== Critic update =====
+                # ===== Critic update (masked by active_mask) =====
                 new_value = self.critic(mb.global_state).squeeze(-1)
 
                 # 归一化 target 用于 Critic loss
@@ -375,9 +450,14 @@ class MAPPOAlgo(ActorCriticOnPolicyAlgo):
                         new_value - mb.value, -self.clip_range, self.clip_range
                     )
                     v_loss_clipped = (v_clipped - target) ** 2
-                    v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    v_loss_per_sample = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
                 else:
-                    v_loss = 0.5 * ((new_value - target) ** 2).mean()
+                    v_loss_per_sample = 0.5 * (new_value - target) ** 2
+                
+                if am is not None:
+                    v_loss = (v_loss_per_sample * am).sum() / am_sum
+                else:
+                    v_loss = v_loss_per_sample.mean()
                 
                 critic_loss = self.vf_coef * v_loss
                 

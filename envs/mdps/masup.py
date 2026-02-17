@@ -1,10 +1,10 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import numpy as np
 import random
 from gymnasium.spaces import Box, Discrete
 
-from envs.mdps.patrol_core import AgentState, TickResult
-from envs.mdps.base_envs import EventDrivenEnv
+from patrol_core import AgentState, TickResult
+from base_envs import EventDrivenEnv
 
 class MASUPEnv(EventDrivenEnv):
     def __init__(self, config: Dict, **kwargs):
@@ -12,7 +12,6 @@ class MASUPEnv(EventDrivenEnv):
 
         # 需跟踪的物理状态
         self.obs_timer = 0    # 供观测使用,只记录到T
-        # self.step_interval = 0 # 每次step物理环境会返回
         self.T_flag = False
         # 记录每步每个智能体消除的 Idleness 量 (idleness * phi)
         self._agent_idleness_reduction = {}
@@ -113,7 +112,7 @@ class MASUPEnv(EventDrivenEnv):
     
     def step(self, actions: Dict[str, int]):
         """
-        使用自己的物理推进逻辑（考虑 T_time 截断）,而非直接调用 world.tick_to_next_event()
+        由于需要考虑 T_time 截断, 使用自己的step推进逻辑, 而非直接调用 world.tick_to_next_event()
         """
         # 0. 在设置动作前先获取这一步哪些智能体需要决策,用于计算IDI
         deciding_agents = []
@@ -442,7 +441,7 @@ class MASUPEnv(EventDrivenEnv):
         for agent_str in self.agents:
             agent_id = int(agent_str.split('_')[1])
             action_mask = self.get_action_mask(agent_str)
-            active_mask = 1 if self.world.agents[agent_id].state == AgentState.READY else 0 
+            active_mask = 1 if self.world.is_ready(agent_id) else 0 
 
             infos[agent_str] = {"action_mask": action_mask, "active_mask": active_mask}
         

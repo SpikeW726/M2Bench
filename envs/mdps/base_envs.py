@@ -4,34 +4,8 @@ from envs.mdps.patrol_core import PatrolWorld, TickResult
 from typing import Dict, Any, Optional
 import gymnasium
 
-
-class FixedStepEnv(ParallelEnv):
-    """固定时间步、同步决策环境"""
-    
+class BaseEnv(ParallelEnv):
     def __init__(self, config):
-        self.world = PatrolWorld(config)
-    
-    def step(self, actions: Dict[str, int]):
-        # 1. 为所有在节点上的智能体设置动作
-        for agent_str, action_idx in actions.items():
-            agent_id = int(agent_str.split('_')[1])
-            
-            if self.world.is_ready(agent_id):
-                target = self._action_to_target(agent_id, action_idx)
-                self.world.set_move_action(agent_id, target)
-            # 在边上的智能体：不做任何事
-        
-        # 2. 固定推进 1 个时间单位
-        result = self.world.tick(dt=1.0)
-        
-        # 3. 构建返回值
-        return self._build_returns(result)
-        
-
-class EventDrivenEnv(ParallelEnv):
-    """事件驱动、同步决策环境"""
-    
-    def __init__(self, config: Dict):
         super().__init__()
         self.config = config
         self.world = PatrolWorld(config)
@@ -41,46 +15,14 @@ class EventDrivenEnv(ParallelEnv):
         self.possible_agents = [f"agent_{i}" for i in range(config["num_agents"])]
         self.agents = self.possible_agents[:]
 
+    @abstractmethod
     def step(self, actions: Dict[str, int]):
-        """执行一步，返回 (obs, rewards, terminations, truncations, infos)"""
-        # 1. 只为"可以决策的智能体"设置动作
-        for agent_str, action_idx in actions.items():
-            agent_id = int(agent_str.split('_')[1])
-            
-            if self.world.is_ready(agent_id):
-                if self.enable_wait:
-                    if action_idx == 0: # 所有动作空间有"等待"的环境须遵循 action_idx=0 代表"等待"
-                        self.world.set_wait_action(agent_id)
-                    else:
-                        target = self._action_to_target(agent_id, action_idx)
-                        self.world.set_move_action(agent_id, target)
-                else:
-                    target = self._action_to_target(agent_id, action_idx)
-                    self.world.set_move_action(agent_id, target)
-        
-        # 2. 推进到最近的事件
-        result = self.world.tick_to_next_event()
-        
-        # 3. 构建返回值
-        obs = self._build_obs()
-        rewards = self._compute_rewards(result)
-        terminations = self._compute_terminations()
-        truncations = self._compute_truncations()
-        infos = self._build_info(result)
-        
-        return obs, rewards, terminations, truncations, infos
+        pass
 
+    @abstractmethod
     def reset(self, seed: Optional[int] = None):
-        """重置环境，返回 (obs, infos)"""
-        self.world.reset()
-        self.agents = self.possible_agents[:]
-        
-        obs = self._build_obs(result=None)
-        infos = self._build_info(result=None)
-        
-        return obs, infos
+        pass
 
-    
     @abstractmethod
     def observation_space(self, agent: str) -> gymnasium.spaces.Space:
         """
@@ -145,3 +87,96 @@ class EventDrivenEnv(ParallelEnv):
     def _action_to_target(self, agent_id: int, action_idx: int) -> int:
         """将动作索引转换为目标节点"""
         pass
+
+
+class FixedStepEnv(BaseEnv):
+    """固定时间步、同步决策环境"""
+    
+    def __init__(self, config):
+        super().__init__(config)
+    
+    def step(self, actions: Dict[str, int]):
+        """执行一步，返回 (obs, rewards, terminations, truncations, infos)"""
+        # 1. 只为"可以决策的智能体"设置动作
+        for agent_str, action_idx in actions.items():
+            agent_id = int(agent_str.split('_')[1])
+            
+            if self.world.is_ready(agent_id):
+                if self.enable_wait:
+                    if action_idx == 0: # 所有动作空间有"等待"的环境须遵循 action_idx=0 代表"等待"
+                        self.world.set_wait_action(agent_id)
+                    else:
+                        target = self._action_to_target(agent_id, action_idx)
+                        self.world.set_move_action(agent_id, target)
+                else:
+                    target = self._action_to_target(agent_id, action_idx)
+                    self.world.set_move_action(agent_id, target)
+        
+        # 2. 推进一个时间步
+        result = self.world.tick(dt=1.0)
+        
+        # 3. 构建返回值
+        obs = self._build_obs(result)
+        rewards = self._compute_rewards(result)
+        terminations = self._compute_terminations()
+        truncations = self._compute_truncations()
+        infos = self._build_info(result)
+        
+        return obs, rewards, terminations, truncations, infos
+
+    def reset(self, seed: Optional[int] = None):
+        """重置环境，返回 (obs, infos)"""
+        self.world.reset()
+        self.agents = self.possible_agents[:]
+        
+        obs = self._build_obs(result=None)
+        infos = self._build_info(result=None)
+        
+        return obs, infos
+
+    
+    
+class EventDrivenEnv(BaseEnv):
+    """事件驱动、同步决策环境"""
+    
+    def __init__(self, config: Dict):
+        super().__init__(config)
+
+    def step(self, actions: Dict[str, int]):
+        """执行一步，返回 (obs, rewards, terminations, truncations, infos)"""
+        # 1. 只为"可以决策的智能体"设置动作
+        for agent_str, action_idx in actions.items():
+            agent_id = int(agent_str.split('_')[1])
+            
+            if self.world.is_ready(agent_id):
+                if self.enable_wait:
+                    if action_idx == 0: # 所有动作空间有"等待"的环境须遵循 action_idx=0 代表"等待"
+                        self.world.set_wait_action(agent_id)
+                    else:
+                        target = self._action_to_target(agent_id, action_idx)
+                        self.world.set_move_action(agent_id, target)
+                else:
+                    target = self._action_to_target(agent_id, action_idx)
+                    self.world.set_move_action(agent_id, target)
+        
+        # 2. 推进到最近的事件
+        result = self.world.tick_to_next_event()
+        
+        # 3. 构建返回值
+        obs = self._build_obs(result)
+        rewards = self._compute_rewards(result)
+        terminations = self._compute_terminations()
+        truncations = self._compute_truncations()
+        infos = self._build_info(result)
+        
+        return obs, rewards, terminations, truncations, infos
+
+    def reset(self, seed: Optional[int] = None):
+        """重置环境，返回 (obs, infos)"""
+        self.world.reset()
+        self.agents = self.possible_agents[:]
+        
+        obs = self._build_obs(result=None)
+        infos = self._build_info(result=None)
+        
+        return obs, infos

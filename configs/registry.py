@@ -41,7 +41,7 @@ ALGO_REGISTRY: Dict[str, Dict[str, Any]] = {
 # ---- 环境 ----
 ENV_REGISTRY: Dict[str, Dict[str, str]] = {
     "masup": {
-        "module": "envs.mdps.masup_env",
+        "module": "envs.mdps.masup",
         "class_name": "MASUPEnv",
     },
 }

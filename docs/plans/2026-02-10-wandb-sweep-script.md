@@ -46,7 +46,7 @@ from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 import wandb
 
-from envs.mdps.masup_env import MASUPEnv
+from envs.mdps.masup import MASUPEnv
 from envs.venvs import DummyVectorEnv, SubprocVectorEnv
 from networks.mlp import ActorMLP, CriticMLP
 from policies.rl.rl_base import ActorPolicy
@@ -1003,7 +1003,7 @@ git commit -m "refactor(wandb-sweep): add error handling and code formatting"
 
 ```
 sweep_mappo.py
-├── envs/mdps/masup_env.py (MASUPEnv)
+├── envs/mdps/masup.py (MASUPEnv)
 ├── envs/venvs.py (DummyVectorEnv, SubprocVectorEnv)
 ├── networks/mlp.py (ActorMLP, CriticMLP)
 ├── policies/rl/rl_base.py (ActorPolicy)

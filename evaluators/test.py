@@ -21,7 +21,7 @@ os.chdir(project_root)
 import torch
 import numpy as np
 
-from envs.mdps.masup_env import MASUPEnv
+from envs.mdps.masup import MASUPEnv
 from configs.registry import load_env_config, _env_config_to_dicts
 from policies.rl.rl_base import ActorPolicy
 from policies.marl.marl_base import MultiAgentPolicy

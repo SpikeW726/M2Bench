@@ -31,7 +31,7 @@ import h5py
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
 from policies.heuritic.er import ERPolicy
 from envs.mdps.base_envs import EventDrivenEnv
-from envs.mdps.masup_env import MASUPEnv
+from envs.mdps.masup import MASUPEnv
 
 
 @dataclass
