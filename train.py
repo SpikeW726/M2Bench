@@ -197,6 +197,9 @@ def train(config: ExperimentConfig):
     # ---- 7. 构建算法 ----
     # 准备运行时上下文参数
     context_kwargs = dict(num_envs=tc.num_envs)
+    context_kwargs["action_dim"] = dims["action_dim"]
+    context_kwargs["state_dim"] = dims["state_dim"]
+    context_kwargs["n_agents"] = dims["num_agents"]
 
     if isinstance(tc, OnPolicyTrainerConfig):
         context_kwargs["total_iterations"] = tc.max_iterations

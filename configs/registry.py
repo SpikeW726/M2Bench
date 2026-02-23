@@ -10,7 +10,7 @@ import torch.nn as nn
 import yaml
 
 from configs.env_configs import EnvConfig
-from configs.algo_configs import AlgoParams, MAPPOParams, IPPOParams
+from configs.algo_configs import AlgoParams, MAPPOParams, IPPOParams, VDPPOParams
 from configs.training_configs import (
     TrainerConfig, OnPolicyTrainerConfig, OffPolicyTrainerConfig,
 )
@@ -24,6 +24,12 @@ from configs.exp_configs import ExperimentConfig
 
 # ---- 算法 ----
 ALGO_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "ppo": {
+        "module": "algorithms.rl.ppo",
+        "class_name": "PPOAlgo",
+        "params_class": IPPOParams,
+        "trainer_type": "on_policy",
+    },
     "mappo": {
         "module": "algorithms.marl.mappo",
         "class_name": "MAPPOAlgo",
@@ -34,6 +40,12 @@ ALGO_REGISTRY: Dict[str, Dict[str, Any]] = {
         "module": "algorithms.marl.ippo",
         "class_name": "IPPOAlgo",
         "params_class": IPPOParams,
+        "trainer_type": "on_policy",
+    },
+    "vdppo": {
+        "module": "algorithms.marl.vdppo",
+        "class_name": "VDPPOAlgo",
+        "params_class": VDPPOParams,
         "trainer_type": "on_policy",
     },
 }

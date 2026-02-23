@@ -1,13 +1,17 @@
 """RL 算法基类层次结构。
 
 BaseAlgorithm
-├── ActorCriticOnPolicyAlgo  (PPO/MAPPO/IPPO)
+├── ActorCriticOnPolicyAlgo  ← AC On-Policy 通用基础设施 (GAE, prepare_batch)
+│   └── PPOBase              ← PPO 家族共享 update (在 rl/ppo.py 中定义)
+│       ├── PPOAlgo
+│       ├── IPPOAlgo
+│       └── MAPPOAlgo
 └── QLearningOffPolicyAlgo   (DQN/SAC, 待完善)
 
 设计原则：
-- 基类只管公共逻辑（loss 计算、GAE、advantage 归一化）
-- optimizer / lr_scheduler 由子类创建（不同算法需求不同）
-- 超参通过 dataclass Params 传入，避免散列参数
+- ActorCriticOnPolicyAlgo 只含算法无关的公共逻辑 (GAE, value norm, prepare_batch)
+- PPO 特有逻辑 (clipped surrogate, KL early stopping) 在 PPOBase 中
+- optimizer / lr_scheduler 由最终子类创建
 """
 
 from abc import ABC, abstractmethod
@@ -16,9 +20,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from configs.algo_configs import PPOParams
+from configs.algo_configs import OnPolicyParams
 from policies.rl.rl_base import RLBasePolicy, ActorPolicy
 from data.batch import BaseBatch, RolloutBatch, TransitionBatch
 
@@ -55,26 +58,8 @@ class BaseAlgorithm(nn.Module, ABC):
         self.lr_scheduler = None
 
     @abstractmethod
-    def compute_loss(self, batch: BaseBatch) -> tuple[torch.Tensor, TrainingStats]:
-        """计算 loss，返回 (loss_tensor, training_stats)。"""
+    def update(self, batch, **kwargs) -> TrainingStats:
         pass
-
-    def update(self, batch: BaseBatch, **kwargs) -> TrainingStats:
-        """单步梯度更新（子类通常会 override）。"""
-        batch = batch.to_tensor(self.device)
-        loss, stats = self.compute_loss(batch)
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        if getattr(self, "max_grad_norm", 0) > 0:
-            nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-        self.optimizer.step()
-
-        if self.lr_scheduler is not None:
-            self.lr_scheduler.step()
-
-        stats.loss = loss.item()
-        return stats
 
     def set_training_mode(self, mode: bool):
         """切换 train/eval 模式。"""
@@ -88,164 +73,264 @@ class BaseAlgorithm(nn.Module, ABC):
 
 class ActorCriticOnPolicyAlgo(BaseAlgorithm):
     """
-    On-policy Actor-Critic 基类 (A2C / PPO / MAPPO / IPPO)。
+    On-policy Actor-Critic 通用基类。
 
-    功能：
-    - GAE 计算
-    - Advantage 归一化
-    - Minibatch 切分 + multi-epoch 更新
+    提供算法无关的公共基础设施，不含任何 PPO / A2C 特有逻辑：
+    - _gae_vectorized():        向量化 GAE（标准 + A+ 透明 GAE）
+    - _compute_trunc_bootstrap(): truncation 处的 V bootstrap
+    - prepare_batch():          单 RolloutBatch 的 GAE 预处理
 
-    构造参数通过 PPOParams (或其子类) 传入。
-    optimizer 由子类创建，因为不同算法有不同优化器配置
-    （单优化器 vs 双优化器，不同的参数组合）。
+    update() 留给子类（PPOBase / A2CBase 等）实现。
     """
 
-    def __init__(self, policy, critic: nn.Module, params: PPOParams):
+    def __init__(self, policy, critic: nn.Module, params: OnPolicyParams, num_envs: int = 1):
         super().__init__(policy)
         self.critic = critic.to(self.device)
+        self.num_envs = num_envs
 
-        # 从 params 解包 PPO 系列共享超参
+        # Actor-Critic On-Policy 通用超参
         self.gamma = params.gamma
         self.gae_lambda = params.gae_lambda
-        self.clip_range = params.clip_range
         self.vf_coef = params.vf_coef
         self.ent_coef = params.ent_coef
         self.max_grad_norm = params.max_grad_norm
         self.normalize_advantage = params.normalize_advantage
+        self.use_active_mask = params.use_active_mask
+        self.use_value_norm = params.use_value_norm
 
-    # ---- GAE ----
+        # Value Normalization（由子类决定是否初始化 ret_rms）
+        self.ret_rms = None
 
-    def compute_gae(
+    # ====================================================================
+    #                     向量化 GAE（核心共享方法）
+    # ====================================================================
+
+    def _gae_vectorized(
         self,
-        rewards: torch.Tensor,
-        values: torch.Tensor,
-        dones: torch.Tensor,
-        next_value: torch.Tensor,
+        rewards: torch.Tensor,                          # (T, N)
+        values: torch.Tensor,                           # (T, N) real scale
+        dones: torch.Tensor,                            # (T, N)
+        truncateds: Optional[torch.Tensor],             # (T, N) or None
+        trunc_bootstrap: torch.Tensor,                  # (T, N) 预计算的 truncation bootstrap V
+        active_mask: Optional[torch.Tensor] = None,     # (T, N) or None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Generalized Advantage Estimation.
+        向量化 GAE，沿 env 维度 N 并行计算。
+
+        支持两种模式：
+        1. 标准 GAE（active_mask=None）
+        2. A+ 透明 GAE（active_mask 存在时，inactive 步的奖励累积到前一个 active 步）
 
         Args:
-            rewards: (T,)
-            values:  (T,) value estimates
-            dones:   (T,) done flags
-            next_value: scalar, V(s_{T})
+            trunc_bootstrap: 每个 truncation 点的 V(s') bootstrap 值，
+                             非 truncation 位置为 0。由调用方预计算。
 
         Returns:
-            advantages: (T,)
-            returns:    (T,)
+            advantages (T*N,), returns (T*N,)
         """
-        T = len(rewards)
-        advantages = torch.zeros_like(rewards)
-        last_gae = 0.0
+        T, N = rewards.shape
+        device = rewards.device
 
-        for t in reversed(range(T)):
-            next_val = next_value if t == T - 1 else values[t + 1]
-            delta = rewards[t] + self.gamma * next_val * (1 - dones[t]) - values[t]
-            last_gae = delta + self.gamma * self.gae_lambda * (1 - dones[t]) * last_gae
-            advantages[t] = last_gae
+        # ---- 1. 构建 mask ----
+        if truncateds is not None:
+            trunc_mask = truncateds > 0.5
+        else:
+            trunc_mask = torch.zeros(T, N, dtype=torch.bool, device=device)
+
+        done_mask = dones > 0.5
+        term_mask = done_mask & ~trunc_mask
+
+        # ---- 2. 最后一步 bootstrap ----
+        last_step_bootstrap = values[-1].clone()  # (N,)
+
+        # ---- 3. 反向循环 ----
+        use_transparent = active_mask is not None
+        active_bool = active_mask > 0.5 if use_transparent else None
+
+        advantages = torch.zeros(T, N, device=device)
+        last_gae = torch.zeros(N, device=device)
+
+        if not use_transparent:
+            # ===== 标准 GAE =====
+            for t in reversed(range(T)):
+                if t == T - 1:
+                    next_val = last_step_bootstrap.clone()
+                else:
+                    next_val = values[t + 1].clone()
+
+                next_val = torch.where(term_mask[t], torch.zeros_like(next_val), next_val)
+                if trunc_mask[t].any():
+                    next_val = torch.where(trunc_mask[t], trunc_bootstrap[t], next_val)
+
+                delta = rewards[t] + self.gamma * next_val - values[t]
+                last_gae = torch.where(
+                    done_mask[t],
+                    delta,
+                    delta + self.gamma * self.gae_lambda * last_gae,
+                )
+                advantages[t] = last_gae
+        else:
+            # ===== A+ 透明 GAE =====
+            next_active_val = last_step_bootstrap.clone()
+            acc_reward = torch.zeros(N, device=device)
+            acc_discount = torch.ones(N, device=device)
+            acc_gae_decay = torch.ones(N, device=device)
+
+            for t in reversed(range(T)):
+                active_t = active_bool[t]
+
+                # done 边界处理
+                if done_mask[t].any():
+                    done_val = torch.where(
+                        term_mask[t],
+                        torch.zeros_like(next_active_val),
+                        torch.where(trunc_mask[t], trunc_bootstrap[t], next_active_val),
+                    )
+                    next_active_val = torch.where(done_mask[t], done_val, next_active_val)
+                    last_gae = torch.where(done_mask[t], torch.zeros_like(last_gae), last_gae)
+                    acc_reward = torch.where(done_mask[t], torch.zeros_like(acc_reward), acc_reward)
+                    acc_discount = torch.where(done_mask[t], torch.ones_like(acc_discount), acc_discount)
+                    acc_gae_decay = torch.where(done_mask[t], torch.ones_like(acc_gae_decay), acc_gae_decay)
+
+                # active 步：用累积量计算多步 δ + GAE
+                effective_next_val = acc_reward + acc_discount * next_active_val
+                delta_active = rewards[t] + self.gamma * effective_next_val - values[t]
+                gae_active = delta_active + self.gamma * self.gae_lambda * acc_gae_decay * last_gae
+
+                # inactive 步：累积奖励和折扣
+                new_acc_reward = rewards[t] + self.gamma * acc_reward
+                new_acc_discount = self.gamma * acc_discount
+                new_acc_gae_decay = self.gamma * self.gae_lambda * acc_gae_decay
+
+                # 选择性更新
+                last_gae = torch.where(active_t, gae_active, last_gae)
+                advantages[t] = torch.where(active_t, gae_active, torch.zeros_like(gae_active))
+                next_active_val = torch.where(active_t, values[t], next_active_val)
+                acc_reward = torch.where(active_t, torch.zeros_like(acc_reward), new_acc_reward)
+                acc_discount = torch.where(active_t, torch.ones_like(acc_discount), new_acc_discount)
+                acc_gae_decay = torch.where(active_t, torch.ones_like(acc_gae_decay), new_acc_gae_decay)
 
         returns = advantages + values
-        return advantages, returns
+        return advantages.view(-1), returns.view(-1)
 
-    # ---- Batch 预处理 ----
+    def _compute_trunc_bootstrap(
+        self,
+        truncateds: torch.Tensor,       # (T, N) or None
+        final_global_states,             # T x N nested list, or None
+        critic_input: torch.Tensor,      # (T*N, critic_dim) — 已构建好的 critic 输入
+        T: int,
+        N: int,
+    ) -> torch.Tensor:
+        """
+        计算 truncation 处的 bootstrap V(s')。
+
+        默认实现：直接用 final_global_state 过 critic。
+        MAPPO override 此方法以添加 agent one-hot 拼接和 value denorm。
+
+        Returns:
+            trunc_bootstrap: (T, N) tensor，非 truncation 位置为 0
+        """
+        device = critic_input.device
+        trunc_bootstrap = torch.zeros(T, N, device=device)
+
+        if truncateds is None or final_global_states is None:
+            return trunc_bootstrap
+
+        trunc_mask = truncateds > 0.5
+        if not trunc_mask.any():
+            return trunc_bootstrap
+
+        trunc_positions = trunc_mask.nonzero(as_tuple=False)  # (K, 2)
+
+        batch_states = []
+        valid_k_indices = []
+        for k in range(len(trunc_positions)):
+            t_idx = trunc_positions[k, 0].item()
+            e_idx = trunc_positions[k, 1].item()
+            fs = final_global_states[t_idx][e_idx] if final_global_states else None
+            if fs is not None:
+                batch_states.append(
+                    torch.as_tensor(fs, dtype=torch.float32, device=device)
+                )
+                valid_k_indices.append(k)
+
+        if batch_states:
+            states_t = torch.stack(batch_states)
+            v_raw = self.critic(states_t).squeeze(-1)
+
+            if self.use_value_norm and self.ret_rms is not None:
+                v_real = v_raw * self.ret_rms.std + self.ret_rms.mean
+            else:
+                v_real = v_raw
+
+            for vi, k in enumerate(valid_k_indices):
+                t_idx = trunc_positions[k, 0].item()
+                e_idx = trunc_positions[k, 1].item()
+                trunc_bootstrap[t_idx, e_idx] = v_real[vi]
+
+        return trunc_bootstrap
+
+    # ====================================================================
+    #                     Batch 预处理（通用 GAE 预处理）
+    # ====================================================================
 
     def prepare_batch(self, batch: RolloutBatch) -> RolloutBatch:
-        """用当前 critic 计算 value / adv / ret（采样后、更新前调用）。"""
+        """
+        单 RolloutBatch 的 GAE 预处理。
+
+        流程: reshape → compute values → trunc bootstrap → vectorized GAE → value norm → flatten
+        """
+        final_gs = batch.final_global_state
         batch = batch.to_tensor(self.device)
+
+        N = self.num_envs
+        total_size = batch.obs.shape[0]
+        T = total_size // N
 
         with torch.no_grad():
             critic_input = batch.global_state if batch.global_state is not None else batch.obs
-            values = self.critic(critic_input).squeeze(-1)
+            values_norm = self.critic(critic_input).squeeze(-1).view(T, N)
 
-            last_done = batch.done[-1]
-            if last_done > 0.5:
-                next_value = torch.tensor(0.0, device=self.device)
+            if self.use_value_norm and self.ret_rms is not None:
+                values = values_norm * self.ret_rms.std + self.ret_rms.mean
             else:
-                next_value = self.critic(critic_input[-1:]).squeeze(-1)
+                values = values_norm
 
-        batch.adv, batch.ret = self.compute_gae(batch.rew, values, batch.done, next_value)
-        batch.value = values
+            # Reshape for vectorized GAE
+            rew_2d = batch.rew.view(T, N)
+            done_2d = batch.done.view(T, N)
+            truncated_2d = batch.truncated.view(T, N) if batch.truncated is not None else None
+
+            # Truncation bootstrap
+            trunc_bootstrap = self._compute_trunc_bootstrap(
+                truncated_2d, final_gs, critic_input, T, N,
+            )
+
+            # Active mask (仅在开关开启时)
+            active_mask_2d = None
+            if self.use_active_mask and batch.active_mask is not None:
+                active_mask_2d = batch.active_mask.view(T, N)
+
+            adv, ret = self._gae_vectorized(
+                rew_2d, values, done_2d, truncated_2d, trunc_bootstrap, active_mask_2d,
+            )
+            values_flat = values_norm.view(-1)
+
+        # 更新 Value Normalization 统计量
+        if self.use_value_norm and self.ret_rms is not None:
+            if active_mask_2d is not None:
+                active_flat = batch.active_mask > 0.5
+                active_ret = ret[active_flat]
+                if active_ret.numel() > 0:
+                    self.ret_rms.update(active_ret)
+            else:
+                self.ret_rms.update(ret)
+
+        batch.adv = adv
+        batch.ret = ret
+        batch.value = values_flat
         return batch
 
-    # ---- Advantage 归一化 ----
-
-    def _normalize_advantage(self, adv: torch.Tensor) -> torch.Tensor:
-        if self.normalize_advantage and len(adv) > 1:
-            return (adv - adv.mean()) / (adv.std() + 1e-8)
-        return adv
-
-    # ---- Loss 计算 ----
-
-    def compute_policy_loss(self, batch: RolloutBatch) -> tuple[torch.Tensor, torch.Tensor]:
-        """计算 policy loss 和 entropy，子类必须 override。"""
-        raise NotImplementedError
-
-    def compute_value_loss(self, batch: RolloutBatch) -> torch.Tensor:
-        """计算 value loss，子类可 override（如 centralized critic）。"""
-        critic_input = batch.global_state if batch.global_state is not None else batch.obs
-        value_pred = self.critic(critic_input).squeeze(-1)
-        return F.mse_loss(value_pred, batch.ret)
-
-    def compute_loss(self, batch: RolloutBatch) -> tuple[torch.Tensor, TrainingStats]:
-        """单个 minibatch 的总 loss。"""
-        batch.adv = self._normalize_advantage(batch.adv)
-
-        policy_loss, entropy = self.compute_policy_loss(batch)
-        value_loss = self.compute_value_loss(batch)
-        loss = policy_loss + self.vf_coef * value_loss - self.ent_coef * entropy
-
-        stats = TrainingStats(
-            policy_loss=policy_loss.item(),
-            value_loss=value_loss.item(),
-            entropy=entropy.item(),
-        )
-        return loss, stats
-
-    # ---- Multi-epoch minibatch update ----
-
-    def update(
-        self,
-        batch: RolloutBatch,
-        minibatch_size: int = -1,
-        update_epochs: int = 1,
-    ) -> TrainingStats:
-        """
-        Multi-epoch minibatch 更新。
-
-        Args:
-            batch: 完整 rollout 数据
-            minibatch_size: 每个 minibatch 的样本数，-1 = 不切分
-            update_epochs: 对同一批数据的遍历轮数
-        """
-        batch = batch.to_tensor(self.device)
-        all_stats = []
-
-        for _ in range(update_epochs):
-            for minibatch in batch.split(size=minibatch_size, shuffle=True, merge_last=True):
-                loss, stats = self.compute_loss(minibatch)
-
-                self.optimizer.zero_grad()
-                loss.backward()
-                if self.max_grad_norm > 0:
-                    nn.utils.clip_grad_norm_(
-                        list(self.policy.parameters()) + list(self.critic.parameters()),
-                        self.max_grad_norm,
-                    )
-                self.optimizer.step()
-
-                if self.lr_scheduler is not None:
-                    self.lr_scheduler.step()
-
-                stats.loss = loss.item()
-                all_stats.append(stats)
-
-        return TrainingStats(
-            loss=np.mean([s.loss for s in all_stats]),
-            policy_loss=np.mean([s.policy_loss for s in all_stats]),
-            value_loss=np.mean([s.value_loss for s in all_stats]),
-            entropy=np.mean([s.entropy for s in all_stats]),
-        )
 
 
 # ============================================================================
@@ -275,10 +360,7 @@ class QLearningOffPolicyAlgo(BaseAlgorithm):
         self.target_update_freq = target_update_freq
         self._update_count = 0
 
-        # optimizer
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
-
-        # target network（由子类调用 _create_target_network 创建）
         self.target_policy: Optional[RLBasePolicy] = None
 
     def _create_target_network(self):
@@ -302,7 +384,17 @@ class QLearningOffPolicyAlgo(BaseAlgorithm):
 
     def update(self, batch: TransitionBatch, **kwargs) -> TrainingStats:
         """梯度更新 + target network 更新。"""
-        stats = super().update(batch)
+        batch = batch.to_tensor(self.device)
+        loss, stats = self.compute_loss(batch)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        if self.max_grad_norm > 0:
+            nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+        self.optimizer.step()
+
+        stats.loss = loss.item()
+
         self._update_count += 1
         if self._update_count % self.target_update_freq == 0:
             if self.tau < 1.0:
@@ -310,3 +402,7 @@ class QLearningOffPolicyAlgo(BaseAlgorithm):
             else:
                 self._hard_update_target()
         return stats
+
+    @abstractmethod
+    def compute_loss(self, batch: TransitionBatch) -> tuple[torch.Tensor, TrainingStats]:
+        pass

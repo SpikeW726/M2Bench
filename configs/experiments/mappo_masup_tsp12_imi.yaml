@@ -32,6 +32,7 @@ env:
 
 # ---- 算法 (自动映射到 MAPPOParams) ----
 algo:
+  use_active_mask: True
   actor_lr: 3.0e-5
   critic_lr: 3.0e-4
   gamma: 0.999
