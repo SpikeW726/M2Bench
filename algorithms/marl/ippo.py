@@ -71,6 +71,7 @@ class IPPOAlgo(PPOBase):
 
         每个 agent 独立计算: values → trunc bootstrap → _gae_vectorized
         结果保留 Dict[str, RolloutBatch] 供 update 使用。
+        RNN 时记录 T/N 供 chunk_split 使用。
         """
         N = self.num_envs
         all_ret_for_norm = []
@@ -80,10 +81,21 @@ class IPPOAlgo(PPOBase):
             batch = batch.to_tensor(self.device)
             total_size = batch.obs.shape[0]
             T = total_size // N
+            self._last_T = T
+            self._last_N = N
 
             with torch.no_grad():
                 critic_input = batch.global_state if batch.global_state is not None else batch.obs
-                values_norm = self.critic(critic_input).squeeze(-1).view(T, N)
+                done_2d = batch.done.view(T, N)
+
+                if self.is_critic_recurrent:
+                    values_norm, critic_rnn_h = self._critic_rnn_values(
+                        critic_input, done_2d, T, N, agent_key=agent,
+                    )
+                    rN, H = critic_rnn_h.shape[1], critic_rnn_h.shape[3]
+                    batch.critic_rnn_hidden = critic_rnn_h.permute(0, 2, 1, 3).reshape(T * N, rN, H)
+                else:
+                    values_norm = self.critic(critic_input).squeeze(-1).view(T, N)
 
                 if self.use_value_norm and self.ret_rms is not None:
                     values = values_norm * self.ret_rms.std + self.ret_rms.mean
@@ -91,7 +103,6 @@ class IPPOAlgo(PPOBase):
                     values = values_norm
 
                 rew_2d = batch.rew.view(T, N)
-                done_2d = batch.done.view(T, N)
                 truncated_2d = batch.truncated.view(T, N) if batch.truncated is not None else None
 
                 trunc_bootstrap = self._compute_trunc_bootstrap(
@@ -111,7 +122,6 @@ class IPPOAlgo(PPOBase):
             batch.ret = ret
             batch.value = values_flat
 
-            # 收集 return 用于 value norm 统计更新
             if self.use_value_norm:
                 if active_mask_2d is not None:
                     active_flat = batch.active_mask > 0.5
@@ -123,7 +133,6 @@ class IPPOAlgo(PPOBase):
 
             batch_dict[agent] = batch
 
-        # 更新 Value Normalization 统计量
         if self.use_value_norm and self.ret_rms is not None and all_ret_for_norm:
             self.ret_rms.update(torch.cat(all_ret_for_norm, dim=0))
 
@@ -142,6 +151,7 @@ class IPPOAlgo(PPOBase):
         """
         同步 minibatch PPO 更新：所有 agent 的 batch 同步切分，
         per-minibatch 累加各 agent 的 loss 后做一次 optimizer step。
+        RNN 时使用 chunk_split + evaluate_actions_sequence。
         """
         agents = list(batch_dict.keys())
         n_agents = len(agents)
@@ -151,16 +161,27 @@ class IPPOAlgo(PPOBase):
         all_approx_kl = []
         all_grad_norm = []
 
+        _any_rnn = self.is_any_recurrent
+
         for epoch in range(update_epochs):
             epoch_approx_kl = []
 
-            # 同步切分: 每个 agent 独立 shuffle + split, 然后按 index 对齐
-            agent_mbs = {
-                agent: list(batch_dict[agent].split(
-                    size=minibatch_size, shuffle=True, merge_last=True,
-                ))
-                for agent in agents
-            }
+            if _any_rnn:
+                agent_mbs = {
+                    agent: list(batch_dict[agent].chunk_split(
+                        chunk_len=self.data_chunk_length,
+                        T=self._last_T, N=self._last_N,
+                        num_agents=1, minibatch_size=minibatch_size,
+                    ))
+                    for agent in agents
+                }
+            else:
+                agent_mbs = {
+                    agent: list(batch_dict[agent].split(
+                        size=minibatch_size, shuffle=True, merge_last=True,
+                    ))
+                    for agent in agents
+                }
             n_minibatches = len(agent_mbs[agents[0]])
 
             for mb_idx in range(n_minibatches):
@@ -177,12 +198,16 @@ class IPPOAlgo(PPOBase):
                     # ---- Active mask ----
                     if self.use_active_mask and mb.active_mask is not None:
                         am = mb.active_mask.float()
+                        if _any_rnn:
+                            am = am.reshape(-1)
                         am_sum = am.sum().clamp(min=1.0)
                     else:
                         am = None
 
                     # ---- Advantage normalization ----
                     mb_adv = mb.adv
+                    if _any_rnn:
+                        mb_adv = mb_adv.reshape(-1)
                     if self.normalize_advantage:
                         if am is not None:
                             active_adv = mb_adv[am > 0.5]
@@ -192,10 +217,23 @@ class IPPOAlgo(PPOBase):
                             mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
                     # ---- Policy loss ----
-                    new_log_prob, entropy = agent_policy.evaluate_actions(
-                        mb.obs, mb.act, action_mask=mb.action_mask,
-                    )
-                    logratio = new_log_prob - mb.log_prob
+                    if self.is_recurrent:
+                        new_log_prob, entropy = agent_policy.evaluate_actions_sequence(
+                            mb.obs, mb.act, mb.rnn_hidden,
+                            action_mask=mb.action_mask,
+                        )
+                        new_log_prob = new_log_prob.reshape(-1)
+                        entropy = entropy.reshape(-1)
+                    else:
+                        obs_flat = mb.obs.reshape(-1, mb.obs.shape[-1]) if _any_rnn else mb.obs
+                        act_flat = mb.act.reshape(-1) if _any_rnn else mb.act
+                        am_eval = mb.action_mask.reshape(-1, mb.action_mask.shape[-1]) if (_any_rnn and mb.action_mask is not None) else mb.action_mask
+                        new_log_prob, entropy = agent_policy.evaluate_actions(
+                            obs_flat, act_flat, action_mask=am_eval,
+                        )
+                    mb_log_prob = mb.log_prob.reshape(-1) if _any_rnn else mb.log_prob
+
+                    logratio = new_log_prob - mb_log_prob
                     ratio = logratio.exp()
 
                     pg_loss1 = -mb_adv * ratio
@@ -211,17 +249,28 @@ class IPPOAlgo(PPOBase):
 
                     # ---- Value loss ----
                     critic_input = mb.global_state if mb.global_state is not None else mb.obs
-                    new_value = self.critic(critic_input).squeeze(-1)
+                    if self.is_critic_recurrent:
+                        new_value_seq, _ = self.critic.forward_sequence(
+                            critic_input, mb.critic_rnn_hidden,
+                        )
+                        new_value = new_value_seq.squeeze(-1).reshape(-1)
+                    else:
+                        if _any_rnn:
+                            critic_input = critic_input.reshape(-1, critic_input.shape[-1])
+                        new_value = self.critic(critic_input).squeeze(-1)
+
+                    mb_ret = mb.ret.reshape(-1) if _any_rnn else mb.ret
+                    mb_value = mb.value.reshape(-1) if _any_rnn and mb.value is not None else mb.value
 
                     if self.use_value_norm and self.ret_rms is not None:
-                        target = (mb.ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
+                        target = (mb_ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
                     else:
-                        target = mb.ret
+                        target = mb_ret
 
-                    if self.clip_vloss and mb.value is not None:
+                    if self.clip_vloss and mb_value is not None:
                         v_unclipped = (new_value - target) ** 2
-                        v_clipped = mb.value + torch.clamp(
-                            new_value - mb.value, -self.clip_range, self.clip_range,
+                        v_clipped = mb_value + torch.clamp(
+                            new_value - mb_value, -self.clip_range, self.clip_range,
                         )
                         v_loss_clipped = (v_clipped - target) ** 2
                         v_loss_per_sample = 0.5 * torch.max(v_unclipped, v_loss_clipped)
@@ -241,7 +290,6 @@ class IPPOAlgo(PPOBase):
                         mb_clipfrac += ((ratio - 1.0).abs() > self.clip_range).float().mean().item()
                         mb_approx_kl_val += ((ratio - 1) - logratio).mean().item()
 
-                # 跨 agent 取平均
                 avg_pg = total_pg_loss / n_agents
                 avg_v = total_v_loss / n_agents
                 avg_ent = total_entropy / n_agents
@@ -265,7 +313,6 @@ class IPPOAlgo(PPOBase):
                 all_grad_norm.append(grad_norm.item())
                 epoch_approx_kl.append(mb_approx_kl_val / n_agents)
 
-            # KL early stopping
             if epoch_approx_kl:
                 avg_epoch_kl = np.mean(epoch_approx_kl)
                 all_approx_kl.append(avg_epoch_kl)

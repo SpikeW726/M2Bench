@@ -10,7 +10,7 @@ from sensai.util.string import ToStringMixin
 from configs.env_configs import EnvConfig
 from configs.algo_configs import AlgoParams, MAPPOParams
 from configs.training_configs import TrainerConfig, OnPolicyTrainerConfig
-from configs.network_configs import NetworkConfig, MLPNetworkConfig
+from configs.network_configs import NetworkConfig
 
 
 @dataclass(kw_only=True)
@@ -27,13 +27,19 @@ class ExperimentConfig(ToStringMixin):
     # ---- 分发字段 ----
     algo_name: str = "mappo"
     env_type: str = "masup"
-    network_type: str = "mlp"
+    # 网络分发: actor / critic / q_network 三路独立配置
+    actor_type: Optional[str] = "mlp"     # "mlp" | "rnn" | None
+    critic_type: Optional[str] = "mlp"    # "mlp" | "rnn" | None
+    q_type: Optional[str] = None          # "mlp" | "rnn" | None
 
     # ---- 子 Config ----
     env: EnvConfig = field(default_factory=EnvConfig)
     algo: AlgoParams = field(default_factory=MAPPOParams)
     training: TrainerConfig = field(default_factory=OnPolicyTrainerConfig)
-    network: NetworkConfig = field(default_factory=MLPNetworkConfig)
+    # 网络配置: 各组件独立
+    actor: Optional[NetworkConfig] = None
+    critic: Optional[NetworkConfig] = None
+    q_network: Optional[NetworkConfig] = None
 
     # ---- 实验元信息 ----
     exp_name: str = "default"

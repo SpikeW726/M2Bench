@@ -84,25 +84,217 @@ The framework uses a centralized configuration system in `configs/`:
 
 - **Experiments**: `configs/experiments/*.yaml` - Full training configurations
 - **Policies**: `configs/policies/*.yaml` - Heuristic policy parameters
-- **Networks**: Network architectures are defined in experiment configs
+- **Networks**: Network architectures via `actor_type` / `critic_type` / `q_type` dispatch
 - **Evaluation**: `configs/eval/*.yaml` - Environment configs for evaluation
 
 ### Registry Pattern
 
 All components are registered in `configs/registry.py`:
-- `ALGO_REGISTRY`: MAPPO, IPPO
+- `ALGO_REGISTRY`: PPO, MAPPO, IPPO, VDPPO, D3QN, IQL
 - `ENV_REGISTRY`: MASUP environment
-- `NETWORK_REGISTRY`: MLP networks
+- `ACTOR_REGISTRY`: ActorMLP, ActorRNN
+- `CRITIC_REGISTRY`: CriticMLP, CriticRNN
+- `Q_NETWORK_REGISTRY`: QMLP, QRNN
 - `TRAINER_REGISTRY`: On-policy, Off-policy trainers
 
 Factory functions automatically instantiate components from YAML config:
 ```python
-from configs.registry import load_config, create_vec_env, create_networks
+from configs.registry import load_config, create_vec_env, create_actor, create_critic, create_q_network
 
 config = load_config("configs/experiments/mappo_tsp12_imi.yaml")
 vec_env = create_vec_env(config.env_type, config.env, num_envs=16)
-actor, critic = create_networks(config.network_type, config.network, ...)
+actor = create_actor(config.actor_type, config.actor, obs_dim, action_dim, device)
+critic = create_critic(config.critic_type, config.critic, critic_input_dim, device)
+q_net = create_q_network(config.q_type, config.q_network, input_dim, action_dim, device)
 ```
+
+## Network Architecture
+
+### Overview
+
+网络模块分为三个文件: `networks/mlp.py`, `networks/rnn.py`, `networks/mixing.py`。
+Actor / Critic / Q-network 三路独立配置，YAML 中通过 `actor_type` / `critic_type` / `q_type` 分发字段选择对应的网络类和配置类。
+
+### Component-Algorithm Mapping
+
+```
+                  actor    critic   q_network
+PPO/IPPO/MAPPO    yes      yes      -
+VDPPO             yes      -        yes (+ mixer)
+DQN               -        -        yes
+IQL               -        -        yes
+```
+
+### Network Classes
+
+#### MLP Networks (`networks/mlp.py`)
+
+| Class | Signature | Output std | Use Case |
+|-------|-----------|------------|----------|
+| `ActorMLP` | `(input_dim, hidden_sizes, output_dim)` | 0.01 | PPO/MAPPO/IPPO actor |
+| `CriticMLP` | `(input_dim, hidden_sizes, output_dim=1)` | 1.0 | PPO/MAPPO/IPPO critic (value) |
+| `QMLP` | `(input_dim, hidden_sizes, output_dim, dueling=False)` | 1.0 | DQN/IQL/VDPPO Q-network |
+
+`QMLP` 的 `dueling=True` 启用 Dueling 架构: `Q = V + A - mean(A)`。
+
+#### RNN Networks (`networks/rnn.py`)
+
+所有 RNN 网络继承 `_BaseRNN`，支持 single-step `forward(obs, hidden)` 和 sequence `forward_sequence(obs_seq, hidden)`。
+
+| Class | Signature | Output std | Use Case |
+|-------|-----------|------------|----------|
+| `ActorRNN` | `(input_dim, hidden_size, output_dim, num_layers=1, rnn_type="gru")` | 0.01 | RNN actor |
+| `CriticRNN` | `(input_dim, hidden_size, output_dim=1, num_layers=1, rnn_type="gru")` | 1.0 | RNN critic (value) |
+| `QRNN` | `(input_dim, hidden_size, output_dim, num_layers=1, rnn_type="gru", dueling=False)` | 1.0 | RNN Q-network |
+
+Hidden state 格式: `(recurrent_N, batch, hidden_size)`，其中 `recurrent_N = num_layers * (2 if LSTM else 1)`。
+`get_initial_hidden(batch_size, device)` 返回全零初始 hidden state。
+
+#### Mixing Networks (`networks/mixing.py`)
+
+| Class | Signature | Use Case |
+|-------|-----------|----------|
+| `QPLEXMixer` | `(n_agents, state_dim, embed_dim)` | VDPPO Q-value decomposition |
+
+### Config Dataclasses (`configs/network_configs.py`)
+
+```
+NetworkConfig (base, 无字段)
+├── MLPConfig (hidden: List[int] = [256, 256])
+│   └── QMLPConfig (hidden, dueling: bool = False)
+└── RNNConfig (rnn_type: str = "gru", hidden_size: int = 64, num_layers: int = 1)
+    └── QRNNConfig (rnn_type, hidden_size, num_layers, dueling: bool = False)
+```
+
+YAML 中 `actor_type` / `critic_type` 为 `"mlp"` 时使用 `MLPConfig`，为 `"rnn"` 时使用 `RNNConfig`。
+`q_type` 为 `"mlp"` 时使用 `QMLPConfig`，为 `"rnn"` 时使用 `QRNNConfig`（含 `dueling` 字段）。
+
+### YAML Configuration Examples
+
+#### MAPPO (MLP Actor + MLP Critic)
+
+```yaml
+algo_name: mappo
+actor_type: mlp
+critic_type: mlp
+actor:
+  hidden: [256, 256]
+critic:
+  hidden: [256, 256]
+```
+
+#### MAPPO (RNN Actor + MLP Critic)
+
+```yaml
+algo_name: mappo
+actor_type: rnn
+critic_type: mlp
+actor:
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
+critic:
+  hidden: [256, 256]
+```
+
+#### MAPPO (RNN Actor + RNN Critic)
+
+```yaml
+algo_name: mappo
+actor_type: rnn
+critic_type: rnn
+actor:
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
+critic:
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
+```
+
+#### DQN / IQL (MLP Q-network)
+
+```yaml
+algo_name: d3qn   # or iql
+q_type: mlp
+q_network:
+  hidden: [256, 256]
+  dueling: true
+```
+
+#### DQN / IQL (RNN Q-network)
+
+```yaml
+algo_name: d3qn   # or iql
+q_type: rnn
+q_network:
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
+  dueling: true
+algo:
+  seq_len: 20          # RNN 训练序列长度
+  max_episodes: 5000   # EpisodeReplayBuffer 容量
+```
+
+#### VDPPO (Actor + Q-network)
+
+```yaml
+algo_name: vdppo
+actor_type: mlp
+q_type: mlp
+actor:
+  hidden: [256, 256]
+q_network:
+  hidden: [64, 64]
+  dueling: false
+```
+
+### Factory Functions (`configs/registry.py`)
+
+```python
+create_actor(actor_type, actor_config, obs_dim, action_dim, device) -> nn.Module
+create_critic(critic_type, critic_config, critic_input_dim, device) -> nn.Module
+create_q_network(q_type, q_config, input_dim, action_dim, device) -> nn.Module
+```
+
+Actor / Critic / Q-network 完全解耦，可以任意组合（如 RNN actor + MLP critic）。
+算法层通过 `is_recurrent` / `is_critic_recurrent` / `is_any_recurrent` 属性自动适配不同组合的训练逻辑。
+
+### RNN Critic Integration
+
+当 critic 为 RNN 时，算法层 (`algorithm_base.py`) 会：
+1. 在 `prepare_batch` 中逐步处理 critic 输入序列，done 边界重置 hidden state
+2. 将每步 critic hidden 存入 `batch.critic_rnn_hidden`
+3. 在 `update` 中使用 `critic.forward_sequence()` 和 `chunk_split` 处理 minibatch
+
+`is_any_recurrent = is_recurrent or is_critic_recurrent`：只要 actor 或 critic 任一为 RNN，就使用 `chunk_split` 进行 minibatch 切分。
+
+### Off-Policy RNN (DRQN) Integration
+
+当 Q-network 为 RNN (QRNN) 时，off-policy 算法 (D3QN, IQL) 使用 DRQN 风格训练：
+
+**数据存储**: `EpisodeReplayBuffer` 按整条 episode 存储，采样时切固定长度 `seq_len` 子序列。
+短于 `seq_len` 的 episode 右侧 zero-pad，对应 `mask=0`。
+
+**训练流程**:
+1. Collector 维护 per-env RNN hidden state，episode 边界重置
+2. Episode 结束时推入 `EpisodeReplayBuffer`
+3. 采样 `SequenceBatch`（shape `(batch, seq_len, ...)`）
+4. Online / Target Q-network 均用 `forward_sequence` 处理序列，`h0=zeros`
+5. Loss 使用 `mask` 忽略 padding 步
+
+**关键参数** (`OffPolicyParams`):
+- `seq_len`: RNN 训练序列长度（默认 20）
+- `max_episodes`: EpisodeReplayBuffer 容量（默认 5000）
+- `burn_in_len`: 可选 burn-in 长度（预留，暂为 0）
+
+**数据结构**:
+- `SequenceBatch`: 所有字段 shape `(B, L, ...)`，含 `mask` 字段 `(B, L)`
+- `EpisodeReplayBuffer`: deque 存储完整 episode，`sample(batch_size, seq_len)` 返回 `SequenceBatch`
+
+MLP Q-network 路径通过 `is_recurrent` 条件守卫完全不受影响。
 
 ## Core Classes
 
@@ -322,4 +514,4 @@ def _build_info(self, result):
 - `data/`: Data collection utilities
 - `utils/`: Visualization, logging, model I/O
 - `evaluators/`: Testing and evaluation tools
-- `algorithms/`: RL algorithms (mappo, ippo)
+- `algorithms/`: RL algorithms (ppo, mappo, ippo, vdppo, d3qn, iql)

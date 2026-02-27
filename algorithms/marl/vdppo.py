@@ -15,7 +15,6 @@ from algorithms.rl.ppo import PPOBase
 from configs.algo_configs import VDPPOParams
 from data.batch import RolloutBatch
 from networks.mixing import QPLEXMixer
-from networks.mlp import CriticMLP
 from policies.marl.marl_base import MultiAgentPolicy
 
 
@@ -39,6 +38,7 @@ class VDPPOAlgo(PPOBase):
         total_iterations: Optional[int] = None,
         optimizer_steps_per_iter: Optional[int] = None,
         value_norm_config: Optional[Dict] = None,
+        q_network: Optional[nn.Module] = None,
         **kwargs,
     ):
         super().__init__(policy, critic, params, num_envs)
@@ -48,11 +48,13 @@ class VDPPOAlgo(PPOBase):
         self.action_dim = action_dim
         self.state_dim = state_dim
 
-        # ---- Q-network: 共享参数 + agent one-hot 输入，输出 action_dim 个 Q 值 ----
-        q_input_dim = state_dim + n_agents
-        self.q_network = CriticMLP(
-            q_input_dim, params.q_hidden_sizes, action_dim,
-        ).to(self.device)
+        # Q-network 由外部工厂传入，若未提供则回退创建
+        if q_network is not None:
+            self.q_network = q_network.to(self.device)
+        else:
+            from networks.mlp import QMLP
+            q_input_dim = state_dim + n_agents
+            self.q_network = QMLP(q_input_dim, [64, 64], action_dim).to(self.device)
 
         self.target_q_network = copy.deepcopy(self.q_network)
         for p in self.target_q_network.parameters():

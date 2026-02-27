@@ -1,17 +1,17 @@
-# MAPPO + MASUPEnv (TSP12) — 从零训练 (无预训练)
-# 用法: python train.py configs/experiments/mappo_tsp12_scratch.yaml
+# MAPPO + MASUPEnv (TSP12, S4R1 reward) — 从零训练
+# 用法: python train.py configs/experiments/mappo_s4r1_tsp12.yaml
 
 # ---- 分发字段 ----
 algo_name: mappo
 env_type: masup
-network_type: mlp
+actor_type: mlp
+critic_type: mlp
 
 # ---- 实验元信息 ----
 exp_name: mappo-scratch
 graph_name: TSP12
 track_wandb: true
 wandb_project: MAP-RL
-# actor_path / critic_path 不设置，从零开始训练
 
 # ---- 环境 ----
 env:
@@ -47,6 +47,7 @@ training:
   update_epochs: 5
 
 # ---- 网络 ----
-network:
-  actor_hidden: [256, 256]
-  critic_hidden: [256, 256]
+actor:
+  hidden: [256, 256]
+critic:
+  hidden: [256, 256]

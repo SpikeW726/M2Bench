@@ -65,10 +65,15 @@ class MultiAgentPolicy(nn.Module):
         if self.shared:
             return self._shared_policy
         return self._policy_dict[agent_id]
-    
+
     @property
     def num_agents(self) -> int:
         return len(self.agent_ids)
+
+    @property
+    def is_recurrent(self) -> bool:
+        p = self._shared_policy if self.shared else next(iter(self._policy_dict.values()))
+        return getattr(p, "is_recurrent", False)
     
     # =========================================================================
     #                              Forward
@@ -92,32 +97,36 @@ class MultiAgentPolicy(nn.Module):
             {agent_id: {'act', 'log_prob', 'dist', ...}}
         """
         if self.shared:
-            return self._forward_shared(obs_dict, **kwargs)
+            return self._forward_shared(obs_dict, state_dict=state_dict, **kwargs)
         return self._forward_independent(obs_dict, state_dict, **kwargs)
     
     def _forward_shared(
         self,
         obs_dict: Dict[str, torch.Tensor],
-        **kwargs
+        state_dict: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ) -> Dict[str, Dict[str, Any]]:
-        """Shared mode: batch all agents for single forward pass."""
+        """Shared mode: batch all agents for single forward pass.
+
+        RNN 时将 per-agent hidden stack 成 (recurrent_N, n_agents*batch, hidden_dim)，
+        forward 后再 unstack 回 per-agent。
+        """
         agents = list(obs_dict.keys())
         if not agents:
             return {}
-        
-        # Stack: [num_agents, batch, *obs_shape] -> [num_agents * batch, *obs_shape]
+
         obs_list = [obs_dict[a] for a in agents]
         first_obs = obs_list[0]
         single_sample = first_obs.dim() == len(self.obs_space.shape)
-        
+
         if single_sample:
             obs_list = [o.unsqueeze(0) for o in obs_list]
-        
-        stacked = torch.stack(obs_list, dim=0)
+
+        stacked = torch.stack(obs_list, dim=0)           # (M, batch, *obs)
         n_agents, batch = stacked.shape[:2]
         flat_obs = stacked.view(n_agents * batch, *stacked.shape[2:])
-        
-        # Handle action_mask
+
+        # action_mask
         action_mask = kwargs.get("action_mask", {})
         flat_mask = None
         if action_mask:
@@ -126,18 +135,31 @@ class MultiAgentPolicy(nn.Module):
                 if single_sample:
                     masks = [m.unsqueeze(0) for m in masks]
                 flat_mask = torch.stack(masks, dim=0).view(n_agents * batch, -1)
-        
-        # Single forward pass
+
+        # hidden state stacking
+        flat_hidden = None
+        if state_dict is not None and self.is_recurrent:
+            h_list = [state_dict[a] for a in agents]      # each (recurrent_N, batch, H)
+            flat_hidden = torch.cat(h_list, dim=1)         # (recurrent_N, M*batch, H)
+
         out = self._shared_policy.forward(
-            flat_obs, action_mask=flat_mask if flat_mask is not None else None
+            flat_obs,
+            state=flat_hidden,
+            action_mask=flat_mask if flat_mask is not None else None,
         )
-        
-        # Unflatten: [n_agents * batch, ...] -> {agent: [batch, ...]}
+
+        # unflatten
         results = {}
+        new_hidden_flat = out.get("state", None)           # (recurrent_N, M*batch, H) or None
         for i, agent in enumerate(agents):
             agent_out = {}
             for key, val in out.items():
-                if isinstance(val, torch.Tensor):
+                if key == "state":
+                    if new_hidden_flat is not None and isinstance(new_hidden_flat, torch.Tensor):
+                        agent_out["state"] = new_hidden_flat[:, i * batch: (i + 1) * batch, :]
+                    else:
+                        agent_out["state"] = None
+                elif isinstance(val, torch.Tensor):
                     unflat = val.view(n_agents, batch, *val.shape[1:])[i]
                     agent_out[key] = unflat.squeeze(0) if single_sample else unflat
                 else:
@@ -172,52 +194,61 @@ class MultiAgentPolicy(nn.Module):
         self,
         obs_dict: Dict[str, np.ndarray],
         info_dict: Optional[Dict[str, np.ndarray]] = None,
-        **kwargs
-    ) -> Tuple[Dict[str, np.ndarray], Dict[str, Dict]]:
+        hidden_dict: Optional[Dict[str, torch.Tensor]] = None,
+        **kwargs,
+    ) -> Tuple[Dict[str, np.ndarray], Dict[str, Dict], Optional[Dict[str, torch.Tensor]]]:
         """
         Compute actions from numpy observations (for env interaction).
-        
+
         Args:
             obs_dict: {agent_id: obs_array} shape (num_envs, *obs_shape)
             info_dict: {agent_id: info_array} 每个元素是 dict（来自 VectorEnv）
-        
+            hidden_dict: RNN hidden states {agent_id: (recurrent_N, num_envs, H)}
+
         Returns:
             actions: {agent_id: action_array}
             outputs: {agent_id: policy_output}
+            new_hidden: {agent_id: new_hidden_tensor} 或 None (MLP 时)
         """
         info_dict = info_dict or {}
-        
-        # Convert to tensor
+
         obs_tensor = {
             a: torch.as_tensor(o, dtype=torch.float32, device=self.device)
             for a, o in obs_dict.items()
         }
-        
-        # Extract action_mask from vectorized info
-        # info_dict[agent] 是一个 np.ndarray，每个元素是一个 dict
+
         action_mask = {}
         for agent, info_arr in info_dict.items():
             masks = []
             for info in info_arr:
-                if isinstance(info, dict) and 'action_mask' in info:
-                    masks.append(info['action_mask'])
+                if isinstance(info, dict) and "action_mask" in info:
+                    masks.append(info["action_mask"])
             if masks:
                 action_mask[agent] = torch.as_tensor(
                     np.stack(masks), dtype=torch.bool, device=self.device
                 )
-        
+
         with torch.no_grad():
-            outputs = self.forward(obs_tensor, action_mask=action_mask, **kwargs)
-        
-        # Convert to numpy
+            outputs = self.forward(
+                obs_tensor,
+                state_dict=hidden_dict,
+                action_mask=action_mask,
+                **kwargs,
+            )
+
         actions = {}
+        new_hidden: Optional[Dict[str, torch.Tensor]] = None
+        if self.is_recurrent:
+            new_hidden = {}
         for agent, out in outputs.items():
             act = out["act"]
             act_np = act.cpu().numpy() if isinstance(act, torch.Tensor) else act
             act_np = self.get_policy(agent).map_action(act_np)
             actions[agent] = act_np
-        
-        return actions, outputs
+            if new_hidden is not None:
+                new_hidden[agent] = out.get("state")
+
+        return actions, outputs, new_hidden
     
     # =========================================================================
     #                              Training
@@ -298,15 +329,38 @@ class MultiAgentPolicy(nn.Module):
         self,
         obs: torch.Tensor,
         act: torch.Tensor,
-        **kwargs
+        **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Evaluate with flattened tensors (for MAPPO training).
+        Evaluate with flattened tensors (for MAPPO training, MLP 路径).
         Only works with shared=True.
         """
         if not self.shared:
             raise ValueError("evaluate_actions_flat requires shared=True")
         return self._shared_policy.evaluate_actions(obs, act, **kwargs)
+
+    def evaluate_actions_sequence_flat(
+        self,
+        obs_seq: torch.Tensor,
+        act_seq: torch.Tensor,
+        hidden_init: torch.Tensor,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        RNN 序列 evaluate (flattened, shared=True only, 用于 MAPPO chunk-based update).
+
+        Args:
+            obs_seq: (seq_len, batch, obs_dim)
+            act_seq: (seq_len, batch)
+            hidden_init: (recurrent_N, batch, hidden_size)
+        Returns:
+            (log_prob, entropy) each (seq_len, batch)
+        """
+        if not self.shared:
+            raise ValueError("evaluate_actions_sequence_flat requires shared=True")
+        return self._shared_policy.evaluate_actions_sequence(
+            obs_seq, act_seq, hidden_init, **kwargs
+        )
     
     def set_training_mode(self, mode: bool):
         """Set training/eval mode."""

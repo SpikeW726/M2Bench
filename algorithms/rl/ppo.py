@@ -5,7 +5,9 @@ PPOBase(ActorCriticOnPolicyAlgo)
     不创建 optimizer，留给最终子类。
 
 PPOAlgo(PPOBase)
-    单智能体 / 集中式多智能体 PPO，创建 optimizer / scheduler / value_norm。
+    单智能体 PPO，用于集中式 Gymnasium 环境（联合观测 → 联合动作）。
+    接收 OnPolicyCollector 的单个 RolloutBatch。
+    继承 PPOBase 的 update 和 ActorCriticOnPolicyAlgo 的 prepare_batch。
 """
 
 from typing import Dict, Optional
@@ -54,32 +56,64 @@ class PPOBase(ActorCriticOnPolicyAlgo):
         batch: RolloutBatch,
         minibatch_size: int = -1,
         update_epochs: int = 1,
+        T: int = 0,
+        N: int = 0,
+        num_agents: int = 1,
     ) -> TrainingStats:
         """
         单优化器 PPO update。
 
         包含: minibatch split, advantage normalization, clipped surrogate,
         value loss clipping, KL early stopping, 详细统计量。
+
+        RNN 时使用 chunk_split + evaluate_actions_sequence，
+        MLP 时使用 split + evaluate_actions（原有路径不变）。
         """
         batch = batch.to_tensor(self.device)
         all_pg_loss, all_v_loss, all_entropy, all_clipfrac = [], [], [], []
         all_approx_kl = []
         all_grad_norm = []
 
+        _any_rnn = self.is_any_recurrent
+
         for epoch in range(update_epochs):
             epoch_approx_kl = []
 
-            for mb in batch.split(size=minibatch_size, shuffle=True, merge_last=True):
+            if _any_rnn:
+                mb_iter = batch.chunk_split(
+                    chunk_len=self.data_chunk_length,
+                    T=T, N=N, num_agents=num_agents,
+                    minibatch_size=minibatch_size,
+                )
+            else:
+                mb_iter = batch.split(size=minibatch_size, shuffle=True, merge_last=True)
+
+            for mb in mb_iter:
                 # ---- Advantage normalization ----
                 mb_adv = mb.adv
+                if _any_rnn:
+                    mb_adv = mb_adv.reshape(-1)
                 if self.normalize_advantage and mb_adv.numel() > 1:
                     mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
                 # ---- Policy evaluation ----
-                new_log_prob, entropy = self.policy.evaluate_actions(
-                    mb.obs, mb.act, action_mask=mb.action_mask,
-                )
-                logratio = new_log_prob - mb.log_prob
+                if self.is_recurrent:
+                    new_log_prob, entropy = self.policy.evaluate_actions_sequence(
+                        mb.obs, mb.act, mb.rnn_hidden,
+                        action_mask=mb.action_mask,
+                    )
+                    new_log_prob = new_log_prob.reshape(-1)
+                    entropy = entropy.reshape(-1)
+                else:
+                    obs_flat = mb.obs.reshape(-1, mb.obs.shape[-1]) if _any_rnn else mb.obs
+                    act_flat = mb.act.reshape(-1) if _any_rnn else mb.act
+                    am_flat = mb.action_mask.reshape(-1, mb.action_mask.shape[-1]) if (_any_rnn and mb.action_mask is not None) else mb.action_mask
+                    new_log_prob, entropy = self.policy.evaluate_actions(
+                        obs_flat, act_flat, action_mask=am_flat,
+                    )
+                mb_log_prob = mb.log_prob.reshape(-1) if _any_rnn else mb.log_prob
+
+                logratio = new_log_prob - mb_log_prob
                 ratio = logratio.exp()
 
                 # ---- Clipped surrogate loss ----
@@ -88,19 +122,30 @@ class PPOBase(ActorCriticOnPolicyAlgo):
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
                 entropy_loss = entropy.mean()
 
-                # ---- Value loss (with optional clipping) ----
+                # ---- Value loss ----
                 critic_input = mb.global_state if mb.global_state is not None else mb.obs
-                new_value = self.critic(critic_input).squeeze(-1)
+                if self.is_critic_recurrent:
+                    new_value_seq, _ = self.critic.forward_sequence(
+                        critic_input, mb.critic_rnn_hidden,
+                    )
+                    new_value = new_value_seq.squeeze(-1).reshape(-1)
+                else:
+                    if _any_rnn:
+                        critic_input = critic_input.reshape(-1, critic_input.shape[-1])
+                    new_value = self.critic(critic_input).squeeze(-1)
+
+                mb_ret = mb.ret.reshape(-1) if _any_rnn else mb.ret
+                mb_value = mb.value.reshape(-1) if _any_rnn and mb.value is not None else mb.value
 
                 if self.use_value_norm and self.ret_rms is not None:
-                    target = (mb.ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
+                    target = (mb_ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
                 else:
-                    target = mb.ret
+                    target = mb_ret
 
-                if self.clip_vloss and mb.value is not None:
+                if self.clip_vloss and mb_value is not None:
                     v_loss_unclipped = (new_value - target) ** 2
-                    v_clipped = mb.value + torch.clamp(
-                        new_value - mb.value, -self.clip_range, self.clip_range,
+                    v_clipped = mb_value + torch.clamp(
+                        new_value - mb_value, -self.clip_range, self.clip_range,
                     )
                     v_loss_clipped = (v_clipped - target) ** 2
                     v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
@@ -154,15 +199,16 @@ class PPOBase(ActorCriticOnPolicyAlgo):
 
 
 # =============================================================================
-#                          PPOAlgo — 单优化器 PPO
+#                          PPOAlgo — 单智能体 PPO
 # =============================================================================
 
 class PPOAlgo(PPOBase):
     """
-    单优化器 PPO。
+    单智能体 PPO，用于集中式 Gymnasium 环境。
 
-    继承 PPOBase 的 update（clipped surrogate + KL early stopping）
-    和 ActorCriticOnPolicyAlgo 的 prepare_batch（向量化 GAE + truncation bootstrap）。
+    继承 PPOBase.update（clipped surrogate + KL early stopping）
+    和 ActorCriticOnPolicyAlgo.prepare_batch（向量化 GAE + truncation bootstrap）。
+    Policy 为 ActorPolicy（非 MultiAgentPolicy），Collector 为 OnPolicyCollector。
     """
 
     def __init__(

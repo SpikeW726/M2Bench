@@ -16,17 +16,26 @@ import yaml
 from torch.utils.tensorboard import SummaryWriter
 
 from configs.exp_configs import ExperimentConfig
-from configs.training_configs import OnPolicyTrainerConfig
+from configs.training_configs import OnPolicyTrainerConfig, OffPolicyTrainerConfig
 from configs.registry import (
+    ALGO_REGISTRY,
     load_config,
     create_vec_env,
-    create_networks,
+    create_actor,
+    create_critic,
+    create_q_network,
     create_algorithm,
     create_trainer,
+    get_policy_type,
+    get_trainer_type,
 )
-from data.collector import MACollector
+from data.collector import (
+    OnPolicyCollector, MAOnPolicyCollector,
+    OffPolicyCollector, MAOffPolicyCollector,
+)
+from data.buffer import ReplayBuffer, EpisodeReplayBuffer
 from policies.marl.marl_base import MultiAgentPolicy
-from policies.rl.rl_base import ActorPolicy
+from policies.rl.rl_base import ActorPolicy, ValuePolicy
 from utils.model_io import save_model
 
 
@@ -53,8 +62,21 @@ class SimpleLogger:
 #                          辅助函数
 # =============================================================================
 
-def _infer_dims(vec_env) -> dict:
-    """从向量化环境推断网络所需的各维度。"""
+def _infer_dims(vec_env, algo_name: str) -> dict:
+    """从向量化环境推断网络所需的各维度。
+
+    根据 is_parallel_env 分两条路径：
+    - PettingZoo (parallel): 多智能体 dict I/O，有 global_state
+    - Gymnasium (single): 集中式环境，obs 即全局观测
+    """
+    if vec_env.is_parallel_env:
+        return _infer_dims_parallel(vec_env, algo_name)
+    else:
+        return _infer_dims_single(vec_env)
+
+
+def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
+    """PettingZoo 多智能体环境维度推断。"""
     agent_ids = vec_env.agents
     num_agents = len(agent_ids)
     obs_space = vec_env.observation_space[agent_ids[0]]
@@ -63,12 +85,16 @@ def _infer_dims(vec_env) -> dict:
     obs_dim = obs_space.shape[0]
     action_dim = action_space.n
 
-    # global state 维度（用于 centralized critic）
-    # 通过 call_env_method 获取，不需要额外创建临时环境
     vec_env.reset()
     states = vec_env.call_env_method("state")
     state_dim = len(states[0])
-    critic_input_dim = state_dim + num_agents  # state + agent one-hot
+
+    # MAPPO/VDPPO: centralized critic = global_state + agent one-hot
+    # IPPO 等: critic = global_state（无 one-hot）
+    if algo_name in ("mappo", "vdppo"):
+        critic_input_dim = state_dim + num_agents
+    else:
+        critic_input_dim = state_dim
 
     return {
         "agent_ids": agent_ids,
@@ -82,6 +108,32 @@ def _infer_dims(vec_env) -> dict:
     }
 
 
+def _infer_dims_single(vec_env) -> dict:
+    """Gymnasium 集中式环境维度推断。
+
+    集中式环境将多智能体建模为单体问题：
+    - obs = 全局联合观测
+    - action = 联合动作
+    - 无 global_state（obs 本身即全局状态）
+    """
+    obs_space = vec_env.observation_space
+    action_space = vec_env.action_space
+
+    obs_dim = obs_space.shape[0]
+    action_dim = action_space.n if hasattr(action_space, 'n') else action_space.shape[0]
+
+    return {
+        "agent_ids": None,
+        "num_agents": 1,
+        "obs_space": obs_space,
+        "action_space": action_space,
+        "obs_dim": obs_dim,
+        "action_dim": action_dim,
+        "state_dim": obs_dim,
+        "critic_input_dim": obs_dim,
+    }
+
+
 def _load_pretrained(
     actor_net,
     critic_net,
@@ -92,34 +144,154 @@ def _load_pretrained(
     """加载预训练权重，返回 value_norm_config（如果存在）。"""
     value_norm_config = None
 
-    if not actor_path or not critic_path:
+    has_actor_path = actor_path and actor_net is not None
+    has_critic_path = critic_path and critic_net is not None
+
+    if not has_actor_path and not has_critic_path:
         print("[Train] Training from scratch (random initialization)")
         return None
 
-    actor_p, critic_p = Path(actor_path), Path(critic_path)
-    if not actor_p.exists() or not critic_p.exists():
-        print("[Train] Pretrained paths not found, training from scratch")
-        return None
+    loaded_from = None
+    if has_actor_path:
+        actor_p = Path(actor_path)
+        if actor_p.exists():
+            actor_ckpt = torch.load(actor_p, map_location=device, weights_only=True)
+            actor_net.load_state_dict(actor_ckpt.get("actor_state_dict", actor_ckpt))
+            loaded_from = actor_p
+            print(f"[Train] Loaded pretrained actor from {actor_path}")
 
-    actor_ckpt = torch.load(actor_p, map_location=device, weights_only=True)
-    critic_ckpt = torch.load(critic_p, map_location=device, weights_only=True)
-    actor_net.load_state_dict(actor_ckpt.get("actor_state_dict", actor_ckpt))
-    critic_net.load_state_dict(critic_ckpt.get("critic_state_dict", critic_ckpt))
-    print(f"[Train] Loaded pretrained weights from {actor_path}")
+    if has_critic_path:
+        critic_p = Path(critic_path)
+        if critic_p.exists():
+            critic_ckpt = torch.load(critic_p, map_location=device, weights_only=True)
+            critic_net.load_state_dict(critic_ckpt.get("critic_state_dict", critic_ckpt))
+            if loaded_from is None:
+                loaded_from = critic_p
+            print(f"[Train] Loaded pretrained critic from {critic_path}")
 
-    # 尝试从 checkpoint 目录读取 value_norm 统计量
-    config_file = actor_p.parent / "config.yaml"
-    if config_file.exists():
-        with open(config_file) as f:
-            saved = yaml.safe_load(f)
-        vn = saved.get("value_normalization")
-        if vn is not None:
-            value_norm_config = vn
-            print(f"[Train] Loaded value_norm: "
-                  f"mean={vn.get('ret_mean', 0.0):.4f}, "
-                  f"std={vn.get('ret_std', 1.0):.4f}")
+    if loaded_from is not None:
+        config_file = loaded_from.parent / "config.yaml"
+        if config_file.exists():
+            with open(config_file) as f:
+                saved = yaml.safe_load(f)
+            vn = saved.get("value_normalization")
+            if vn is not None:
+                value_norm_config = vn
+                print(f"[Train] Loaded value_norm: "
+                      f"mean={vn.get('ret_mean', 0.0):.4f}, "
+                      f"std={vn.get('ret_std', 1.0):.4f}")
 
     return value_norm_config
+
+
+def _build_policy(
+    config: ExperimentConfig,
+    dims: dict,
+    is_parallel: bool,
+    actor_net=None,
+    q_net=None,
+):
+    """根据环境类型和算法类型构建 Policy。
+
+    PettingZoo (parallel) → MultiAgentPolicy（包装多个 ActorPolicy / ValuePolicy）
+    Gymnasium (single) → 裸 ActorPolicy / ValuePolicy
+    """
+    policy_type = get_policy_type(config.algo_name)
+
+    if is_parallel:
+        # ---- 多智能体路径 ----
+        if policy_type == "value":
+            shared = getattr(config.algo, "shared_policy", False)
+            return MultiAgentPolicy(
+                agent_ids=dims["agent_ids"],
+                obs_space=dims["obs_space"],
+                action_space=dims["action_space"],
+                policy_class=ValuePolicy,
+                policy_kwargs={"q_network": q_net},
+                shared=shared,
+            )
+        else:
+            return MultiAgentPolicy(
+                agent_ids=dims["agent_ids"],
+                obs_space=dims["obs_space"],
+                action_space=dims["action_space"],
+                policy_class=ActorPolicy,
+                policy_kwargs={"actor": actor_net},
+                shared=True,
+            )
+    else:
+        # ---- 单体路径（集中式 Gymnasium 环境） ----
+        if policy_type == "value":
+            return ValuePolicy(
+                obs_space=dims["obs_space"],
+                action_space=dims["action_space"],
+                q_network=q_net,
+            )
+        else:
+            return ActorPolicy(
+                obs_space=dims["obs_space"],
+                action_space=dims["action_space"],
+                actor=actor_net,
+            )
+
+
+def _build_collector(
+    config: ExperimentConfig,
+    algorithm,
+    vec_env,
+    dims: dict,
+):
+    """根据环境类型和算法类型构建 Collector。
+
+    PettingZoo → MAOnPolicyCollector / MAOffPolicyCollector
+    Gymnasium  → OnPolicyCollector / OffPolicyCollector
+
+    Off-policy + RNN Q-network → EpisodeReplayBuffer
+    Off-policy + MLP Q-network → ReplayBuffer
+    """
+    trainer_type = get_trainer_type(config.algo_name)
+    is_parallel = vec_env.is_parallel_env
+
+    if trainer_type == "off_policy":
+        tc: OffPolicyTrainerConfig = config.training
+        is_q_recurrent = getattr(algorithm, "is_recurrent", False)
+        max_episodes = getattr(config.algo, "max_episodes", 5000)
+
+        if is_parallel:
+            if is_q_recurrent:
+                buffers = {
+                    aid: EpisodeReplayBuffer(max_episodes=max_episodes)
+                    for aid in dims["agent_ids"]
+                }
+            else:
+                buffers = {
+                    aid: ReplayBuffer(
+                        obs_shape=(dims["obs_dim"],),
+                        act_shape=(1,),
+                        max_size=tc.buffer_size,
+                        has_action_mask=True,
+                        action_dim=dims["action_dim"],
+                    )
+                    for aid in dims["agent_ids"]
+                }
+            return MAOffPolicyCollector(algorithm, vec_env, buffers)
+        else:
+            if is_q_recurrent:
+                buffer = EpisodeReplayBuffer(max_episodes=max_episodes)
+            else:
+                buffer = ReplayBuffer(
+                    obs_shape=(dims["obs_dim"],),
+                    act_shape=(1,),
+                    max_size=tc.buffer_size,
+                    has_action_mask=True,
+                    action_dim=dims["action_dim"],
+                )
+            return OffPolicyCollector(algorithm, vec_env, buffer)
+    else:
+        if is_parallel:
+            return MAOnPolicyCollector(algorithm, vec_env)
+        else:
+            return OnPolicyCollector(algorithm, vec_env)
 
 
 # =============================================================================
@@ -133,7 +305,8 @@ def train(config: ExperimentConfig):
     流程：环境 → 维度推断 → 网络 → 预训练加载 → Policy → 算法 → Collector → Trainer → 训练
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tc = config.training  # TrainerConfig shortcut
+    tc = config.training
+    trainer_type = get_trainer_type(config.algo_name)
 
     # ---- 1. 日志初始化 ----
     config.save_dir.mkdir(parents=True, exist_ok=True)
@@ -142,7 +315,7 @@ def train(config: ExperimentConfig):
 
     if config.track_wandb:
         import wandb
-        if wandb.run is None:  # sweep 模式下由 wandb.agent 负责 init
+        if wandb.run is None:
             wandb.init(
                 project=config.wandb_project,
                 name=config.run_name,
@@ -163,39 +336,58 @@ def train(config: ExperimentConfig):
           f"({'subproc' if tc.use_subproc else 'dummy'})")
 
     # ---- 3. 推断维度 ----
-    dims = _infer_dims(vec_env)
+    is_parallel = vec_env.is_parallel_env
+    dims = _infer_dims(vec_env, config.algo_name)
+
+    print(f"  Mode: {'parallel (MARL)' if is_parallel else 'single (centralized)'}")
     print(f"  Agents: {dims['agent_ids']}, Obs: {dims['obs_dim']}, "
           f"Act: {dims['action_dim']}, CriticIn: {dims['critic_input_dim']}")
 
-    # ---- 4. 创建网络 ----
-    actor_net, critic_net = create_networks(
-        network_type=config.network_type,
-        network_config=config.network,
-        obs_dim=dims["obs_dim"],
-        action_dim=dims["action_dim"],
-        critic_input_dim=dims["critic_input_dim"],
-        device=str(device),
-    )
+    # ---- 4. 创建网络（三路独立） ----
+    actor_net = None
+    critic_net = None
+    q_net = None
 
-    # ---- 5. 加载预训练权重 ----
-    value_norm_config = _load_pretrained(
-        actor_net, critic_net,
-        config.actor_path, config.critic_path,
-        device,
-    )
+    if config.actor_type and config.actor is not None:
+        actor_net = create_actor(
+            actor_type=config.actor_type,
+            actor_config=config.actor,
+            obs_dim=dims["obs_dim"],
+            action_dim=dims["action_dim"],
+            device=str(device),
+        )
+    if config.critic_type and config.critic is not None:
+        critic_net = create_critic(
+            critic_type=config.critic_type,
+            critic_config=config.critic,
+            critic_input_dim=dims["critic_input_dim"],
+            device=str(device),
+        )
+    if config.q_type and config.q_network is not None:
+        q_input_dim = dims["state_dim"] + dims["num_agents"] if get_policy_type(config.algo_name) == "actor" else dims["obs_dim"]
+        q_net = create_q_network(
+            q_type=config.q_type,
+            q_config=config.q_network,
+            input_dim=q_input_dim,
+            action_dim=dims["action_dim"],
+            device=str(device),
+        )
 
-    # ---- 6. 构建 MultiAgentPolicy ----
-    ma_policy = MultiAgentPolicy(
-        agent_ids=dims["agent_ids"],
-        obs_space=dims["obs_space"],
-        action_space=dims["action_space"],
-        policy_class=ActorPolicy,
-        policy_kwargs={"actor": actor_net},
-        shared=True,
-    )
+    # ---- 5. 加载预训练权重（仅 on-policy，off-policy 一般不预训练） ----
+    value_norm_config = None
+    if trainer_type == "on_policy":
+        value_norm_config = _load_pretrained(
+            actor_net, critic_net,
+            config.actor_path, config.critic_path,
+            device,
+        )
+    else:
+        print("[Train] Off-policy algorithm, skipping pretrained weight loading")
+
+    # ---- 6. 构建 Policy ----
+    policy = _build_policy(config, dims, is_parallel, actor_net=actor_net, q_net=q_net)
 
     # ---- 7. 构建算法 ----
-    # 准备运行时上下文参数
     context_kwargs = dict(num_envs=tc.num_envs)
     context_kwargs["action_dim"] = dims["action_dim"]
     context_kwargs["state_dim"] = dims["state_dim"]
@@ -207,35 +399,38 @@ def train(config: ExperimentConfig):
             num_agents=dims["num_agents"]
         )
 
-    # value_norm_config 从预训练 checkpoint 传递
     if value_norm_config is not None:
         context_kwargs["value_norm_config"] = value_norm_config
 
+    if q_net is not None:
+        context_kwargs["q_network"] = q_net
+
     algorithm = create_algorithm(
         algo_name=config.algo_name,
-        policy=ma_policy,
+        policy=policy,
         critic=critic_net,
         algo_params=config.algo,
         **context_kwargs,
     )
 
     # ---- 8. 构建 Collector ----
-    collector = MACollector(algorithm, vec_env)
+    collector = _build_collector(config, algorithm, vec_env, dims)
 
     # ---- 9. 定义 Callbacks ----
-    # 网络配置（用于 checkpoint 保存）
-    actor_config_dict = {
-        "type": type(actor_net).__name__,
-        "input_dim": dims["obs_dim"],
-        "hidden_sizes": getattr(actor_net, "hidden_sizes", []),
-        "output_dim": dims["action_dim"],
-    }
-    critic_config_dict = {
-        "type": type(critic_net).__name__,
-        "input_dim": dims["critic_input_dim"],
-        "hidden_sizes": getattr(critic_net, "hidden_sizes", []),
-        "output_dim": 1,
-    }
+    def _make_net_config_dict(net, input_dim, output_dim):
+        if net is None:
+            return None
+        d = {"type": type(net).__name__, "input_dim": input_dim, "output_dim": output_dim}
+        if hasattr(net, "hidden_sizes"):
+            d["hidden_sizes"] = net.hidden_sizes
+        elif hasattr(net, "hidden_size"):
+            d["hidden_size"] = net.hidden_size
+            d["num_layers"] = net.num_layers
+            d["rnn_type"] = net.rnn_type
+        return d
+
+    actor_config_dict = _make_net_config_dict(actor_net, dims["obs_dim"], dims["action_dim"])
+    critic_config_dict = _make_net_config_dict(critic_net, dims["critic_input_dim"], 1)
 
     def _get_value_norm_config():
         if hasattr(algorithm, "use_value_norm") and algorithm.use_value_norm and algorithm.ret_rms is not None:
@@ -251,7 +446,7 @@ def train(config: ExperimentConfig):
         ckpt_dir = config.save_dir / f"iter_{iteration}"
         save_model(
             save_dir=ckpt_dir,
-            policy=ma_policy,
+            policy=policy,
             critic=critic_net,
             actor_config=actor_config_dict,
             critic_config=critic_config_dict,
@@ -295,6 +490,9 @@ def train(config: ExperimentConfig):
         batch_size = tc.step_per_iteration * dims["num_agents"]
         print(f"  Batch size: {batch_size}, Minibatch: {tc.minibatch_size}, "
               f"Epochs: {tc.update_epochs}")
+    elif isinstance(tc, OffPolicyTrainerConfig):
+        print(f"  Buffer size: {tc.buffer_size}, Batch size: {tc.batch_size}, "
+              f"Warmup: {tc.warmup_steps}")
     print(f"  Device: {device}")
     print(f"  Save dir: {config.save_dir}")
 
@@ -304,7 +502,7 @@ def train(config: ExperimentConfig):
     final_dir = config.save_dir / "final"
     save_model(
         save_dir=final_dir,
-        policy=ma_policy,
+        policy=policy,
         critic=critic_net,
         actor_config=actor_config_dict,
         critic_config=critic_config_dict,
@@ -319,7 +517,6 @@ def train(config: ExperimentConfig):
     if config.track_wandb:
         import wandb
         if wandb.run is not None and wandb.run.sweep_id is None:
-            # 非 sweep 模式才主动 finish，sweep 由 wandb.agent 管理生命周期
             wandb.finish()
     vec_env.close()
 

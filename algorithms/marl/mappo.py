@@ -119,7 +119,13 @@ class MAPPOAlgo(PPOBase):
             one_hot[:, agent_idx] = 1.0
             critic_in = torch.cat([states_t, one_hot], dim=-1)
 
-            v_norm = self.critic(critic_in).squeeze(-1)
+            if self.is_critic_recurrent:
+                zero_h = self.critic.get_initial_hidden(len(batch_states), device)
+                v_norm, _ = self.critic(critic_in, zero_h)
+                v_norm = v_norm.squeeze(-1)
+            else:
+                v_norm = self.critic(critic_in).squeeze(-1)
+
             if self.use_value_norm and self.ret_rms is not None:
                 v_real = v_norm * self.ret_rms.std + self.ret_rms.mean
             else:
@@ -136,11 +142,50 @@ class MAPPOAlgo(PPOBase):
     #                          Batch 预处理
     # ====================================================================
 
+    def _critic_rnn_values_with_onehot(
+        self,
+        critic_input: torch.Tensor,    # (T*N, critic_dim) 已拼接 one-hot
+        done_2d: torch.Tensor,          # (T, N)
+        agent_key: str,
+        T: int,
+        N: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """逐步处理 RNN critic（per-agent），done 边界重置 hidden。"""
+        critic_seq = critic_input.view(T, N, -1)
+
+        if not hasattr(self, "_critic_hidden_per_agent"):
+            self._critic_hidden_per_agent: Dict[str, torch.Tensor] = {}
+
+        hidden = self._critic_hidden_per_agent.get(agent_key, None)
+        if hidden is None or hidden.shape[1] != N:
+            hidden = self.critic.get_initial_hidden(N, critic_input.device)
+
+        all_values = []
+        all_hidden = []
+
+        for t in range(T):
+            if t > 0:
+                done_prev = done_2d[t - 1] > 0.5
+                if done_prev.any():
+                    hidden = hidden.clone()
+                    hidden[:, done_prev, :] = 0.0
+
+            all_hidden.append(hidden)
+            v_t, hidden = self.critic(critic_seq[t], hidden)
+            all_values.append(v_t.squeeze(-1))
+
+        self._critic_hidden_per_agent[agent_key] = hidden.detach()
+
+        values_norm = torch.stack(all_values, dim=0)        # (T, N)
+        critic_rnn_h = torch.stack(all_hidden, dim=0)       # (T, rN, N, H)
+        return values_norm, critic_rnn_h
+
     def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> RolloutBatch:
         """
         Per-agent 向量化 GAE + 合并为单 RolloutBatch（参数共享需要）。
 
         batch.value 存储归一化尺度的值，确保 update 中 value clipping 在正确尺度上进行。
+        RNN 时额外收集 rnn_hidden / critic_rnn_hidden，并记录 T/N/num_agents 供 chunk_split 使用。
         """
         agents = list(batch_dict.keys())
         num_agents = len(agents)
@@ -149,6 +194,10 @@ class MAPPOAlgo(PPOBase):
         all_obs, all_act, all_log_prob = [], [], []
         all_adv, all_ret, all_value = [], [], []
         all_critic_input, all_action_mask, all_active_mask = [], [], []
+        all_rnn_hidden = []
+        all_critic_rnn_hidden = []
+
+        saved_T = 0
 
         for i, agent in enumerate(agents):
             batch = batch_dict[agent]
@@ -156,8 +205,8 @@ class MAPPOAlgo(PPOBase):
             batch = batch.to_tensor(self.device)
             total_size = batch.global_state.shape[0]
             T = total_size // N
+            saved_T = T
 
-            # critic_input = global_state + agent_one_hot
             one_hot = torch.zeros(total_size, num_agents, device=self.device)
             one_hot[:, i] = 1.0
             critic_input = torch.cat([batch.global_state, one_hot], dim=-1)
@@ -171,7 +220,17 @@ class MAPPOAlgo(PPOBase):
                 active_mask_2d = batch.active_mask.view(T, N)
 
             with torch.no_grad():
-                values_norm = self.critic(critic_input).squeeze(-1).view(T, N)
+                if self.is_critic_recurrent:
+                    values_norm, critic_rnn_h = self._critic_rnn_values_with_onehot(
+                        critic_input, done_2d, agent, T, N,
+                    )
+                    # (T, rN, N, H) -> (T*N, rN, H)
+                    rN, H = critic_rnn_h.shape[1], critic_rnn_h.shape[3]
+                    all_critic_rnn_hidden.append(
+                        critic_rnn_h.permute(0, 2, 1, 3).reshape(T * N, rN, H)
+                    )
+                else:
+                    values_norm = self.critic(critic_input).squeeze(-1).view(T, N)
 
                 if self.use_value_norm and self.ret_rms is not None:
                     values = values_norm * self.ret_rms.std + self.ret_rms.mean
@@ -198,6 +257,8 @@ class MAPPOAlgo(PPOBase):
                 all_action_mask.append(batch.action_mask)
             if self.use_active_mask and batch.active_mask is not None:
                 all_active_mask.append(batch.active_mask)
+            if batch.rnn_hidden is not None:
+                all_rnn_hidden.append(batch.rnn_hidden)
 
         # 更新 Value Normalization 统计量
         if self.use_value_norm and self.ret_rms is not None:
@@ -210,6 +271,10 @@ class MAPPOAlgo(PPOBase):
             else:
                 self.ret_rms.update(all_ret_tensor)
 
+        self._last_T = saved_T
+        self._last_N = N
+        self._last_num_agents = num_agents
+
         return RolloutBatch(
             obs=torch.cat(all_obs, dim=0),
             act=torch.cat(all_act, dim=0),
@@ -220,6 +285,8 @@ class MAPPOAlgo(PPOBase):
             global_state=torch.cat(all_critic_input, dim=0),
             action_mask=torch.cat(all_action_mask, dim=0) if all_action_mask else None,
             active_mask=torch.cat(all_active_mask, dim=0) if all_active_mask else None,
+            rnn_hidden=torch.cat(all_rnn_hidden, dim=0) if all_rnn_hidden else None,
+            critic_rnn_hidden=torch.cat(all_critic_rnn_hidden, dim=0) if all_critic_rnn_hidden else None,
         )
 
     # ====================================================================
@@ -235,24 +302,41 @@ class MAPPOAlgo(PPOBase):
     ) -> TrainingStats:
         """
         双优化器 PPO update，支持 active_mask loss masking。
+        RNN 时使用 chunk_split + evaluate_actions_sequence_flat。
         """
         all_pg_loss, all_v_loss, all_entropy, all_clipfrac = [], [], [], []
         all_approx_kl = []
         all_actor_grad_norm, all_critic_grad_norm = [], []
 
+        _any_rnn = self.is_any_recurrent
+
         for epoch in range(update_epochs):
             epoch_approx_kl = []
 
-            for mb in batch.split(size=minibatch_size, shuffle=True, merge_last=True):
+            if _any_rnn:
+                mb_iter = batch.chunk_split(
+                    chunk_len=self.data_chunk_length,
+                    T=self._last_T, N=self._last_N,
+                    num_agents=self._last_num_agents,
+                    minibatch_size=minibatch_size,
+                )
+            else:
+                mb_iter = batch.split(size=minibatch_size, shuffle=True, merge_last=True)
+
+            for mb in mb_iter:
                 # Active mask 权重
                 if mb.active_mask is not None:
                     am = mb.active_mask.float()
+                    if _any_rnn:
+                        am = am.reshape(-1)
                     am_sum = am.sum().clamp(min=1.0)
                 else:
                     am = None
 
                 # Advantage normalization
                 mb_adv = mb.adv
+                if _any_rnn:
+                    mb_adv = mb_adv.reshape(-1)
                 if self.normalize_advantage:
                     if am is not None:
                         active_adv = mb_adv[am > 0.5]
@@ -262,10 +346,23 @@ class MAPPOAlgo(PPOBase):
                         mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
                 # ===== Actor update =====
-                new_log_prob, entropy = self.policy.evaluate_actions_flat(
-                    mb.obs, mb.act, action_mask=mb.action_mask
-                )
-                logratio = new_log_prob - mb.log_prob
+                if self.is_recurrent:
+                    new_log_prob, entropy = self.policy.evaluate_actions_sequence_flat(
+                        mb.obs, mb.act, mb.rnn_hidden,
+                        action_mask=mb.action_mask,
+                    )
+                    new_log_prob = new_log_prob.reshape(-1)
+                    entropy = entropy.reshape(-1)
+                else:
+                    obs_flat = mb.obs.reshape(-1, mb.obs.shape[-1]) if _any_rnn else mb.obs
+                    act_flat = mb.act.reshape(-1) if _any_rnn else mb.act
+                    am_flat = mb.action_mask.reshape(-1, mb.action_mask.shape[-1]) if (_any_rnn and mb.action_mask is not None) else mb.action_mask
+                    new_log_prob, entropy = self.policy.evaluate_actions_flat(
+                        obs_flat, act_flat, action_mask=am_flat,
+                    )
+                mb_log_prob = mb.log_prob.reshape(-1) if _any_rnn else mb.log_prob
+
+                logratio = new_log_prob - mb_log_prob
                 ratio = logratio.exp()
 
                 pg_loss1 = -mb_adv * ratio
@@ -291,17 +388,29 @@ class MAPPOAlgo(PPOBase):
                     all_actor_grad_norm.append(actor_grad_norm.item())
 
                 # ===== Critic update =====
-                new_value = self.critic(mb.global_state).squeeze(-1)
+                critic_in = mb.global_state
+                if self.is_critic_recurrent:
+                    new_value_seq, _ = self.critic.forward_sequence(
+                        critic_in, mb.critic_rnn_hidden,
+                    )
+                    new_value = new_value_seq.squeeze(-1).reshape(-1)
+                else:
+                    if _any_rnn:
+                        critic_in = critic_in.reshape(-1, critic_in.shape[-1])
+                    new_value = self.critic(critic_in).squeeze(-1)
+
+                mb_ret = mb.ret.reshape(-1) if _any_rnn else mb.ret
+                mb_value = mb.value.reshape(-1) if _any_rnn and mb.value is not None else mb.value
 
                 if self.use_value_norm and self.ret_rms is not None:
-                    target = (mb.ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
+                    target = (mb_ret - self.ret_rms.mean) / (self.ret_rms.std + 1e-8)
                 else:
-                    target = mb.ret
+                    target = mb_ret
 
                 if self.clip_vloss:
                     v_loss_unclipped = (new_value - target) ** 2
-                    v_clipped = mb.value + torch.clamp(
-                        new_value - mb.value, -self.clip_range, self.clip_range
+                    v_clipped = mb_value + torch.clamp(
+                        new_value - mb_value, -self.clip_range, self.clip_range,
                     )
                     v_loss_clipped = (v_clipped - target) ** 2
                     v_loss_per_sample = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
@@ -357,7 +466,7 @@ class MAPPOAlgo(PPOBase):
                 "approx_kl": np.mean(all_approx_kl) if all_approx_kl else 0.0,
                 "actor_grad_norm": np.mean(all_actor_grad_norm) if all_actor_grad_norm else 0.0,
                 "critic_grad_norm": np.mean(all_critic_grad_norm),
-            }
+            },
         )
 
     def set_training_mode(self, mode: bool):

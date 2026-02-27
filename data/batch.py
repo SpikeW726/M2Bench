@@ -4,6 +4,7 @@ try:
     from typing import Self  # Python 3.11+
 except ImportError:
     from typing_extensions import Self  # Python 3.10 兼容
+import math
 import numpy as np
 import torch
 
@@ -115,6 +116,118 @@ class RolloutBatch(BaseBatch):
     active_mask: torch.Tensor | np.ndarray = None  # (batch,)
     # For truncation value bootstrap (List[List[ndarray or None]]，不转为 tensor)
     final_global_state: list = None
+    # Actor RNN hidden state at each step (batch, recurrent_N, hidden_size)。MLP 时为 None。
+    rnn_hidden: torch.Tensor | np.ndarray = None
+    # Critic RNN hidden state at each step (batch, recurrent_N, hidden_size)。MLP critic 时为 None。
+    # 由 prepare_batch 在处理 RNN critic 序列时填充。
+    critic_rnn_hidden: torch.Tensor | np.ndarray = None
+
+    # -----------------------------------------------------------------
+    #  chunk_split: RNN chunk-based minibatch splitting
+    # -----------------------------------------------------------------
+
+    def chunk_split(
+        self,
+        chunk_len: int,
+        T: int,
+        N: int,
+        num_agents: int = 1,
+        minibatch_size: int = -1,
+    ) -> Iterator[Self]:
+        """
+        RNN chunk-based splitting。
+
+        数据布局假设: flat batch = (M*T*N, ...) 其中 M=num_agents。
+
+        步骤:
+        1. reshape → (M, T, N, ...)
+        2. T 轴 pad 到 chunk_len 的整数倍并切 chunk → (M, num_chunks, L, N, ...)
+        3. (M, num_chunks) 展平为 S，对 S 维 shuffle
+        4. 按 minibatch_size 切分（单位=序列条数，每条包含 L*N 步）
+        5. yield 的 minibatch 布局: 各字段 (L, mb_S*N, ...) — 时间维在前
+
+        rnn_hidden 特殊处理：只取每个 chunk 的首步 hidden 作为 h0，
+        yield 时形状 (recurrent_N, mb_S*N, hidden_dim)。
+
+        padding 保护：当 T 不是 chunk_len 整数倍时，填充步的 active_mask 为 0，
+        若原始 active_mask 为 None 则自动合成。
+        """
+        M = num_agents
+        L = chunk_len
+        total = M * T * N
+
+        num_chunks = math.ceil(T / L)
+        T_padded = num_chunks * L
+
+        # 当需要 padding 且 active_mask 不存在时，合成一个全 1 mask；
+        # _reshape_and_chunk 的零填充会自动使 padding 位置变为 0。
+        _val_overrides: dict = {}
+        if T_padded > T and self.active_mask is None:
+            ref = self.obs
+            _val_overrides["active_mask"] = torch.ones(
+                total, dtype=torch.float32, device=ref.device,
+            )
+
+        def _reshape_and_chunk(x: torch.Tensor, is_hidden: bool = False):
+            """(total, *feat) -> (M, num_chunks, L, N, *feat)，hidden 只取首步"""
+            feat = x.shape[1:]
+            v = x.view(M, T, N, *feat)
+
+            if T_padded > T:
+                pad_shape = (M, T_padded - T, N, *feat)
+                v = torch.cat([v, torch.zeros(pad_shape, dtype=x.dtype, device=x.device)], dim=1)
+
+            v = v.view(M, num_chunks, L, N, *feat)
+
+            if is_hidden:
+                return v[:, :, 0, :, :]
+            return v
+
+        S = M * num_chunks
+        perm = torch.randperm(S)
+
+        if minibatch_size <= 0 or minibatch_size >= S:
+            minibatch_size = S
+
+        for mb_start in range(0, S, minibatch_size):
+            mb_end = min(mb_start + minibatch_size, S)
+            mb_idx = perm[mb_start:mb_end]
+            mb_S = len(mb_idx)
+
+            kwargs = {}
+            for f in fields(self):
+                val = _val_overrides.get(f.name, getattr(self, f.name))
+                if val is None:
+                    kwargs[f.name] = None
+                    continue
+
+                if f.name == "final_global_state":
+                    kwargs[f.name] = None
+                    continue
+
+                if not isinstance(val, torch.Tensor):
+                    kwargs[f.name] = val
+                    continue
+
+                is_hidden = f.name in ("rnn_hidden", "critic_rnn_hidden")
+
+                if is_hidden:
+                    chunked = _reshape_and_chunk(val, is_hidden=True)
+                    flat_s = chunked.reshape(S, N, *chunked.shape[3:])
+                    selected = flat_s[mb_idx]
+                    rN, H = selected.shape[-2], selected.shape[-1]
+                    kwargs[f.name] = selected.reshape(mb_S * N, rN, H).permute(1, 0, 2).contiguous()
+                else:
+                    chunked = _reshape_and_chunk(val)
+                    feat = chunked.shape[4:]
+                    flat_s = chunked.reshape(S, L, N, *feat)
+                    selected = flat_s[mb_idx]
+                    selected = selected.reshape(mb_S, L, N, *feat)
+                    selected = selected.permute(1, 0, 2, *range(3, 3 + len(feat))).contiguous()
+                    selected = selected.reshape(L, mb_S * N, *feat)
+                    kwargs[f.name] = selected
+
+            yield self.__class__(**kwargs)
 
 
 @dataclass 
@@ -128,6 +241,19 @@ class TransitionBatch(BaseBatch):
     # For action masking
     action_mask: torch.Tensor | np.ndarray = None  # (batch, num_actions)
     next_action_mask: torch.Tensor | np.ndarray = None
+
+
+@dataclass
+class SequenceBatch(BaseBatch):
+    """Off-policy RNN 训练用序列 batch，所有字段含 seq_len 维度。"""
+    obs: torch.Tensor | np.ndarray = None               # (B, L, obs_dim)
+    act: torch.Tensor | np.ndarray = None               # (B, L)
+    rew: torch.Tensor | np.ndarray = None               # (B, L)
+    next_obs: torch.Tensor | np.ndarray = None          # (B, L, obs_dim)
+    done: torch.Tensor | np.ndarray = None              # (B, L)
+    mask: torch.Tensor | np.ndarray = None              # (B, L) — 有效步=1, padding=0
+    action_mask: torch.Tensor | np.ndarray = None       # (B, L, act_dim)
+    next_action_mask: torch.Tensor | np.ndarray = None  # (B, L, act_dim)
 
 
 @dataclass

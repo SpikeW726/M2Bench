@@ -1,5 +1,5 @@
 """
-MLP network modules for Actor and Critic.
+MLP network modules: ActorMLP, CriticMLP, QMLP.
 """
 
 import numpy as np
@@ -26,7 +26,8 @@ class ActorMLP(nn.Module):
     Actor network with configurable hidden layers.
     Output layer gain = 0.01 for stable policy initialization.
     """
-    
+    is_recurrent = False
+
     def __init__(self, input_dim, hidden_sizes, output_dim):
         super().__init__()
         # Store config for checkpoint saving
@@ -57,7 +58,8 @@ class CriticMLP(nn.Module):
     Critic network (Value Function).
     Output layer gain = 1.0.
     """
-    
+    is_recurrent = False
+
     def __init__(self, input_dim, hidden_sizes, output_dim=1):
         super().__init__()
         # Store config for checkpoint saving
@@ -81,3 +83,40 @@ class CriticMLP(nn.Module):
 
     def forward(self, x):
         return self.network(x)
+
+
+class QMLP(nn.Module):
+    """
+    Q-network MLP，输出 action_dim 个 Q 值。
+    dueling=True 时使用 Dueling 架构: Q = V + A - mean(A)。
+    """
+    is_recurrent = False
+
+    def __init__(self, input_dim, hidden_sizes, output_dim, dueling=False):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_sizes = list(hidden_sizes)
+        self.output_dim = output_dim
+        self.dueling = dueling
+
+        hidden_layers = []
+        current_dim = input_dim
+        for h_dim in hidden_sizes:
+            hidden_layers.append(layer_init(nn.Linear(current_dim, h_dim), std=np.sqrt(2)))
+            hidden_layers.append(nn.Tanh())
+            current_dim = h_dim
+        self.shared = nn.Sequential(*hidden_layers)
+
+        if dueling:
+            self.v_stream = layer_init(nn.Linear(current_dim, 1), std=1.0)
+            self.a_stream = layer_init(nn.Linear(current_dim, output_dim), std=1.0)
+        else:
+            self.q_head = layer_init(nn.Linear(current_dim, output_dim), std=1.0)
+
+    def forward(self, x):
+        features = self.shared(x)
+        if self.dueling:
+            v = self.v_stream(features)                          # (batch, 1)
+            a = self.a_stream(features)                          # (batch, output_dim)
+            return v + a - a.mean(dim=-1, keepdim=True)          # (batch, output_dim)
+        return self.q_head(features)

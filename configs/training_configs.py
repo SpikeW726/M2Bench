@@ -41,6 +41,7 @@ class OnPolicyTrainerConfig(TrainerConfig):
 class OffPolicyTrainerConfig(TrainerConfig):
     """Off-policy 训练器配置 (DQN, SAC 等)"""
     batch_size: int = 256
-    warmup_steps: int = 10000
-    collect_per_step: int = 1
-    update_per_step: int = 1
+    warmup_steps: int = 10000          # 训练前随机填充 buffer 的步数
+    collect_per_step: int = 1          # 每次 collect 的环境步数
+    update_per_step: int = 1           # 每次 collect 后的梯度更新次数
+    buffer_size: int = 100_000         # ReplayBuffer 容量

@@ -237,18 +237,20 @@ class OnPolicyTrainer(BaseTrainer):
 
 class OffPolicyTrainer(BaseTrainer):
     """
-    Off-policy 训练器 (DQN, SAC 等)。
+    Off-policy 训练器 (DQN, IQL, VDQN, QMIX 等)。
+
+    ReplayBuffer 由 collector 持有（OffPolicyCollector / MAOffPolicyCollector），
+    Trainer 通过 collector.sample() / collector.can_sample() 访问。
 
     每轮迭代：
-        1. Collect 少量 step 存入 replay buffer
-        2. 从 buffer 采样并 update
+        1. collect() 采集少量 step 并自动存入 collector 内部的 buffer
+        2. collector.sample() 采样 → algorithm.update()
     """
 
     def __init__(
         self,
         algorithm: BaseAlgorithm,
         collector: BaseCollector,
-        buffer: Any,  # ReplayBuffer
         config: OffPolicyTrainerConfig,
         # Callbacks
         save_checkpoint_fn: Optional[Callable[[int], None]] = None,
@@ -265,7 +267,6 @@ class OffPolicyTrainer(BaseTrainer):
             stop_fn=stop_fn,
             logger=logger,
         )
-        self.buffer = buffer
         self.collect_per_step = config.collect_per_step
         self.update_per_step = config.update_per_step
         self.batch_size = config.batch_size
@@ -275,12 +276,19 @@ class OffPolicyTrainer(BaseTrainer):
         self.collector.reset()
         self.start_time = time.time()
 
+        # ---- Warmup: 填充 buffer 但不训练 ----
         if self.warmup_steps > 0:
             if self.verbose:
                 print(f"Warming up buffer with {self.warmup_steps} steps...")
-            # TODO: collect with random policy
-            pass
+            self.algorithm.set_training_mode(True)
+            warmup_collected = 0
+            while warmup_collected < self.warmup_steps:
+                result = self.collector.collect(n_steps=self.collect_per_step)
+                warmup_collected += result.n_steps
+            if self.verbose:
+                print(f"Warmup done, collected {warmup_collected} steps")
 
+        # ---- 主训练循环 ----
         for self.iteration in range(1, self.max_iteration + 1):
             if self.save_checkpoint_fn and self.iteration % self.save_interval == 0:
                 self.save_checkpoint_fn(self.iteration)
@@ -310,21 +318,29 @@ class OffPolicyTrainer(BaseTrainer):
         all_rewards: List[float] = []
         iter_steps = 0
 
+        # RNN 时需传 seq_len 给 collector.sample
+        is_recurrent = getattr(self.algorithm, "is_recurrent", False)
+        seq_len = getattr(self.algorithm, "seq_len", 20) if is_recurrent else 0
+
         while iter_steps < self.step_per_iteration:
+            # 1. Collect（数据自动存入 collector 内部的 buffer）
+            self.algorithm.set_training_mode(True)
             result = self.collector.collect(n_steps=self.collect_per_step)
             iter_steps += result.n_steps
             self.total_steps += result.n_steps
             all_rewards.extend(result.episode_rewards)
 
-            # self.buffer.add(result.batch)
-
-            if len(self.buffer) >= self.batch_size:
+            # 2. Update（从 buffer 采样）
+            if self.collector.can_sample(self.batch_size):
                 for _ in range(self.update_per_step):
-                    batch = self.buffer.sample(self.batch_size)
+                    if is_recurrent:
+                        batch = self.collector.sample(self.batch_size, seq_len=seq_len)
+                    else:
+                        batch = self.collector.sample(self.batch_size)
                     stats = self.algorithm.update(batch)
                     all_stats.append(stats)
 
-        iter_result = {
+        iter_result: Dict[str, Any] = {
             "stats_list": all_stats,
             "sps": self._compute_sps(),
         }
@@ -338,15 +354,20 @@ class OffPolicyTrainer(BaseTrainer):
         return iter_result
 
     def _log_iteration(self, iter_result: Dict[str, Any]):
-        stats_list = iter_result.get("stats_list", [])
+        stats_list: List[TrainingStats] = iter_result.get("stats_list", [])
 
-        log_data = {
+        log_data: Dict[str, float] = {
             "train/sps": iter_result["sps"],
             "train/total_steps": self.total_steps,
         }
 
         if stats_list:
             log_data["train/loss"] = np.mean([s.loss for s in stats_list])
+            # 提取 off-policy 特有统计量
+            for key in ("epsilon", "epsilon_mean", "q_mean", "q_max", "td_error"):
+                vals = [s.extra.get(key) for s in stats_list if s.extra.get(key) is not None]
+                if vals:
+                    log_data[f"train/{key}"] = np.mean(vals)
 
         if "mean_reward" in iter_result:
             log_data["rollout/episode_reward"] = iter_result["mean_reward"]
@@ -360,6 +381,10 @@ class OffPolicyTrainer(BaseTrainer):
         self._log(log_data)
 
         if self.verbose and (self.iteration % 10 == 0 or self.iteration == 1):
+            loss_str = (
+                f"{np.mean([s.loss for s in stats_list]):.4f}"
+                if stats_list else "N/A"
+            )
             reward_str = (
                 f"{iter_result.get('mean_reward', 0):.2f}"
                 if "mean_reward" in iter_result else "N/A"
@@ -367,5 +392,5 @@ class OffPolicyTrainer(BaseTrainer):
             print(
                 f"[Iter {self.iteration}/{self.max_iteration}] "
                 f"steps={self.total_steps}, reward={reward_str}, "
-                f"SPS={iter_result['sps']}"
+                f"loss={loss_str}, SPS={iter_result['sps']}"
             )
