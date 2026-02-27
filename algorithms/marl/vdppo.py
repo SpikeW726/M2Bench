@@ -29,20 +29,18 @@ class VDPPOAlgo(PPOBase):
     def __init__(
         self,
         policy: MultiAgentPolicy,
-        critic: nn.Module,
         params: VDPPOParams,
         num_envs: int,
         action_dim: int,
         state_dim: int,
         n_agents: int,
+        critic: Optional[nn.Module] = None,
         total_iterations: Optional[int] = None,
         optimizer_steps_per_iter: Optional[int] = None,
         value_norm_config: Optional[Dict] = None,
         q_network: Optional[nn.Module] = None,
-        **kwargs,
     ):
-        super().__init__(policy, critic, params, num_envs)
-        # self.critic 由基类设置但 VDPPO 不使用（用 Q-network 替代）
+        super().__init__(policy, None, params, num_envs, value_norm_config=value_norm_config)
 
         self.n_agents = n_agents
         self.action_dim = action_dim
@@ -78,8 +76,10 @@ class VDPPOAlgo(PPOBase):
             lr=params.q_lr,
         )
 
-        # ---- 目标网络硬更新计数器 ----
+        # ---- Target 网络更新: tau < 1.0 → soft, tau >= 1.0 → hard ----
+        self.tau = params.tau
         self.target_update_freq = params.target_update_freq
+        self.q_clip_range = params.q_clip_range
         self._update_count = 0
 
         # ---- LR schedulers ----
@@ -114,12 +114,10 @@ class VDPPOAlgo(PPOBase):
 
     def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> RolloutBatch:
         """
-        完全 override 基类。不使用 GAE，改用 Q-decomposition:
+        完全 override 基类:
 
-        1. 计算 per-agent Q_i → V_i / A_i
-        2. 通过 QPLEXMixer 得到 Q_tot (用于 clipping)
-        3. Double DQN 计算 TD target y_tot
-        4. 合并为 RolloutBatch (actor) + self._q_data (Q-network)
+        Actor 部分: per-agent GAE（V_i = max Q_i 作为 baseline，实际 reward 驱动）
+        Q 部分: Q-decomposition TD target（Q_tot → y_tot，用于 Q-network 更新）
         """
         agents = list(batch_dict.keys())
         num_agents = len(agents)
@@ -141,12 +139,15 @@ class VDPPOAlgo(PPOBase):
             trunc_bool = trunc_2d > 0.5
             term_bool = (done_2d > 0.5) & ~trunc_bool
         else:
+            trunc_2d = None
             trunc_bool = torch.zeros(T, N, dtype=torch.bool, device=self.device)
             term_bool = done_2d > 0.5
 
         # ---- 收集 per-agent 数据 ----
         all_obs, all_act, all_log_prob = [], [], []
+        all_adv, all_ret, all_value = [], [], []
         all_action_mask, all_active_mask = [], []
+        all_rnn_hidden = []
         per_agent_act: list[torch.Tensor] = []
         per_agent_rew: list[torch.Tensor] = []
 
@@ -161,13 +162,16 @@ class VDPPOAlgo(PPOBase):
                 all_action_mask.append(b.action_mask)
             if b.active_mask is not None:
                 all_active_mask.append(b.active_mask)
+            if b.rnn_hidden is not None:
+                all_rnn_hidden.append(b.rnn_hidden)
 
         joint_actions = torch.stack(per_agent_act, dim=-1)          # (T*N, n_agents)
         joint_rew = torch.stack(per_agent_rew, dim=-1).sum(dim=-1)  # (T*N,)
 
         with torch.no_grad():
-            # ---- Per-agent Q → V / A ----
-            per_agent_v, per_agent_a = [], []
+            # ---- Per-agent V_i = max Q_i（GAE baseline） ----
+            per_agent_v = []
+            per_agent_qplex_a = []
             for i in range(num_agents):
                 one_hot = torch.zeros(total_size, num_agents, device=self.device)
                 one_hot[:, i] = 1.0
@@ -179,17 +183,17 @@ class VDPPOAlgo(PPOBase):
                     Q_i.gather(1, per_agent_act[i].unsqueeze(-1)).squeeze(-1) - V_i
                 )
                 per_agent_v.append(V_i)
-                per_agent_a.append(A_i)
+                per_agent_qplex_a.append(A_i)
 
-            # ---- 当前 Q_tot（用于 clipping baseline） ----
+            # ---- 当前 Q_tot（Q-update clipping baseline） ----
             V_vals = torch.stack(per_agent_v, dim=-1)               # (T*N, n_agents)
-            A_vals = torch.stack(per_agent_a, dim=-1)               # (T*N, n_agents)
+            A_vals = torch.stack(per_agent_qplex_a, dim=-1)         # (T*N, n_agents)
             old_q_tot = self.mixing_net(V_vals, A_vals, global_state)  # (T*N,)
 
             # ---- 构建 next_states ----
             next_states = torch.zeros_like(state_2d)                # (T, N, state_dim)
             next_states[:-1] = state_2d[1:]
-            next_states[-1] = state_2d[-1]                          # 最后一步 bootstrap 近似
+            next_states[-1] = state_2d[-1]
 
             if final_gs is not None:
                 for pos in trunc_bool.nonzero(as_tuple=False):
@@ -215,7 +219,7 @@ class VDPPOAlgo(PPOBase):
                 target_v_next.append(V_tgt_i)
 
             V_tgt_all = torch.stack(target_v_next, dim=-1)          # (T*N, n_agents)
-            A_tgt_all = torch.zeros_like(V_tgt_all)                 # greedy → A = 0
+            A_tgt_all = torch.zeros_like(V_tgt_all)
             Q_tot_next = self.target_mixing_net(
                 V_tgt_all, A_tgt_all, next_flat,
             )                                                       # (T*N,)
@@ -226,6 +230,29 @@ class VDPPOAlgo(PPOBase):
             bootstrap[term_bool] = 0.0
             y_tot_flat = (rew_2d + bootstrap).view(-1)              # (T*N,)
 
+            # ---- Per-agent GAE: V_i 作为 baseline, 实际 r_i 驱动 ----
+            for i, agent in enumerate(agents):
+                b = batch_dict[agent].to_tensor(self.device)
+                rew_i_2d = b.rew.view(T, N)
+                values_i_2d = per_agent_v[i].view(T, N)
+
+                active_mask_2d = None
+                if self.use_active_mask and b.active_mask is not None:
+                    active_mask_2d = b.active_mask.view(T, N)
+
+                # Truncation bootstrap: V_i(final_state)
+                trunc_bootstrap_i = self._compute_q_trunc_bootstrap(
+                    trunc_2d, final_gs, i, num_agents, T, N,
+                )
+
+                adv_i, ret_i = self._gae_vectorized(
+                    rew_i_2d, values_i_2d, done_2d, trunc_2d,
+                    trunc_bootstrap_i, active_mask_2d,
+                )
+                all_adv.append(adv_i)
+                all_ret.append(ret_i)
+                all_value.append(values_i_2d.view(-1))
+
         # ---- 存储 Q-update 辅助数据 ----
         self._q_data = {
             "states": global_state,                                 # (T*N, state_dim)
@@ -233,6 +260,11 @@ class VDPPOAlgo(PPOBase):
             "y_tot": y_tot_flat,                                    # (T*N,)
             "old_q_tot": old_q_tot,                                 # (T*N,)
         }
+
+        # ---- 记录 RNN chunk_split 所需的布局参数 ----
+        self._last_T = T
+        self._last_N = N
+        self._last_num_agents = num_agents
 
         # ---- 合并为 actor-update 用 RolloutBatch（同 MAPPO 结构） ----
         all_critic_input = []
@@ -245,12 +277,13 @@ class VDPPOAlgo(PPOBase):
             obs=torch.cat(all_obs, dim=0),
             act=torch.cat(all_act, dim=0),
             log_prob=torch.cat(all_log_prob, dim=0),
-            adv=torch.cat(per_agent_a, dim=0),
-            ret=y_tot_flat.repeat(num_agents),
-            value=old_q_tot.repeat(num_agents),
+            adv=torch.cat(all_adv, dim=0),
+            ret=torch.cat(all_ret, dim=0),
+            value=torch.cat(all_value, dim=0),
             global_state=torch.cat(all_critic_input, dim=0),
             action_mask=torch.cat(all_action_mask, dim=0) if all_action_mask else None,
             active_mask=torch.cat(all_active_mask, dim=0) if all_active_mask else None,
+            rnn_hidden=torch.cat(all_rnn_hidden, dim=0) if all_rnn_hidden else None,
         )
 
     # ====================================================================
@@ -316,11 +349,16 @@ class VDPPOAlgo(PPOBase):
                     s_mb,
                 )
 
-                Q_clip = oq_mb + torch.clamp(Q_tot - oq_mb, -self.clip_range, self.clip_range)
-                q_loss = 0.5 * torch.max(
-                    (y_mb - Q_tot) ** 2,
-                    (y_mb - Q_clip) ** 2,
-                ).mean()
+                if self.q_clip_range is not None:
+                    Q_clip = oq_mb + torch.clamp(
+                        Q_tot - oq_mb, -self.q_clip_range, self.q_clip_range,
+                    )
+                    q_loss = 0.5 * torch.max(
+                        (y_mb - Q_tot) ** 2,
+                        (y_mb - Q_clip) ** 2,
+                    ).mean()
+                else:
+                    q_loss = 0.5 * ((y_mb - Q_tot) ** 2).mean()
 
                 self.q_optimizer.zero_grad()
                 q_loss.backward()
@@ -336,14 +374,30 @@ class VDPPOAlgo(PPOBase):
                 all_q_gn.append(q_gn.item())
 
             # ============ 2. Actor Update (merged, 同 MAPPO) ============
-            for mb in batch.split(size=minibatch_size, shuffle=True, merge_last=True):
+            _actor_rnn = self.is_recurrent
+
+            if _actor_rnn:
+                actor_mb_iter = batch.chunk_split(
+                    chunk_len=self.data_chunk_length,
+                    T=self._last_T, N=self._last_N,
+                    num_agents=self._last_num_agents,
+                    minibatch_size=minibatch_size,
+                )
+            else:
+                actor_mb_iter = batch.split(size=minibatch_size, shuffle=True, merge_last=True)
+
+            for mb in actor_mb_iter:
                 if mb.active_mask is not None:
                     am = mb.active_mask.float()
+                    if _actor_rnn:
+                        am = am.reshape(-1)
                     am_sum = am.sum().clamp(min=1.0)
                 else:
                     am = None
 
                 mb_adv = mb.adv
+                if _actor_rnn:
+                    mb_adv = mb_adv.reshape(-1)
                 if self.normalize_advantage:
                     if am is not None:
                         active_adv = mb_adv[am > 0.5]
@@ -352,10 +406,20 @@ class VDPPOAlgo(PPOBase):
                     elif mb_adv.numel() > 1:
                         mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
-                new_lp, entropy = self.policy.evaluate_actions_flat(
-                    mb.obs, mb.act, action_mask=mb.action_mask,
-                )
-                logratio = new_lp - mb.log_prob
+                if _actor_rnn:
+                    new_lp, entropy = self.policy.evaluate_actions_sequence_flat(
+                        mb.obs, mb.act, mb.rnn_hidden,
+                        action_mask=mb.action_mask,
+                    )
+                    new_lp = new_lp.reshape(-1)
+                    entropy = entropy.reshape(-1)
+                else:
+                    new_lp, entropy = self.policy.evaluate_actions_flat(
+                        mb.obs, mb.act, action_mask=mb.action_mask,
+                    )
+                mb_log_prob = mb.log_prob.reshape(-1) if _actor_rnn else mb.log_prob
+
+                logratio = new_lp - mb_log_prob
                 ratio = logratio.exp()
 
                 pg1 = -mb_adv * ratio
@@ -398,10 +462,13 @@ class VDPPOAlgo(PPOBase):
                 if self.target_kl is not None and avg_kl > self.target_kl:
                     break
 
-        # ---- 目标网络硬更新 ----
+        # ---- 目标网络更新 ----
         self._update_count += 1
         if self._update_count % self.target_update_freq == 0:
-            self._hard_update_targets()
+            if self.tau < 1.0:
+                self._soft_update_targets()
+            else:
+                self._hard_update_targets()
 
         return TrainingStats(
             loss=np.mean(all_pg_loss) + np.mean(all_q_loss),
@@ -419,6 +486,62 @@ class VDPPOAlgo(PPOBase):
     # ====================================================================
     #                     辅助方法
     # ====================================================================
+
+    def _compute_q_trunc_bootstrap(
+        self,
+        truncateds: Optional[torch.Tensor],
+        final_global_states,
+        agent_idx: int,
+        num_agents: int,
+        T: int,
+        N: int,
+    ) -> torch.Tensor:
+        """Truncation 处用 V_i = max Q_i(final_state) 做 bootstrap。"""
+        device = self.device
+        trunc_bootstrap = torch.zeros(T, N, device=device)
+
+        if truncateds is None or final_global_states is None:
+            return trunc_bootstrap
+
+        trunc_mask = truncateds > 0.5
+        if not trunc_mask.any():
+            return trunc_bootstrap
+
+        trunc_positions = trunc_mask.nonzero(as_tuple=False)
+
+        batch_states = []
+        valid_k_indices = []
+        for k in range(len(trunc_positions)):
+            t_idx = trunc_positions[k, 0].item()
+            e_idx = trunc_positions[k, 1].item()
+            fs = final_global_states[t_idx][e_idx] if final_global_states else None
+            if fs is not None:
+                batch_states.append(
+                    torch.as_tensor(fs, dtype=torch.float32, device=device)
+                )
+                valid_k_indices.append(k)
+
+        if batch_states:
+            states_t = torch.stack(batch_states)
+            one_hot = torch.zeros(len(batch_states), num_agents, device=device)
+            one_hot[:, agent_idx] = 1.0
+            q_in = torch.cat([states_t, one_hot], dim=-1)
+            Q_i = self.q_network(q_in)
+            V_i = Q_i.max(dim=-1).values
+
+            for vi, k in enumerate(valid_k_indices):
+                t_idx = trunc_positions[k, 0].item()
+                e_idx = trunc_positions[k, 1].item()
+                trunc_bootstrap[t_idx, e_idx] = V_i[vi]
+
+        return trunc_bootstrap
+
+    def _soft_update_targets(self):
+        tau = self.tau
+        for tp, p in zip(self.target_q_network.parameters(), self.q_network.parameters()):
+            tp.data.copy_(tau * p.data + (1 - tau) * tp.data)
+        for tp, p in zip(self.target_mixing_net.parameters(), self.mixing_net.parameters()):
+            tp.data.copy_(tau * p.data + (1 - tau) * tp.data)
 
     def _hard_update_targets(self):
         self.target_q_network.load_state_dict(self.q_network.state_dict())

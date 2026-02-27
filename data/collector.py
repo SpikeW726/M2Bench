@@ -252,10 +252,10 @@ class MAOnPolicyCollector(BaseCollector):
                 "单智能体请用 OnPolicyCollector"
             )
         self.agents = env.agents
+        # 必须在 super().__init__ 之前设置，_reset_buffer 依赖此标志
+        self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         super().__init__(algorithm, env)
 
-        # RNN hidden state 管理
-        self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         self._hidden: Optional[Dict[str, torch.Tensor]] = None
         if self._is_recurrent:
             self._init_hidden()
@@ -365,7 +365,9 @@ class MAOnPolicyCollector(BaseCollector):
             for agent in self.agents:
                 self._buffers[agent]['final_global_state'].append(final_gs_list)
 
-            self._current_rewards += rew[first_agent]
+            # 所有智能体平均 reward
+            mean_rew = sum(rew[a] for a in self.agents) / len(self.agents)
+            self._current_rewards += mean_rew
             self._current_lengths += 1
             step_count += self.num_envs
 
@@ -422,17 +424,19 @@ class MAOnPolicyCollector(BaseCollector):
         )
 
     def _get_global_states(self) -> Optional[np.ndarray]:
-        try:
-            if hasattr(self.env, 'call_env_method'):
-                states = self.env.call_env_method("state")
-            else:
-                states = self.env.get_env_attr("state")
-                states = [s() if callable(s) else s for s in states]
-            if states is None or states[0] is None:
-                return None
-            return np.stack(states)
-        except Exception:
+        """获取所有 env 的 global state。
+
+        失败时显式抛出异常而非静默返回 None，避免 CTDE 算法
+        （如 QMIX）用零值 state 通过超网络产生无意义的 Q_tot。
+        """
+        if hasattr(self.env, 'call_env_method'):
+            states = self.env.call_env_method("state")
+        else:
+            states = self.env.get_env_attr("state")
+            states = [s() if callable(s) else s for s in states]
+        if states is None or states[0] is None:
             return None
+        return np.stack(states)
 
 
 # =============================================================================
@@ -618,6 +622,7 @@ class MAOffPolicyCollector(BaseCollector):
         algorithm: BaseAlgorithm,
         env: BaseVectorEnv,
         buffers: Dict[str, Union["ReplayBuffer", "EpisodeReplayBuffer"]],
+        collect_state: bool = False,
     ):
         if not env.is_parallel_env:
             raise ValueError(
@@ -627,6 +632,8 @@ class MAOffPolicyCollector(BaseCollector):
         self.buffers = buffers
         self.agents = env.agents
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
+        self._collect_state = collect_state
+        self._shared_indices = collect_state  # CTDE 算法需要对齐采样
         self._hidden: Optional[Dict[str, torch.Tensor]] = None
         super().__init__(algorithm, env)
 
@@ -683,12 +690,22 @@ class MAOffPolicyCollector(BaseCollector):
                 self._hidden = new_hidden
 
             cur_action_masks: Dict[str, Optional[np.ndarray]] = {}
+            cur_active_masks: Dict[str, Optional[np.ndarray]] = {}
             for agent in self.agents:
                 cur_action_masks[agent] = _extract_agent_action_mask_np(
                     self._info, agent, self.num_envs
                 )
+                cur_active_masks[agent] = _extract_agent_active_mask_np(
+                    self._info, agent, self.num_envs
+                )
+
+            # CTDE: step 前采集 current state
+            cur_state = self._get_global_states() if self._collect_state else None
 
             next_obs, rew, term, trunc, info = self.env.step(actions)
+
+            # CTDE: step 后采集 next state
+            next_state = self._get_global_states() if self._collect_state else None
 
             if self._is_recurrent:
                 # RNN: 累积到 per-agent per-env episode buffer
@@ -722,10 +739,15 @@ class MAOffPolicyCollector(BaseCollector):
                         done=done,
                         action_mask=cur_action_masks[agent],
                         next_action_mask=next_am,
+                        state=cur_state,
+                        next_state=next_state,
+                        active_mask=cur_active_masks[agent],
                     )
 
             first_agent = self.agents[0]
-            self._current_rewards += rew[first_agent]
+            # 所有智能体平均 reward
+            mean_rew = sum(rew[a] for a in self.agents) / len(self.agents)
+            self._current_rewards += mean_rew
             self._current_lengths += 1
             step_count += self.num_envs
 
@@ -770,11 +792,32 @@ class MAOffPolicyCollector(BaseCollector):
             self.buffers[agent].add_episode(episode)
             self._episode_buffers[agent][env_idx] = []
 
+    def _get_global_states(self) -> Optional[np.ndarray]:
+        """获取所有 env 的 global state。
+
+        失败时显式抛出异常而非静默返回 None，避免 CTDE 算法
+        （如 QMIX）用零值 state 通过超网络产生无意义的 Q_tot。
+        """
+        if hasattr(self.env, 'call_env_method'):
+            states = self.env.call_env_method("state")
+        else:
+            states = self.env.get_env_attr("state")
+            states = [s() if callable(s) else s for s in states]
+        if states is None or states[0] is None:
+            return None
+        return np.stack(states)
+
     def sample(self, batch_size: int, seq_len: int = 0) -> Dict[str, Union[TransitionBatch, SequenceBatch]]:
         first_buf = next(iter(self.buffers.values()))
         if isinstance(first_buf, EpisodeReplayBuffer):
             return {
                 aid: buf.sample(batch_size, seq_len)
+                for aid, buf in self.buffers.items()
+            }
+        if self._shared_indices:
+            indices = np.random.choice(len(first_buf), size=batch_size, replace=False)
+            return {
+                aid: buf.sample_by_indices(indices)
                 for aid, buf in self.buffers.items()
             }
         return {
@@ -839,6 +882,24 @@ def _extract_agent_action_mask_np(
     if not masks:
         return None
     return np.stack(masks)
+
+
+def _extract_agent_active_mask_np(
+    info_dict: Optional[Dict[str, np.ndarray]],
+    agent: str,
+    num_envs: int,
+) -> Optional[np.ndarray]:
+    """从多智能体 vectorized info 中提取某 agent 的 active_mask → numpy。"""
+    if info_dict is None or agent not in info_dict:
+        return None
+    info_arr = info_dict[agent]
+    masks = []
+    for i in range(num_envs):
+        if isinstance(info_arr[i], dict):
+            masks.append(float(info_arr[i].get('active_mask', 1)))
+        else:
+            masks.append(1.0)
+    return np.array(masks, dtype=np.float32)
 
 
 # =============================================================================

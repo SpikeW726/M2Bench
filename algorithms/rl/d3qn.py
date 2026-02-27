@@ -34,7 +34,6 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
         self,
         policy: ValuePolicy,
         params: D3QNParams,
-        **kwargs,
     ):
         super().__init__(
             policy=policy,

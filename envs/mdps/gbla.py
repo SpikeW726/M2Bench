@@ -14,8 +14,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 from gymnasium.spaces import Box
 
-from bbla import BBLAEnv
-from patrol_core import AgentState, TickResult
+from envs.mdps.bbla import BBLAEnv
+from envs.mdps.patrol_core import AgentState, TickResult
 
 
 class GBLAEnv(BBLAEnv):

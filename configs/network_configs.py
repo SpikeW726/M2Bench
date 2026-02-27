@@ -30,10 +30,15 @@ class MLPConfig(NetworkConfig):
 
 @dataclass(kw_only=True)
 class RNNConfig(NetworkConfig):
-    """RNN 网络参数，用于 ActorRNN / CriticRNN"""
+    """RNN 网络参数，用于 ActorRNN / CriticRNN
+
+    fc_hidden: GRU/LSTM 前的编码层尺寸列表，如 [256, 256]。
+              为空时退化为单层 [hidden_size] 保持向后兼容。
+    """
     rnn_type: str = "gru"
     hidden_size: int = 64
     num_layers: int = 1
+    fc_hidden: List[int] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)

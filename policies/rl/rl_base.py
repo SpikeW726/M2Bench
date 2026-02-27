@@ -233,6 +233,12 @@ class ActorPolicy(RLBasePolicy):
         if self.is_discrete:
             if action_mask is not None:
                 mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=self.device)
+                # chunk_split padding 产生全零 mask → 全 -inf，设第一个 action 为 valid
+                all_masked = ~mask_t.any(dim=-1)
+                if all_masked.any():
+                    mask_t = mask_t.clone()
+                    idx = all_masked.nonzero(as_tuple=True)
+                    mask_t[idx[0], idx[1], 0] = True
                 logits_seq = logits_seq.masked_fill(~mask_t, float("-inf"))
             dist = torch.distributions.Categorical(logits=logits_seq)
             log_prob = dist.log_prob(act_seq)

@@ -21,6 +21,9 @@ class ReplayBuffer:
         max_size: int,
         has_action_mask: bool = False,
         action_dim: Optional[int] = None,
+        has_state: bool = False,
+        state_dim: int = 0,
+        has_active_mask: bool = False,
     ):
         """
         Args:
@@ -31,11 +34,16 @@ class ReplayBuffer:
             action_dim: Number of discrete actions (for action_mask shape).
                        Required if has_action_mask=True, since act_shape
                        is for action value storage, not number of actions.
+            has_state: Whether to store global state (for CTDE: VDN/QMIX)
+            state_dim: Dimension of global state. Required if has_state=True.
+            has_active_mask: Whether to store active masks (1=READY, 0=ON_EDGE)
         """
         self.obs_shape = obs_shape
         self.act_shape = act_shape if act_shape else (1,)
         self.max_size = max_size
         self.has_action_mask = has_action_mask
+        self.has_state = has_state
+        self.has_active_mask = has_active_mask
 
         # 预分配数组
         self.obs = np.zeros((max_size, *obs_shape), dtype=np.float32)
@@ -55,6 +63,15 @@ class ReplayBuffer:
             self.action_mask = np.zeros((max_size, action_dim), dtype=np.bool_)
             self.next_action_mask = np.zeros((max_size, action_dim), dtype=np.bool_)
 
+        # Global state (for CTDE algorithms)
+        if self.has_state:
+            self.state = np.zeros((max_size, state_dim), dtype=np.float32)
+            self.next_state = np.zeros((max_size, state_dim), dtype=np.float32)
+
+        # Active mask (1=READY 决策步, 0=ON_EDGE 无效步)
+        if self.has_active_mask:
+            self.active_mask = np.ones(max_size, dtype=np.float32)
+
         self._ptr = 0
         self._size = 0
 
@@ -67,6 +84,9 @@ class ReplayBuffer:
         done: bool,
         action_mask: Optional[np.ndarray] = None,
         next_action_mask: Optional[np.ndarray] = None,
+        state: Optional[np.ndarray] = None,
+        next_state: Optional[np.ndarray] = None,
+        active_mask: Optional[float] = None,
     ):
         """
         添加单个 transition（循环覆盖）
@@ -79,6 +99,9 @@ class ReplayBuffer:
             done: terminal flag
             action_mask: boolean mask for valid actions at current step
             next_action_mask: boolean mask for valid actions at next step
+            state: global state (for CTDE algorithms)
+            next_state: next global state (for CTDE algorithms)
+            active_mask: 1=READY (valid decision), 0=ON_EDGE (no-op)
         """
         self.obs[self._ptr] = obs
         self.act[self._ptr] = act
@@ -90,25 +113,27 @@ class ReplayBuffer:
             if action_mask is not None:
                 self.action_mask[self._ptr] = action_mask
             else:
-                # Default: all actions valid
                 self.action_mask[self._ptr] = True
 
             if next_action_mask is not None:
                 self.next_action_mask[self._ptr] = next_action_mask
             else:
-                # Default: all actions valid
                 self.next_action_mask[self._ptr] = True
+
+        if self.has_state:
+            if state is not None:
+                self.state[self._ptr] = state
+            if next_state is not None:
+                self.next_state[self._ptr] = next_state
+
+        if self.has_active_mask:
+            self.active_mask[self._ptr] = active_mask if active_mask is not None else 1.0
 
         self._ptr = (self._ptr + 1) % self.max_size
         self._size = min(self._size + 1, self.max_size)
 
-    def sample(self, batch_size: int) -> TransitionBatch:
-        """随机采样"""
-        if batch_size > self._size:
-            raise ValueError(f"batch_size ({batch_size}) > buffer size ({self._size})")
-
-        indices = np.random.choice(self._size, size=batch_size, replace=False)
-
+    def _build_batch(self, indices: np.ndarray) -> TransitionBatch:
+        """从给定 indices 构建 TransitionBatch（内部共用逻辑）。"""
         act = self.act[indices]
         if self.act_shape == (1,):
             act = act.squeeze(-1)
@@ -121,12 +146,29 @@ class ReplayBuffer:
             done=self.done[indices].copy(),
         )
 
-        # Add action masks if available
         if self.has_action_mask:
             result.action_mask = self.action_mask[indices].copy()
             result.next_action_mask = self.next_action_mask[indices].copy()
 
+        if self.has_state:
+            result.state = self.state[indices].copy()
+            result.next_state = self.next_state[indices].copy()
+
+        if self.has_active_mask:
+            result.active_mask = self.active_mask[indices].copy()
+
         return result
+
+    def sample(self, batch_size: int) -> TransitionBatch:
+        """随机采样"""
+        if batch_size > self._size:
+            raise ValueError(f"batch_size ({batch_size}) > buffer size ({self._size})")
+        indices = np.random.choice(self._size, size=batch_size, replace=False)
+        return self._build_batch(indices)
+
+    def sample_by_indices(self, indices: np.ndarray) -> TransitionBatch:
+        """用外部索引采样（支持多 buffer 共享索引对齐）。"""
+        return self._build_batch(indices)
 
     def add_batch(
         self,
@@ -137,6 +179,9 @@ class ReplayBuffer:
         done: np.ndarray,
         action_mask: Optional[np.ndarray] = None,
         next_action_mask: Optional[np.ndarray] = None,
+        state: Optional[np.ndarray] = None,
+        next_state: Optional[np.ndarray] = None,
+        active_mask: Optional[np.ndarray] = None,
     ):
         """
         批量添加 transitions（向量化写入，避免逐条 Python 循环）。
@@ -170,8 +215,14 @@ class ReplayBuffer:
                     self.next_action_mask[s] = next_action_mask
                 else:
                     self.next_action_mask[s] = True
+            if self.has_state:
+                if state is not None:
+                    self.state[s] = state
+                if next_state is not None:
+                    self.next_state[s] = next_state
+            if self.has_active_mask:
+                self.active_mask[s] = active_mask if active_mask is not None else 1.0
         else:
-            # 回绕：分两段写入
             first = self.max_size - self._ptr
             second = batch_size - first
 
@@ -202,6 +253,20 @@ class ReplayBuffer:
                 else:
                     self.next_action_mask[s1] = True
                     self.next_action_mask[s2] = True
+            if self.has_state:
+                if state is not None:
+                    self.state[s1] = state[:first]
+                    self.state[s2] = state[first:]
+                if next_state is not None:
+                    self.next_state[s1] = next_state[:first]
+                    self.next_state[s2] = next_state[first:]
+            if self.has_active_mask:
+                if active_mask is not None:
+                    self.active_mask[s1] = active_mask[:first]
+                    self.active_mask[s2] = active_mask[first:]
+                else:
+                    self.active_mask[s1] = 1.0
+                    self.active_mask[s2] = 1.0
 
         self._ptr = end % self.max_size
         self._size = min(self._size + batch_size, self.max_size)

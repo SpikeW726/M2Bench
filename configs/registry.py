@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Type
@@ -14,7 +15,10 @@ import torch.nn as nn
 import yaml
 
 from configs.env_configs import EnvConfig
-from configs.algo_configs import AlgoParams, MAPPOParams, IPPOParams, VDPPOParams, D3QNParams, IQLParams
+from configs.algo_configs import (
+    AlgoParams, MAPPOParams, IPPOParams, VDPPOParams, D3QNParams, IQLParams,
+    VDNParams, QMIXParams,
+)
 from configs.training_configs import (
     TrainerConfig, OnPolicyTrainerConfig, OffPolicyTrainerConfig,
 )
@@ -74,6 +78,20 @@ ALGO_REGISTRY: Dict[str, Dict[str, Any]] = {
         "trainer_type": "off_policy",
         "policy_type": "value",
     },
+    "vdn": {
+        "module": "algorithms.marl.vdn",
+        "class_name": "VDNAlgo",
+        "params_class": VDNParams,
+        "trainer_type": "off_policy",
+        "policy_type": "value",
+    },
+    "qmix": {
+        "module": "algorithms.marl.qmix",
+        "class_name": "QMIXAlgo",
+        "params_class": QMIXParams,
+        "trainer_type": "off_policy",
+        "policy_type": "value",
+    },
 }
 
 # ---- 环境 ----
@@ -81,6 +99,14 @@ ENV_REGISTRY: Dict[str, Dict[str, str]] = {
     "masup": {
         "module": "envs.mdps.masup",
         "class_name": "MASUPEnv",
+    },
+    "oucs": {
+        "module": "envs.mdps.oucs",
+        "class_name": "OUCSEnv",
+    },
+    "s4r1": {
+        "module": "envs.mdps.s4r1",
+        "class_name": "S4R1Env",
     },
 }
 
@@ -244,6 +270,7 @@ def create_actor(
             output_dim=action_dim,
             num_layers=actor_config.num_layers,
             rnn_type=actor_config.rnn_type,
+            fc_hidden=actor_config.fc_hidden or None,
         ).to(device)
     else:
         return cls(obs_dim, actor_config.hidden, action_dim).to(device)
@@ -266,6 +293,7 @@ def create_critic(
             output_dim=1,
             num_layers=critic_config.num_layers,
             rnn_type=critic_config.rnn_type,
+            fc_hidden=critic_config.fc_hidden or None,
         ).to(device)
     else:
         return cls(critic_input_dim, critic_config.hidden).to(device)
@@ -291,6 +319,7 @@ def create_q_network(
             num_layers=q_config.num_layers,
             rnn_type=q_config.rnn_type,
             dueling=dueling,
+            fc_hidden=q_config.fc_hidden or None,
         ).to(device)
     else:
         return cls(input_dim, q_config.hidden, action_dim, dueling=dueling).to(device)
@@ -324,17 +353,28 @@ def create_algorithm(
     algo_name: str,
     policy,
     algo_params: AlgoParams,
-    critic: Optional[nn.Module] = None,
     **context_kwargs,
 ):
     """
     创建算法实例。
 
-    context_kwargs 传递运行时上下文参数（如 num_envs, total_iterations, q_network 等）。
+    通过 inspect 自动过滤: 只传递算法 __init__ 签名中声明的参数，
+    多余的 context_kwargs 会被安全忽略，缺失的非必需参数使用默认值。
+    新增算法时无需修改此函数，只需在 __init__ 中显式声明所需参数即可。
+
+    context_kwargs 常见 key: critic, num_envs, n_agents, state_dim,
+        action_dim, total_iterations, optimizer_steps_per_iter,
+        value_norm_config, q_network 等。
     """
     entry = ALGO_REGISTRY[algo_name]
     algo_cls = _import_class(entry["module"], entry["class_name"])
-    return algo_cls(policy=policy, critic=critic, params=algo_params, **context_kwargs)
+
+    # 基于 __init__ 签名过滤参数
+    sig = inspect.signature(algo_cls.__init__)
+    valid_params = set(sig.parameters.keys()) - {"self"}
+    filtered = {k: v for k, v in context_kwargs.items() if k in valid_params}
+
+    return algo_cls(policy=policy, params=algo_params, **filtered)
 
 
 def create_trainer(

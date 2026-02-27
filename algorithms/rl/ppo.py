@@ -39,8 +39,9 @@ class PPOBase(ActorCriticOnPolicyAlgo):
     IPPOAlgo / MAPPOAlgo 可 override update() 实现自身需求。
     """
 
-    def __init__(self, policy, critic: nn.Module, params: PPOParams, num_envs: int = 1):
-        super().__init__(policy, critic, params, num_envs)
+    def __init__(self, policy, critic: nn.Module, params: PPOParams, num_envs: int = 1,
+                 value_norm_config: Optional[Dict] = None):
+        super().__init__(policy, critic, params, num_envs, value_norm_config=value_norm_config)
 
         # PPO 特有超参
         self.clip_range = params.clip_range
@@ -220,9 +221,8 @@ class PPOAlgo(PPOBase):
         total_iterations: Optional[int] = None,
         optimizer_steps_per_iter: Optional[int] = None,
         value_norm_config: Optional[Dict] = None,
-        **kwargs,
     ):
-        super().__init__(policy, critic, params, num_envs)
+        super().__init__(policy, critic, params, num_envs, value_norm_config=value_norm_config)
 
         # 单优化器
         self.optimizer = torch.optim.Adam(
@@ -240,12 +240,3 @@ class PPOAlgo(PPOBase):
                 end_factor=params.lr_end_factor,
                 total_iters=decay_steps,
             )
-
-        # Value Normalization
-        if self.use_value_norm:
-            from utils.train_utils import RunningMeanStd
-            self.ret_rms = RunningMeanStd(shape=(1,)).to(self.device)
-            if value_norm_config is not None:
-                self.ret_rms.mean.fill_(value_norm_config.get('ret_mean', 0.0))
-                self.ret_rms.var.fill_(value_norm_config.get('ret_std', 1.0) ** 2)
-                self.ret_rms.count.fill_(1.0)

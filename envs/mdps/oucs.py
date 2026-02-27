@@ -3,12 +3,17 @@ import numpy as np
 import random
 from gymnasium.spaces import Box, Discrete
 
-from patrol_core import AgentState, TickResult
-from base_envs import FixedStepEnv
+from envs.mdps.patrol_core import AgentState, TickResult
+from envs.mdps.base_envs import FixedStepEnv
 
 class OUCSEnv(FixedStepEnv):
     def __init__(self, config: Dict, **kwargs):
         super().__init__(config)
+
+        # 确定的物理特征
+        self.episode_len = config['episode_len']
+        self.init_pos = config.get('init_positions', [])
+        self.max_visit = config['episode_len']
 
         # Episode 截止模式开关
         # truncate_by_time=True (默认): 使用总时间 all_timer >= episode_len 截止
@@ -23,10 +28,7 @@ class OUCSEnv(FixedStepEnv):
                 'max_time_for_obs', self.episode_len * self.world.max_edge_length  
             )
 
-        # 确定的物理特征
-        self.episode_len = config['episode_len']
-        self.init_pos = config.get('init_positions', [])
-        self.max_visit = config['episode_len']
+        self.obs_size = 3*self.world.num_agents + 2*self.world.max_neighbors
 
         # 需要追踪的物理特征
         self.nodes_visit_times = {n: 0 for n in self.world.graph.nodes}
@@ -39,7 +41,6 @@ class OUCSEnv(FixedStepEnv):
         """
         num_nodes = self.world.num_nodes
         num_agents = self.world.num_agents
-        self.obs_size = 3*num_agents + 2*self.world.max_neighbors
         
         low = np.array([-1] * self.obs_size, dtype=np.float32)
         high = np.array(
@@ -163,6 +164,23 @@ class OUCSEnv(FixedStepEnv):
                 f"可用邻居数量={len(neighbors)}"
             )    
     
+    def state(self) -> np.ndarray:
+        """全局状态: 所有智能体位置 + 全节点空闲度 + 当前时间"""
+        agent_metrics = []
+        for agent_id in range(self.world.num_agents):
+            agent = self.world.agents[agent_id]
+            last_pos = float(agent.last_position)
+            target = float(agent.target_node)
+            time_left = float(agent.action_remaining)
+            agent_metrics.extend([last_pos, target, time_left])
+
+        idleness = [
+            float(self.world.graph.phi.get(n, 1.0)) * float(self.world.node_idleness.get(n, 0.0))
+            for n in self.world.graph.nodes
+        ]
+
+        return np.asarray(agent_metrics + idleness + [float(self.world.current_time)], dtype=np.float32)
+
     # ==================== 辅助方法 ====================
     
     def get_action_mask(self, agent_str: str) -> np.ndarray:

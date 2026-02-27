@@ -90,8 +90,8 @@ The framework uses a centralized configuration system in `configs/`:
 ### Registry Pattern
 
 All components are registered in `configs/registry.py`:
-- `ALGO_REGISTRY`: PPO, MAPPO, IPPO, VDPPO, D3QN, IQL
-- `ENV_REGISTRY`: MASUP environment
+- `ALGO_REGISTRY`: PPO, MAPPO, IPPO, VDPPO, D3QN, IQL, VDN, QMIX
+- `ENV_REGISTRY`: MASUP, OUCS, S4R1 environments
 - `ACTOR_REGISTRY`: ActorMLP, ActorRNN
 - `CRITIC_REGISTRY`: CriticMLP, CriticRNN
 - `Q_NETWORK_REGISTRY`: QMLP, QRNN
@@ -118,11 +118,13 @@ Actor / Critic / Q-network 三路独立配置，YAML 中通过 `actor_type` / `c
 ### Component-Algorithm Mapping
 
 ```
-                  actor    critic   q_network
-PPO/IPPO/MAPPO    yes      yes      -
-VDPPO             yes      -        yes (+ mixer)
-DQN               -        -        yes
-IQL               -        -        yes
+                  actor    critic   q_network   mixer
+PPO/IPPO/MAPPO    yes      yes      -           -
+VDPPO             yes      -        yes         QPLEXMixer
+D3QN              -        -        yes         -
+IQL               -        -        yes         -
+VDN               -        -        yes         SumMixer (无参数)
+QMIX              -        -        yes         QMIXMixer (超网络)
 ```
 
 ### Network Classes
@@ -154,6 +156,8 @@ Hidden state 格式: `(recurrent_N, batch, hidden_size)`，其中 `recurrent_N =
 
 | Class | Signature | Use Case |
 |-------|-----------|----------|
+| `SumMixer` | `(n_agents, state_dim=0)` | VDN: Q_tot = Σ Q_i (无可学习参数) |
+| `QMIXMixer` | `(n_agents, state_dim, embed_dim=32)` | QMIX: 超网络保证单调性 |
 | `QPLEXMixer` | `(n_agents, state_dim, embed_dim)` | VDPPO Q-value decomposition |
 
 ### Config Dataclasses (`configs/network_configs.py`)
@@ -236,6 +240,33 @@ q_network:
 algo:
   seq_len: 20          # RNN 训练序列长度
   max_episodes: 5000   # EpisodeReplayBuffer 容量
+```
+
+#### VDN (Q-network, 无 state)
+
+```yaml
+algo_name: vdn
+q_type: mlp
+q_network:
+  hidden: [256, 256]
+  dueling: false
+algo:
+  shared_policy: true
+  use_double_dqn: true
+```
+
+#### QMIX (Q-network, 需要 global state)
+
+```yaml
+algo_name: qmix
+q_type: mlp
+q_network:
+  hidden: [256, 256]
+  dueling: false
+algo:
+  shared_policy: true
+  use_double_dqn: true
+  mixer_embed_dim: 32
 ```
 
 #### VDPPO (Actor + Q-network)
@@ -384,7 +415,169 @@ JSON files in `graphs/` directory:
 3. **Sequential heuristic decisions**: Agent 0 decides first, intention recorded, then Agent 1, etc.
 4. **HuggingFace-style model format**: `model_dir/` contains `config.yaml`, `policy.pt`, `critic.pt`
 
+## Algorithm Factory System
+
+### 工作原理
+
+`create_algorithm()` 使用 `inspect` 自动过滤参数：根据算法类 `__init__` 签名中声明的参数名，
+从 `context_kwargs` 池中只传递匹配的参数，多余的自动忽略。
+
+```python
+# train.py 中构建 context_kwargs 池（包含所有可能需要的参数）
+context_kwargs = {
+    "num_envs": ..., "action_dim": ..., "state_dim": ..., "n_agents": ...,
+    "critic": critic_net,  "q_network": q_net,
+    "total_iterations": ..., "optimizer_steps_per_iter": ...,
+    "value_norm_config": ...,
+}
+
+# create_algorithm 自动过滤：只传算法 __init__ 中声明了的参数
+algorithm = create_algorithm(algo_name, policy, algo_params, **context_kwargs)
+```
+
+**重要**：算法类的 `__init__` 不应使用 `**kwargs`，所有需要的参数必须显式声明。
+这样如果传入了不存在的参数名（如拼写错误），Python 会在 `create_algorithm` 阶段安全忽略，
+而非静默吞掉；如果声明了但 `context_kwargs` 中没有且无默认值，则会正常报 TypeError。
+
+### 各算法 `__init__` 参数一览
+
+以下列出每个算法类接收的参数（`policy` 和 `params` 是所有算法的公共必需参数，不再重复列出）：
+
+#### On-Policy (Actor-Critic)
+
+| 算法 | 模块 | 额外参数 |
+|------|------|---------|
+| `PPOAlgo` | `algorithms.rl.ppo` | `critic`, `num_envs`, `total_iterations`, `optimizer_steps_per_iter`, `value_norm_config` |
+| `IPPOAlgo` | `algorithms.marl.ippo` | `critic`, `num_envs`, `total_iterations`, `optimizer_steps_per_iter`, `value_norm_config` |
+| `MAPPOAlgo` | `algorithms.marl.mappo` | `critic`, `num_envs`, `total_iterations`, `optimizer_steps_per_iter`, `value_norm_config` |
+| `VDPPOAlgo` | `algorithms.marl.vdppo` | `critic`, `num_envs`, `action_dim`, `state_dim`, `n_agents`, `total_iterations`, `optimizer_steps_per_iter`, `value_norm_config`, `q_network` |
+
+#### Off-Policy (Value-Based)
+
+| 算法 | 模块 | 额外参数 |
+|------|------|---------|
+| `D3QNAlgo` | `algorithms.rl.d3qn` | *(无额外参数)* |
+| `IQLAlgo` | `algorithms.marl.iql` | *(无额外参数)* |
+| `VDNAlgo` | `algorithms.marl.vdn` | `n_agents`, `state_dim` |
+| `QMIXAlgo` | `algorithms.marl.qmix` | `n_agents`, `state_dim` |
+
+### VDN/QMIX 继承关系
+
+```
+VDNAlgo (BaseAlgorithm)
+└── QMIXAlgo
+```
+
+QMIX 继承 VDN，通过 override 三个扩展点实现差异：
+
+| 扩展点方法 | VDN | QMIX |
+|-----------|-----|------|
+| `_init_mixer()` | SumMixer (无参数) | QMIXMixer (超网络, 需 state) |
+| `_init_optimizer()` | 仅 Q-network 参数 | Q-network + Mixer 参数 |
+| `_update_target_networks()` | 仅 target Q-network | target Q-network + target Mixer |
+
+`_compute_loss()` 和 `update()` 完全复用基类。Mixer 的多态性（SumMixer 忽略 state，QMIXMixer 使用 state）
+由各 Mixer 的 `forward()` 自动处理。
+
+### 奖励聚合
+
+VDN/QMIX 的联合奖励使用 `r_tot = Σ r_i`（各 agent 奖励之和），
+与 `Q_tot = Σ Q_i`（VDN）或 `Q_tot = f(Q_1,...,Q_N)`（QMIX）的值分解语义一致。
+
+### Global State 需求
+
+- **QMIX**: `collect_state=True`，ReplayBuffer 开启 `has_state=True`，Mixer 超网络需要 state
+- **VDN**: `collect_state=False`，SumMixer 不使用 state，节省内存和采集开销
+
 ## Common Development Tasks
+
+### Adding a new RL algorithm
+
+新增算法只需 **2 个文件改动**（算法类 + 注册表），无需修改 `train.py`：
+
+**步骤 1：实现算法类**
+
+```python
+# algorithms/marl/my_algo.py
+from algorithms.algorithm_base import BaseAlgorithm, TrainingStats
+
+class MyAlgo(BaseAlgorithm):
+    def __init__(
+        self,
+        policy,
+        params: MyAlgoParams,
+        n_agents: int = 1,       # 从 context_kwargs 池中按需声明
+        state_dim: int = 0,      # 只声明需要的参数
+    ):
+        super().__init__(policy)
+        ...
+
+    def update(self, batch, **kwargs) -> TrainingStats:
+        ...
+```
+
+**规则**：
+- `__init__` 中 **不要** 使用 `**kwargs`，所有参数必须显式声明
+- `policy` 和 `params` 是必需的（`create_algorithm` 固定传入）
+- 其余参数从 `context_kwargs` 池中按名称匹配（见上方参数一览表）
+- 如需全新的上下文参数（池中没有的），则需在 `train.py` 中添加到 `context_kwargs` 池
+
+**步骤 2：注册到 `ALGO_REGISTRY`**
+
+```python
+# configs/registry.py 的 ALGO_REGISTRY 中添加一项
+"my_algo": {
+    "module": "algorithms.marl.my_algo",
+    "class_name": "MyAlgo",
+    "params_class": MyAlgoParams,
+    "trainer_type": "off_policy",   # "on_policy" or "off_policy"
+    "policy_type": "value",         # "actor" or "value"
+},
+```
+
+**步骤 3（如需）：添加参数 dataclass**
+
+```python
+# configs/algo_configs.py
+@dataclass(kw_only=True)
+class MyAlgoParams(OffPolicyParams):  # 或继承其他合适的基类
+    my_custom_param: float = 0.1
+```
+
+**步骤 4：编写实验配置 YAML**
+
+```yaml
+# configs/experiments/my_algo_tsp12.yaml
+algo_name: my_algo
+env_type: masup
+q_type: mlp       # 或 actor_type / critic_type
+
+algo:
+  my_custom_param: 0.2
+  ...
+```
+
+完成以上步骤后，即可通过 `python train.py configs/experiments/my_algo_tsp12.yaml` 启动训练。
+
+### 继承现有算法
+
+如果新算法是对现有算法的改进（如 QMIX 之于 VDN），推荐继承：
+
+```python
+class MyImprovedAlgo(VDNAlgo):
+    """只 override 差异化的部分。"""
+
+    def _init_mixer(self, n_agents, state_dim, params):
+        self.mixer = MyMixer(...)
+        self.target_mixer = copy.deepcopy(self.mixer)
+        ...
+
+    def _init_optimizer(self, params):
+        self.optimizer = torch.optim.Adam(
+            list(self.q_network.parameters()) + list(self.mixer.parameters()),
+            lr=params.lr,
+        )
+```
 
 ### Adding a new heuristic policy
 
@@ -514,4 +707,4 @@ def _build_info(self, result):
 - `data/`: Data collection utilities
 - `utils/`: Visualization, logging, model I/O
 - `evaluators/`: Testing and evaluation tools
-- `algorithms/`: RL algorithms (ppo, mappo, ippo, vdppo, d3qn, iql)
+- `algorithms/`: RL algorithms (ppo, mappo, ippo, vdppo, d3qn, iql, vdn, qmix)

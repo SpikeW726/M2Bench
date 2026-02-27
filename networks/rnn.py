@@ -6,6 +6,8 @@ LSTM 内部将其 split 为 (h, c) 元组，外部接口保持一致。
 recurrent_N = num_layers * (2 if LSTM else 1)
 """
 
+from typing import List, Optional
+
 import torch
 import torch.nn as nn
 
@@ -18,9 +20,13 @@ from networks.mlp import layer_init
 
 class _BaseRNN(nn.Module):
     """
-    RNN backbone 基类: fc_in -> RNN -> (子类定义 head)。
+    RNN backbone 基类: fc_in (编码层) -> RNN -> (子类定义 head)。
     提供 hidden state 管理和 forward / forward_sequence 骨架。
     子类只需设置 fc_out 并指定 output_std。
+
+    fc_hidden 控制 RNN 前编码层的结构:
+        - None / []: 退化为单层 Linear(input_dim, hidden_size)，向后兼容
+        - [256, 256]: 两层编码 input_dim→256→256，RNN input_size=256
     """
     is_recurrent = True
 
@@ -32,6 +38,7 @@ class _BaseRNN(nn.Module):
         num_layers: int = 1,
         rnn_type: str = "gru",
         output_std: float = 0.01,
+        fc_hidden: Optional[List[int]] = None,
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -40,14 +47,20 @@ class _BaseRNN(nn.Module):
         self.num_layers = num_layers
         self.rnn_type = rnn_type.lower()
 
-        self.fc_in = nn.Sequential(
-            layer_init(nn.Linear(input_dim, hidden_size)),
-            nn.Tanh(),
-        )
+        # 构建编码层: fc_hidden 为空时退化为 [hidden_size]
+        fc_sizes = list(fc_hidden) if fc_hidden else [hidden_size]
+        layers = []
+        prev = input_dim
+        for sz in fc_sizes:
+            layers.append(layer_init(nn.Linear(prev, sz)))
+            layers.append(nn.Tanh())
+            prev = sz
+        self.fc_in = nn.Sequential(*layers)
+        rnn_input_size = fc_sizes[-1]
 
         rnn_cls = nn.LSTM if self.rnn_type == "lstm" else nn.GRU
         self.rnn = rnn_cls(
-            input_size=hidden_size,
+            input_size=rnn_input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=False,
@@ -131,18 +144,20 @@ class ActorRNN(_BaseRNN):
     """RNN Actor: output_std=0.01 用于稳定策略初始化。"""
 
     def __init__(self, input_dim, hidden_size, output_dim,
-                 num_layers=1, rnn_type="gru"):
+                 num_layers=1, rnn_type="gru", fc_hidden=None):
         super().__init__(input_dim, hidden_size, output_dim,
-                         num_layers, rnn_type, output_std=0.01)
+                         num_layers, rnn_type, output_std=0.01,
+                         fc_hidden=fc_hidden)
 
 
 class CriticRNN(_BaseRNN):
     """RNN Critic (Value Function): output_dim=1, output_std=1.0。"""
 
     def __init__(self, input_dim, hidden_size, output_dim=1,
-                 num_layers=1, rnn_type="gru"):
+                 num_layers=1, rnn_type="gru", fc_hidden=None):
         super().__init__(input_dim, hidden_size, output_dim,
-                         num_layers, rnn_type, output_std=1.0)
+                         num_layers, rnn_type, output_std=1.0,
+                         fc_hidden=fc_hidden)
 
 
 class QRNN(_BaseRNN):
@@ -152,9 +167,10 @@ class QRNN(_BaseRNN):
     """
 
     def __init__(self, input_dim, hidden_size, output_dim,
-                 num_layers=1, rnn_type="gru", dueling=False):
+                 num_layers=1, rnn_type="gru", dueling=False, fc_hidden=None):
         super().__init__(input_dim, hidden_size, output_dim,
-                         num_layers, rnn_type, output_std=1.0)
+                         num_layers, rnn_type, output_std=1.0,
+                         fc_hidden=fc_hidden)
         self.dueling = dueling
         if dueling:
             self.v_stream = layer_init(nn.Linear(hidden_size, 1), std=1.0)

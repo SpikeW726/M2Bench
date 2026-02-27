@@ -83,9 +83,16 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
     update() 留给子类（PPOBase / A2CBase 等）实现。
     """
 
-    def __init__(self, policy, critic: nn.Module, params: OnPolicyParams, num_envs: int = 1):
+    def __init__(
+        self,
+        policy,
+        critic: Optional[nn.Module],
+        params: OnPolicyParams,
+        num_envs: int = 1,
+        value_norm_config: Optional[Dict] = None,
+    ):
         super().__init__(policy)
-        self.critic = critic.to(self.device)
+        self.critic = critic.to(self.device) if critic is not None else None
         self.num_envs = num_envs
 
         # Actor-Critic On-Policy 通用超参
@@ -99,8 +106,15 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         self.use_value_norm = params.use_value_norm
         self.data_chunk_length = params.data_chunk_length
 
-        # Value Normalization（由子类决定是否初始化 ret_rms）
+        # Value Normalization
         self.ret_rms = None
+        if self.use_value_norm:
+            from utils.train_utils import RunningMeanStd
+            self.ret_rms = RunningMeanStd(shape=(1,)).to(self.device)
+            if value_norm_config is not None:
+                self.ret_rms.mean.fill_(value_norm_config.get('ret_mean', 0.0))
+                self.ret_rms.var.fill_(value_norm_config.get('ret_std', 1.0) ** 2)
+                self.ret_rms.count.fill_(1.0)
 
         # RNN critic hidden state（跨 collect 持久化）
         self._critic_hidden: Optional[torch.Tensor] = None
@@ -113,6 +127,8 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
     @property
     def is_critic_recurrent(self) -> bool:
         """Critic 是否为 RNN"""
+        if self.critic is None:
+            return False
         return getattr(self.critic, "is_recurrent", False)
 
     @property

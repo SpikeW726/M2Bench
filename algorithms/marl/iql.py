@@ -33,14 +33,12 @@ class IQLAlgo(BaseAlgorithm):
     Args:
         policy: MultiAgentPolicy，内部 wrap ValuePolicy 实例
         params: IQLParams
-        **kwargs: 吸收 create_algorithm 传入的 critic 等多余参数
     """
 
     def __init__(
         self,
         policy: MultiAgentPolicy,
         params: IQLParams,
-        **kwargs,
     ):
         super().__init__(policy)
         self.params = params
@@ -99,6 +97,7 @@ class IQLAlgo(BaseAlgorithm):
         next_obs = batch.next_obs
         dones = batch.done
         next_action_mask = getattr(batch, 'next_action_mask', None)
+        active_mask = getattr(batch, 'active_mask', None)
 
         q_values = agent_policy.q_network(obs)
         q_current = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
@@ -117,7 +116,14 @@ class IQLAlgo(BaseAlgorithm):
 
             td_target = rewards + self.gamma * (1.0 - dones) * q_next
 
-        loss = F.smooth_l1_loss(q_current, td_target)
+        per_sample_loss = F.mse_loss(q_current, td_target, reduction='none')
+
+        # active_mask: 仅对 READY 决策步计算 loss，跳过 ON_EDGE no-op 步
+        if active_mask is not None:
+            am_sum = active_mask.sum().clamp(min=1)
+            loss = (per_sample_loss * active_mask).sum() / am_sum
+        else:
+            loss = per_sample_loss.mean()
 
         info = {
             "q_mean": q_values.mean().item(),

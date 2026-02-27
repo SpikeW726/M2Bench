@@ -12,6 +12,7 @@ class BaseEnv(ParallelEnv):
         self.enable_wait = config.get("enable_wait", False)
         
         # PettingZoo标准属性
+        self.metadata = {"render_modes": [], "name": self.__class__.__name__}
         self.possible_agents = [f"agent_{i}" for i in range(config["num_agents"])]
         self.agents = self.possible_agents[:]
 

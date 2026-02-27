@@ -257,6 +257,9 @@ def _build_collector(
         is_q_recurrent = getattr(algorithm, "is_recurrent", False)
         max_episodes = getattr(config.algo, "max_episodes", 5000)
 
+        # QMIX 超网络需要 global state；VDN 的 SumMixer 无参数，不需要 state
+        needs_state = config.algo_name in ("qmix",)
+
         if is_parallel:
             if is_q_recurrent:
                 buffers = {
@@ -271,10 +274,15 @@ def _build_collector(
                         max_size=tc.buffer_size,
                         has_action_mask=True,
                         action_dim=dims["action_dim"],
+                        has_state=needs_state,
+                        state_dim=dims["state_dim"] if needs_state else 0,
+                        has_active_mask=True,
                     )
                     for aid in dims["agent_ids"]
                 }
-            return MAOffPolicyCollector(algorithm, vec_env, buffers)
+            return MAOffPolicyCollector(
+                algorithm, vec_env, buffers, collect_state=needs_state,
+            )
         else:
             if is_q_recurrent:
                 buffer = EpisodeReplayBuffer(max_episodes=max_episodes)
@@ -388,10 +396,20 @@ def train(config: ExperimentConfig):
     policy = _build_policy(config, dims, is_parallel, actor_net=actor_net, q_net=q_net)
 
     # ---- 7. 构建算法 ----
-    context_kwargs = dict(num_envs=tc.num_envs)
-    context_kwargs["action_dim"] = dims["action_dim"]
-    context_kwargs["state_dim"] = dims["state_dim"]
-    context_kwargs["n_agents"] = dims["num_agents"]
+    # context_kwargs 池: 放入所有可能需要的运行时参数，
+    # create_algorithm 会根据算法 __init__ 签名自动过滤。
+    context_kwargs = dict(
+        num_envs=tc.num_envs,
+        action_dim=dims["action_dim"],
+        state_dim=dims["state_dim"],
+        n_agents=dims["num_agents"],
+    )
+
+    if critic_net is not None:
+        context_kwargs["critic"] = critic_net
+
+    if q_net is not None:
+        context_kwargs["q_network"] = q_net
 
     if isinstance(tc, OnPolicyTrainerConfig):
         context_kwargs["total_iterations"] = tc.max_iterations
@@ -402,13 +420,9 @@ def train(config: ExperimentConfig):
     if value_norm_config is not None:
         context_kwargs["value_norm_config"] = value_norm_config
 
-    if q_net is not None:
-        context_kwargs["q_network"] = q_net
-
     algorithm = create_algorithm(
         algo_name=config.algo_name,
         policy=policy,
-        critic=critic_net,
         algo_params=config.algo,
         **context_kwargs,
     )

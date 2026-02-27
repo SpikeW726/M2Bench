@@ -32,9 +32,8 @@ class MAPPOAlgo(PPOBase):
         total_iterations: Optional[int] = None,
         optimizer_steps_per_iter: Optional[int] = None,
         value_norm_config: Optional[Dict] = None,
-        **kwargs,
     ):
-        super().__init__(policy, critic, params, num_envs)
+        super().__init__(policy, critic, params, num_envs, value_norm_config=value_norm_config)
 
         # 双优化器
         self.actor_optimizer = torch.optim.Adam(policy.parameters(), lr=params.actor_lr)
@@ -61,19 +60,6 @@ class MAPPOAlgo(PPOBase):
                 end_factor=params.critic_lr_end_factor,
                 total_iters=critic_decay_steps,
             )
-
-        # Value Normalization
-        if self.use_value_norm:
-            from utils.train_utils import RunningMeanStd
-            self.ret_rms = RunningMeanStd(shape=(1,)).to(self.device)
-
-            if value_norm_config is not None:
-                self.ret_rms.mean.fill_(value_norm_config.get('ret_mean', 0.0))
-                self.ret_rms.var.fill_(value_norm_config.get('ret_std', 1.0) ** 2)
-                self.ret_rms.count.fill_(1.0)
-                print(f"[MAPPO] Loaded value_norm stats: mean={self.ret_rms.mean.item():.4f}, std={self.ret_rms.std.item():.4f}")
-            else:
-                print(f"[MAPPO] Initialized value_norm with default: mean=0, std=1")
 
     # ====================================================================
     #                MAPPO-specific: Truncation Bootstrap

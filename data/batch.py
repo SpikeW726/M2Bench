@@ -241,6 +241,11 @@ class TransitionBatch(BaseBatch):
     # For action masking
     action_mask: torch.Tensor | np.ndarray = None  # (batch, num_actions)
     next_action_mask: torch.Tensor | np.ndarray = None
+    # For CTDE algorithms (VDN, QMIX) — global state
+    state: torch.Tensor | np.ndarray = None         # (batch, state_dim)
+    next_state: torch.Tensor | np.ndarray = None    # (batch, state_dim)
+    # For active agent masking (1=READY 决策步, 0=ON_EDGE 无效步)
+    active_mask: torch.Tensor | np.ndarray = None   # (batch,)
 
 
 @dataclass

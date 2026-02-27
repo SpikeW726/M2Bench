@@ -31,9 +31,8 @@ class IPPOAlgo(PPOBase):
         total_iterations: Optional[int] = None,
         optimizer_steps_per_iter: Optional[int] = None,
         value_norm_config: Optional[Dict] = None,
-        **kwargs,
     ):
-        super().__init__(policy, critic, params, num_envs)
+        super().__init__(policy, critic, params, num_envs, value_norm_config=value_norm_config)
 
         # 单优化器: 所有独立 policy + critic
         self.optimizer = torch.optim.Adam(
@@ -51,15 +50,6 @@ class IPPOAlgo(PPOBase):
                 end_factor=params.lr_end_factor,
                 total_iters=decay_steps,
             )
-
-        # Value Normalization
-        if self.use_value_norm:
-            from utils.train_utils import RunningMeanStd
-            self.ret_rms = RunningMeanStd(shape=(1,)).to(self.device)
-            if value_norm_config is not None:
-                self.ret_rms.mean.fill_(value_norm_config.get('ret_mean', 0.0))
-                self.ret_rms.var.fill_(value_norm_config.get('ret_std', 1.0) ** 2)
-                self.ret_rms.count.fill_(1.0)
 
     # ====================================================================
     #                          Batch 预处理

@@ -1,11 +1,16 @@
 """算法参数 dataclass，继承层次与算法类一一对应。
 
 AlgoParams
-└── OnPolicyParams         ← Actor-Critic On-Policy 通用参数
-    └── PPOParams          ← PPO 家族特有参数 (clip, KL)
-        ├── IPPOParams     ← 单优化器 (PPO / IPPO 共用)
-        ├── MAPPOParams    ← 双优化器 + MAPPO 特有功能
-        └── VDPPOParams    ← 值分解 + PPO actor + 双优化器
+├── OnPolicyParams         ← Actor-Critic On-Policy 通用参数
+│   └── PPOParams          ← PPO 家族特有参数 (clip, KL)
+│       ├── IPPOParams     ← 单优化器 (PPO / IPPO 共用)
+│       ├── MAPPOParams    ← 双优化器 + MAPPO 特有功能
+│       └── VDPPOParams    ← 值分解 + PPO actor + 双优化器
+└── OffPolicyParams        ← Off-Policy 通用参数
+    └── D3QNParams
+        └── IQLParams      ← 独立 Q-Learning
+            ├── VDNParams  ← VDN (SumMixer, 默认参数共享)
+            └── QMIXParams ← QMIX (超网络 Mixer, 默认参数共享)
 """
 
 from dataclasses import dataclass
@@ -80,8 +85,11 @@ class VDPPOParams(PPOParams):
     """VDPPO 参数 (PPO actor + Q-decomposition + 双优化器)"""
     actor_lr: float = 3e-4
     q_lr: float = 3e-4
-    target_update_freq: int = 200       # 目标网络硬更新间隔 (update 调用次数)
+    # Target 网络更新: tau < 1.0 → soft update, tau >= 1.0 → hard update
+    tau: float = 0.1
+    target_update_freq: int = 1         # 目标网络更新间隔 (update 调用次数)
     mixer_embed_dim: int = 64           # QPLEXMixer lambda_net 隐藏层维度
+    q_clip_range: Optional[float] = None  # Q 值 clipping（None = 不 clip，与 PPO clip_range 解耦）
     # LR scheduler (双优化器，actor/q 分离)
     use_lr_scheduler: bool = False
     actor_lr_start_factor: float = 1.0
@@ -130,3 +138,16 @@ class D3QNParams(OffPolicyParams):
 class IQLParams(D3QNParams):
     """IQL (Independent Q-Learning) 参数，继承 D3QNParams。"""
     shared_policy: bool = False  # False=每个 agent 独立 Q-network
+
+
+@dataclass(kw_only=True)
+class VDNParams(IQLParams):
+    """VDN 参数，默认共享 Q-network。"""
+    shared_policy: bool = True
+
+
+@dataclass(kw_only=True)
+class QMIXParams(IQLParams):
+    """QMIX 参数，额外含 mixer 超网络维度。"""
+    shared_policy: bool = True
+    mixer_embed_dim: int = 32
