@@ -250,7 +250,11 @@ class TransitionBatch(BaseBatch):
 
 @dataclass
 class SequenceBatch(BaseBatch):
-    """Off-policy RNN 训练用序列 batch，所有字段含 seq_len 维度。"""
+    """Off-policy RNN 训练用序列 batch，所有字段含 seq_len 维度。
+
+    L = burn_in_len + seq_len（total_len）。
+    mask 语义: burn-in 区间=0, 训练有效步=1, padding=0。
+    """
     obs: torch.Tensor | np.ndarray = None               # (B, L, obs_dim)
     act: torch.Tensor | np.ndarray = None               # (B, L)
     rew: torch.Tensor | np.ndarray = None               # (B, L)
@@ -259,6 +263,7 @@ class SequenceBatch(BaseBatch):
     mask: torch.Tensor | np.ndarray = None              # (B, L) — 有效步=1, padding=0
     action_mask: torch.Tensor | np.ndarray = None       # (B, L, act_dim)
     next_action_mask: torch.Tensor | np.ndarray = None  # (B, L, act_dim)
+    burn_in_len: int = 0                                # burn-in 步数（标量元数据，不转 tensor）
 
 
 @dataclass

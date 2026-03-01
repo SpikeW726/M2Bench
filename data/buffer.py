@@ -1,6 +1,6 @@
 """数据缓冲区：用于存储 RL 训练数据"""
 
-from collections import deque
+import math
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
@@ -275,93 +275,142 @@ class ReplayBuffer:
         return self._size
 
 
-class EpisodeReplayBuffer:
-    """
-    按 episode 存储的 replay buffer，用于 RNN off-policy 训练。
+class SequenceReplayBuffer:
+    """R2D2 风格序列 replay buffer，用于 RNN off-policy 训练。
 
-    存储完整 episode，采样时切 seq_len 长度的子序列并 zero-pad。
+    episode 存入时预切为固定长度 total_len = burn_in_len + seq_len 的重叠序列
+    （stride = seq_len），存入扁平循环数组。采样时纯 numpy fancy indexing，零循环。
+
+    mask 语义:
+        - burn-in 区间 [:burn_in_len] 始终为 0（参与 RNN forward 但不计 loss）
+        - 训练区间 [burn_in_len:] 有效步为 1，padding 为 0
     """
 
-    def __init__(self, max_episodes: int):
-        self._episodes: deque = deque(maxlen=max_episodes)
+    def __init__(
+        self,
+        obs_dim: int,
+        seq_len: int,
+        burn_in_len: int = 0,
+        max_seqs: int = 50_000,
+        has_action_mask: bool = False,
+        action_dim: int = 0,
+    ):
+        self.obs_dim = obs_dim
+        self.seq_len = seq_len
+        self.burn_in_len = burn_in_len
+        self.total_len = burn_in_len + seq_len
+        self.max_seqs = max_seqs
+        self.has_action_mask = has_action_mask
+        self.action_dim = action_dim
+
+        # 预分配扁平循环数组
+        T = self.total_len
+        self.obs = np.zeros((max_seqs, T, obs_dim), dtype=np.float32)
+        self.act = np.zeros((max_seqs, T), dtype=np.float32)
+        self.rew = np.zeros((max_seqs, T), dtype=np.float32)
+        self.next_obs = np.zeros((max_seqs, T, obs_dim), dtype=np.float32)
+        self.done = np.zeros((max_seqs, T), dtype=np.float32)
+        self.mask = np.zeros((max_seqs, T), dtype=np.float32)
+
+        if has_action_mask:
+            self.action_mask_buf = np.zeros((max_seqs, T, action_dim), dtype=np.bool_)
+            self.next_action_mask_buf = np.zeros((max_seqs, T, action_dim), dtype=np.bool_)
+
+        self._ptr = 0
+        self._size = 0
         self._total_steps = 0
 
     def add_episode(self, episode: dict):
-        """添加一条 episode。
+        """将 episode 预切为重叠序列写入循环数组。
 
-        episode 字段: obs, act, rew, next_obs, done，shape=(ep_len, ...)。
-        可选字段: action_mask, next_action_mask。
+        切片方式 (R2D2 stride = seq_len):
+            训练区间起点: [0, seq_len, 2*seq_len, ...]
+            每条序列: episode[start - burn_in_len : start + seq_len]
+            左侧不足时 zero-pad (mask=0)，右侧不足时 zero-pad (mask=0)。
         """
         ep_len = len(episode["obs"])
         if ep_len == 0:
             return
-        if len(self._episodes) == self._episodes.maxlen:
-            self._total_steps -= len(self._episodes[0]["obs"])
-        self._episodes.append(episode)
+
+        has_am = "action_mask" in episode
+        s = self.seq_len
+        b = self.burn_in_len
+        T = self.total_len
+
+        num_seqs = max(1, math.ceil(ep_len / s))
+
+        for k in range(num_seqs):
+            train_start = k * s
+            src_start = train_start - b  # 可能为负（burn-in 超出 episode 左边界）
+
+            # 源数据的有效范围（裁剪到 [0, ep_len]）
+            src_lo = max(0, src_start)
+            src_hi = min(ep_len, train_start + s)
+            src_data_len = src_hi - src_lo
+
+            # 目标数组内的偏移
+            dst_offset = src_lo - src_start  # burn-in 左侧 padding 步数
+
+            # 写入一条序列到循环数组
+            idx = self._ptr
+            self.obs[idx] = 0
+            self.act[idx] = 0
+            self.rew[idx] = 0
+            self.next_obs[idx] = 0
+            self.done[idx] = 0
+            self.mask[idx] = 0
+            if has_am and self.has_action_mask:
+                self.action_mask_buf[idx] = False
+                self.next_action_mask_buf[idx] = False
+
+            self.obs[idx, dst_offset:dst_offset + src_data_len] = episode["obs"][src_lo:src_hi]
+            self.act[idx, dst_offset:dst_offset + src_data_len] = episode["act"][src_lo:src_hi]
+            self.rew[idx, dst_offset:dst_offset + src_data_len] = episode["rew"][src_lo:src_hi]
+            self.next_obs[idx, dst_offset:dst_offset + src_data_len] = episode["next_obs"][src_lo:src_hi]
+            self.done[idx, dst_offset:dst_offset + src_data_len] = episode["done"][src_lo:src_hi]
+
+            if has_am and self.has_action_mask:
+                self.action_mask_buf[idx, dst_offset:dst_offset + src_data_len] = episode["action_mask"][src_lo:src_hi]
+                self.next_action_mask_buf[idx, dst_offset:dst_offset + src_data_len] = episode["next_action_mask"][src_lo:src_hi]
+
+            # mask: burn-in 区间=0, 训练区间有效步=1, padding=0
+            train_data_start = max(0, b - dst_offset)  # 训练数据在 src 中的起始偏移
+            train_valid_lo = b  # 训练区间在 total_len 中的起始位置
+            train_valid_hi = min(T, dst_offset + src_data_len)
+            if train_valid_hi > train_valid_lo:
+                self.mask[idx, train_valid_lo:train_valid_hi] = 1.0
+
+            self._ptr = (self._ptr + 1) % self.max_seqs
+            self._size = min(self._size + 1, self.max_seqs)
+
         self._total_steps += ep_len
 
-    def sample(self, batch_size: int, seq_len: int) -> SequenceBatch:
-        """随机选 episode + 随机起始位置，切 seq_len 子序列，短序列 zero-pad + mask=0。"""
-        n_episodes = len(self._episodes)
-        if n_episodes == 0:
-            raise ValueError("EpisodeReplayBuffer is empty")
+    def sample(self, batch_size: int) -> SequenceBatch:
+        """纯 numpy fancy indexing 采样，零 Python 循环。"""
+        if self._size == 0:
+            raise ValueError("SequenceReplayBuffer is empty")
+        if batch_size > self._size:
+            raise ValueError(f"batch_size ({batch_size}) > buffer size ({self._size})")
 
-        ep_indices = np.random.randint(0, n_episodes, size=batch_size)
+        indices = np.random.choice(self._size, size=batch_size, replace=False)
 
-        # 预分配 numpy 数组
-        sample_ep = self._episodes[ep_indices[0]]
-        obs_shape = sample_ep["obs"].shape[1:]
-        has_action_mask = "action_mask" in sample_ep
-
-        all_obs = np.zeros((batch_size, seq_len, *obs_shape), dtype=np.float32)
-        all_next_obs = np.zeros_like(all_obs)
-        all_act = np.zeros((batch_size, seq_len), dtype=np.float32)
-        all_rew = np.zeros((batch_size, seq_len), dtype=np.float32)
-        all_done = np.zeros((batch_size, seq_len), dtype=np.float32)
-        all_mask = np.zeros((batch_size, seq_len), dtype=np.float32)
-
-        if has_action_mask:
-            act_dim = sample_ep["action_mask"].shape[1:]
-            all_am = np.zeros((batch_size, seq_len, *act_dim), dtype=np.bool_)
-            all_nam = np.zeros_like(all_am)
-        else:
-            all_am = None
-            all_nam = None
-
-        for i, ep_idx in enumerate(ep_indices):
-            ep = self._episodes[ep_idx]
-            ep_len = len(ep["obs"])
-
-            # 随机选起始位置
-            max_start = max(0, ep_len - seq_len)
-            start = np.random.randint(0, max_start + 1)
-            end = min(start + seq_len, ep_len)
-            actual_len = end - start
-
-            all_obs[i, :actual_len] = ep["obs"][start:end]
-            all_next_obs[i, :actual_len] = ep["next_obs"][start:end]
-            all_act[i, :actual_len] = ep["act"][start:end]
-            all_rew[i, :actual_len] = ep["rew"][start:end]
-            all_done[i, :actual_len] = ep["done"][start:end]
-            all_mask[i, :actual_len] = 1.0
-
-            if has_action_mask and all_am is not None:
-                all_am[i, :actual_len] = ep["action_mask"][start:end]
-                all_nam[i, :actual_len] = ep["next_action_mask"][start:end]
-
-        return SequenceBatch(
-            obs=all_obs,
-            act=all_act,
-            rew=all_rew,
-            next_obs=all_next_obs,
-            done=all_done,
-            mask=all_mask,
-            action_mask=all_am,
-            next_action_mask=all_nam,
+        result = SequenceBatch(
+            obs=self.obs[indices].copy(),
+            act=self.act[indices].copy(),
+            rew=self.rew[indices].copy(),
+            next_obs=self.next_obs[indices].copy(),
+            done=self.done[indices].copy(),
+            mask=self.mask[indices].copy(),
+            burn_in_len=self.burn_in_len,
         )
+        if self.has_action_mask:
+            result.action_mask = self.action_mask_buf[indices].copy()
+            result.next_action_mask = self.next_action_mask_buf[indices].copy()
+
+        return result
 
     def __len__(self) -> int:
-        return len(self._episodes)
+        return self._size
 
     @property
     def total_steps(self) -> int:

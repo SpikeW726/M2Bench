@@ -18,7 +18,7 @@ import torch
 from algorithms.algorithm_base import BaseAlgorithm
 from envs.venvs import BaseVectorEnv
 from data.batch import RolloutBatch, TransitionBatch, SequenceBatch, CollectResult
-from data.buffer import ReplayBuffer, EpisodeReplayBuffer
+from data.buffer import ReplayBuffer, SequenceReplayBuffer
 
 
 class BaseCollector(ABC):
@@ -448,7 +448,7 @@ class OffPolicyCollector(BaseCollector):
     单智能体 off-policy 采集器。
 
     MLP 模式: 内持 ReplayBuffer，逐 step 存入 transition。
-    RNN 模式: 内持 EpisodeReplayBuffer，按 episode 存储。
+    RNN 模式: 内持 SequenceReplayBuffer，按 episode 存储（预切片 + 向量化采样）。
 
     collect() 将 transitions 存入 buffer，返回 CollectResult（仅统计量）。
     Trainer 通过 sample() / can_sample() 从 buffer 采样。
@@ -458,7 +458,7 @@ class OffPolicyCollector(BaseCollector):
         self,
         algorithm: BaseAlgorithm,
         env: BaseVectorEnv,
-        buffer: Union["ReplayBuffer", "EpisodeReplayBuffer"],
+        buffer: Union["ReplayBuffer", "SequenceReplayBuffer"],
     ):
         if env.is_parallel_env:
             raise ValueError(
@@ -470,16 +470,27 @@ class OffPolicyCollector(BaseCollector):
         self._hidden: Optional[torch.Tensor] = None
         super().__init__(algorithm, env)
 
+    def _init_ep_buf(self) -> dict:
+        """创建空的 dict-of-lists episode 临时缓冲区。"""
+        buf = {"obs": [], "act": [], "rew": [], "next_obs": [], "done": []}
+        if getattr(self.buffer, "has_action_mask", False):
+            buf["action_mask"] = []
+            buf["next_action_mask"] = []
+        return buf
+
     def _reset_buffer(self):
-        # RNN: 初始化 per-env episode 临时缓冲区
         if getattr(self, '_is_recurrent', False):
-            self._episode_buffers: List[List[dict]] = [[] for _ in range(self.num_envs)]
+            self._episode_buffers: List[dict] = [
+                self._init_ep_buf() for _ in range(self.num_envs)
+            ]
 
     def reset(self, **kwargs):
         result = super().reset(**kwargs)
         if self._is_recurrent:
             self._init_hidden()
-            self._episode_buffers = [[] for _ in range(self.num_envs)]
+            self._episode_buffers = [
+                self._init_ep_buf() for _ in range(self.num_envs)
+            ]
         return result
 
     def _init_hidden(self):
@@ -529,26 +540,22 @@ class OffPolicyCollector(BaseCollector):
             )
 
             if self._is_recurrent:
-                # RNN: 累积到 per-env episode buffer
                 for i in range(self.num_envs):
-                    transition = {
-                        "obs": self._obs[i].copy(),
-                        "act": act[i],
-                        "rew": rew[i],
-                        "next_obs": next_obs[i].copy(),
-                        "done": float(done[i]),
-                    }
+                    eb = self._episode_buffers[i]
+                    eb["obs"].append(self._obs[i].copy())
+                    eb["act"].append(act[i])
+                    eb["rew"].append(rew[i])
+                    eb["next_obs"].append(next_obs[i].copy())
+                    eb["done"].append(float(done[i]))
                     if action_mask_np is not None:
-                        transition["action_mask"] = action_mask_np[i].copy()
+                        eb["action_mask"].append(action_mask_np[i].copy())
                     if next_action_mask_np is not None:
-                        transition["next_action_mask"] = next_action_mask_np[i].copy()
-                    self._episode_buffers[i].append(transition)
+                        eb["next_action_mask"].append(next_action_mask_np[i].copy())
 
                     if done[i]:
                         self._flush_episode(i)
                         self._hidden[:, i, :] = 0.0
             else:
-                # MLP: 逐 step 批量写入
                 self.buffer.add_batch(
                     obs=self._obs,
                     act=act,
@@ -581,26 +588,24 @@ class OffPolicyCollector(BaseCollector):
         )
 
     def _flush_episode(self, env_idx: int):
-        """将 env_idx 的 episode buffer 合并并推入 EpisodeReplayBuffer。"""
-        ep_buf = self._episode_buffers[env_idx]
-        if not ep_buf:
+        """将 env_idx 的 episode buffer 合并推入 SequenceReplayBuffer。"""
+        eb = self._episode_buffers[env_idx]
+        if not eb["obs"]:
             return
         episode = {
-            "obs": np.array([t["obs"] for t in ep_buf], dtype=np.float32),
-            "act": np.array([t["act"] for t in ep_buf], dtype=np.float32),
-            "rew": np.array([t["rew"] for t in ep_buf], dtype=np.float32),
-            "next_obs": np.array([t["next_obs"] for t in ep_buf], dtype=np.float32),
-            "done": np.array([t["done"] for t in ep_buf], dtype=np.float32),
+            "obs": np.stack(eb["obs"]).astype(np.float32),
+            "act": np.array(eb["act"], dtype=np.float32),
+            "rew": np.array(eb["rew"], dtype=np.float32),
+            "next_obs": np.stack(eb["next_obs"]).astype(np.float32),
+            "done": np.array(eb["done"], dtype=np.float32),
         }
-        if "action_mask" in ep_buf[0]:
-            episode["action_mask"] = np.array([t["action_mask"] for t in ep_buf])
-            episode["next_action_mask"] = np.array([t["next_action_mask"] for t in ep_buf])
+        if eb.get("action_mask"):
+            episode["action_mask"] = np.stack(eb["action_mask"])
+            episode["next_action_mask"] = np.stack(eb["next_action_mask"])
         self.buffer.add_episode(episode)
-        self._episode_buffers[env_idx] = []
+        self._episode_buffers[env_idx] = self._init_ep_buf()
 
-    def sample(self, batch_size: int, seq_len: int = 0) -> Union[TransitionBatch, SequenceBatch]:
-        if isinstance(self.buffer, EpisodeReplayBuffer):
-            return self.buffer.sample(batch_size, seq_len)
+    def sample(self, batch_size: int) -> Union[TransitionBatch, SequenceBatch]:
         return self.buffer.sample(batch_size)
 
     def can_sample(self, batch_size: int) -> bool:
@@ -612,7 +617,7 @@ class MAOffPolicyCollector(BaseCollector):
     多智能体 off-policy 采集器。
 
     MLP 模式: 内持 Dict[str, ReplayBuffer]，逐 step 存入。
-    RNN 模式: 内持 Dict[str, EpisodeReplayBuffer]，按 episode 存储。
+    RNN 模式: 内持 Dict[str, SequenceReplayBuffer]，按 episode 预切片存储。
 
     每个 agent 的 transitions 独立存入对应 buffer。
     """
@@ -621,7 +626,7 @@ class MAOffPolicyCollector(BaseCollector):
         self,
         algorithm: BaseAlgorithm,
         env: BaseVectorEnv,
-        buffers: Dict[str, Union["ReplayBuffer", "EpisodeReplayBuffer"]],
+        buffers: Dict[str, Union["ReplayBuffer", "SequenceReplayBuffer"]],
         collect_state: bool = False,
     ):
         if not env.is_parallel_env:
@@ -633,15 +638,22 @@ class MAOffPolicyCollector(BaseCollector):
         self.agents = env.agents
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         self._collect_state = collect_state
-        self._shared_indices = collect_state  # CTDE 算法需要对齐采样
+        self._shared_indices = collect_state
         self._hidden: Optional[Dict[str, torch.Tensor]] = None
         super().__init__(algorithm, env)
 
+    def _init_ep_buf(self, agent: str) -> dict:
+        """创建空的 dict-of-lists episode 临时缓冲区。"""
+        buf = {"obs": [], "act": [], "rew": [], "next_obs": [], "done": []}
+        if getattr(self.buffers.get(agent), "has_action_mask", False):
+            buf["action_mask"] = []
+            buf["next_action_mask"] = []
+        return buf
+
     def _reset_buffer(self):
         if getattr(self, '_is_recurrent', False):
-            # per-agent per-env episode 临时缓冲区
-            self._episode_buffers: Dict[str, List[List[dict]]] = {
-                agent: [[] for _ in range(self.num_envs)]
+            self._episode_buffers: Dict[str, List[dict]] = {
+                agent: [self._init_ep_buf(agent) for _ in range(self.num_envs)]
                 for agent in self.agents
             }
 
@@ -650,7 +662,7 @@ class MAOffPolicyCollector(BaseCollector):
         if self._is_recurrent:
             self._init_hidden()
             self._episode_buffers = {
-                agent: [[] for _ in range(self.num_envs)]
+                agent: [self._init_ep_buf(agent) for _ in range(self.num_envs)]
                 for agent in self.agents
             }
         return result
@@ -699,35 +711,29 @@ class MAOffPolicyCollector(BaseCollector):
                     self._info, agent, self.num_envs
                 )
 
-            # CTDE: step 前采集 current state
             cur_state = self._get_global_states() if self._collect_state else None
 
             next_obs, rew, term, trunc, info = self.env.step(actions)
 
-            # CTDE: step 后采集 next state
             next_state = self._get_global_states() if self._collect_state else None
 
             if self._is_recurrent:
-                # RNN: 累积到 per-agent per-env episode buffer
                 for agent in self.agents:
                     done = (term[agent] | trunc[agent]).astype(np.float32)
                     next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
+                    am = cur_action_masks[agent]
                     for i in range(self.num_envs):
-                        transition = {
-                            "obs": self._obs[agent][i].copy(),
-                            "act": actions[agent][i],
-                            "rew": rew[agent][i],
-                            "next_obs": next_obs[agent][i].copy(),
-                            "done": done[i],
-                        }
-                        am = cur_action_masks[agent]
+                        eb = self._episode_buffers[agent][i]
+                        eb["obs"].append(self._obs[agent][i].copy())
+                        eb["act"].append(actions[agent][i])
+                        eb["rew"].append(rew[agent][i])
+                        eb["next_obs"].append(next_obs[agent][i].copy())
+                        eb["done"].append(done[i])
                         if am is not None:
-                            transition["action_mask"] = am[i].copy()
+                            eb["action_mask"].append(am[i].copy())
                         if next_am is not None:
-                            transition["next_action_mask"] = next_am[i].copy()
-                        self._episode_buffers[agent][i].append(transition)
+                            eb["next_action_mask"].append(next_am[i].copy())
             else:
-                # MLP: 逐 step 批量写入
                 for agent in self.agents:
                     done = (term[agent] | trunc[agent]).astype(np.float32)
                     next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
@@ -745,7 +751,6 @@ class MAOffPolicyCollector(BaseCollector):
                     )
 
             first_agent = self.agents[0]
-            # 所有智能体平均 reward
             mean_rew = sum(rew[a] for a in self.agents) / len(self.agents)
             self._current_rewards += mean_rew
             self._current_lengths += 1
@@ -774,23 +779,23 @@ class MAOffPolicyCollector(BaseCollector):
         )
 
     def _flush_episodes(self, env_idx: int):
-        """将 env_idx 的所有 agent episode buffer 合并推入对应 EpisodeReplayBuffer。"""
+        """将 env_idx 的所有 agent episode buffer 合并推入对应 SequenceReplayBuffer。"""
         for agent in self.agents:
-            ep_buf = self._episode_buffers[agent][env_idx]
-            if not ep_buf:
+            eb = self._episode_buffers[agent][env_idx]
+            if not eb["obs"]:
                 continue
             episode = {
-                "obs": np.array([t["obs"] for t in ep_buf], dtype=np.float32),
-                "act": np.array([t["act"] for t in ep_buf], dtype=np.float32),
-                "rew": np.array([t["rew"] for t in ep_buf], dtype=np.float32),
-                "next_obs": np.array([t["next_obs"] for t in ep_buf], dtype=np.float32),
-                "done": np.array([t["done"] for t in ep_buf], dtype=np.float32),
+                "obs": np.stack(eb["obs"]).astype(np.float32),
+                "act": np.array(eb["act"], dtype=np.float32),
+                "rew": np.array(eb["rew"], dtype=np.float32),
+                "next_obs": np.stack(eb["next_obs"]).astype(np.float32),
+                "done": np.array(eb["done"], dtype=np.float32),
             }
-            if "action_mask" in ep_buf[0]:
-                episode["action_mask"] = np.array([t["action_mask"] for t in ep_buf])
-                episode["next_action_mask"] = np.array([t["next_action_mask"] for t in ep_buf])
+            if eb.get("action_mask"):
+                episode["action_mask"] = np.stack(eb["action_mask"])
+                episode["next_action_mask"] = np.stack(eb["next_action_mask"])
             self.buffers[agent].add_episode(episode)
-            self._episode_buffers[agent][env_idx] = []
+            self._episode_buffers[agent][env_idx] = self._init_ep_buf(agent)
 
     def _get_global_states(self) -> Optional[np.ndarray]:
         """获取所有 env 的 global state。
@@ -807,11 +812,11 @@ class MAOffPolicyCollector(BaseCollector):
             return None
         return np.stack(states)
 
-    def sample(self, batch_size: int, seq_len: int = 0) -> Dict[str, Union[TransitionBatch, SequenceBatch]]:
+    def sample(self, batch_size: int) -> Dict[str, Union[TransitionBatch, SequenceBatch]]:
         first_buf = next(iter(self.buffers.values()))
-        if isinstance(first_buf, EpisodeReplayBuffer):
+        if isinstance(first_buf, SequenceReplayBuffer):
             return {
-                aid: buf.sample(batch_size, seq_len)
+                aid: buf.sample(batch_size)
                 for aid, buf in self.buffers.items()
             }
         if self._shared_indices:

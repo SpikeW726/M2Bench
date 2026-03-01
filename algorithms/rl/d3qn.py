@@ -112,66 +112,70 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
     def _compute_loss_sequence(
         self, batch: SequenceBatch,
     ) -> tuple[torch.Tensor, TrainingStats]:
-        """RNN 路径：DRQN 序列 TD loss，h0=zeros。"""
-        B, L = batch.obs.shape[:2]
-        device = batch.obs.device
+        """RNN 路径：DRQN 序列 TD loss，h0=zeros，支持 R2D2 burn-in。
 
-        # (B, L, D) → (L, B, D)
-        obs_seq = batch.obs.transpose(0, 1)
-        next_obs_seq = batch.next_obs.transpose(0, 1)
-        actions = batch.act.long()                     # (B, L)
-        rewards = batch.rew                            # (B, L)
-        dones = batch.done                             # (B, L)
-        mask = batch.mask                              # (B, L)
+        forward 全序列预热 hidden state，loss 仅在 [burn_in_len:] 训练区间计算。
+        burn_in_len=0 时行为与无 burn-in 完全一致。
+        """
+        B, T_total = batch.obs.shape[:2]
+        device = batch.obs.device
+        bi = getattr(batch, 'burn_in_len', 0)
+
+        obs_seq = batch.obs.transpose(0, 1)            # (T, B, D)
+        next_obs_seq = batch.next_obs.transpose(0, 1)  # (T, B, D)
+        actions = batch.act.long()                      # (B, T)
+        rewards = batch.rew                             # (B, T)
+        dones = batch.done                              # (B, T)
+        mask = batch.mask                               # (B, T)
 
         h0 = self.policy.q_network.get_initial_hidden(B, device)
 
-        # online Q: (L, B, act_dim)
-        q_seq, _ = self.policy.q_network.forward_sequence(obs_seq, h0)
-        # gather per-step actions: (L, B)
-        q_current = q_seq.gather(2, actions.T.unsqueeze(-1)).squeeze(-1)
+        q_full, _ = self.policy.q_network.forward_sequence(obs_seq, h0)  # (T, B, act_dim)
+        q_train = q_full[bi:]  # (S, B, act_dim)
+        act_train = actions[:, bi:].T.unsqueeze(-1)  # (S, B, 1)
+        q_current = q_train.gather(2, act_train).squeeze(-1)  # (S, B)
 
         with torch.no_grad():
             h0_target = self.target_policy.q_network.get_initial_hidden(B, device)
 
             if self.params.use_double_dqn:
-                # online net 选 action
-                next_q_online, _ = self.policy.q_network.forward_sequence(next_obs_seq, h0)
-                # action mask
+                next_q_online_full, _ = self.policy.q_network.forward_sequence(next_obs_seq, h0)
+                next_q_online = next_q_online_full[bi:]
                 next_am = getattr(batch, 'next_action_mask', None)
                 if next_am is not None:
-                    next_am_seq = next_am.transpose(0, 1)  # (L, B, act_dim)
-                    mask_t = next_am_seq.bool() if next_am_seq.dtype != torch.bool else next_am_seq
+                    next_am_train = next_am[:, bi:].transpose(0, 1)
+                    mask_t = next_am_train.bool() if next_am_train.dtype != torch.bool else next_am_train
                     next_q_online = next_q_online.masked_fill(~mask_t, float("-inf"))
-                next_actions = next_q_online.argmax(dim=-1, keepdim=True)    # (L, B, 1)
-                # target net 评估
-                next_q_target, _ = self.target_policy.q_network.forward_sequence(next_obs_seq, h0_target)
-                q_next = next_q_target.gather(2, next_actions).squeeze(-1)   # (L, B)
+                next_actions = next_q_online.argmax(dim=-1, keepdim=True)
+                next_q_target_full, _ = self.target_policy.q_network.forward_sequence(next_obs_seq, h0_target)
+                q_next = next_q_target_full[bi:].gather(2, next_actions).squeeze(-1)
             else:
-                next_q_target, _ = self.target_policy.q_network.forward_sequence(next_obs_seq, h0_target)
+                next_q_target_full, _ = self.target_policy.q_network.forward_sequence(next_obs_seq, h0_target)
+                next_q_target = next_q_target_full[bi:]
                 next_am = getattr(batch, 'next_action_mask', None)
                 if next_am is not None:
-                    next_am_seq = next_am.transpose(0, 1)
-                    mask_t = next_am_seq.bool() if next_am_seq.dtype != torch.bool else next_am_seq
+                    next_am_train = next_am[:, bi:].transpose(0, 1)
+                    mask_t = next_am_train.bool() if next_am_train.dtype != torch.bool else next_am_train
                     next_q_target = next_q_target.masked_fill(~mask_t, float("-inf"))
-                q_next = next_q_target.max(dim=-1)[0]                        # (L, B)
+                q_next = next_q_target.max(dim=-1)[0]
 
-            td_target = rewards.T + self.gamma * (1.0 - dones.T) * q_next   # (L, B)
+            rew_train = rewards[:, bi:].T
+            done_train = dones[:, bi:].T
+            td_target = rew_train + self.gamma * (1.0 - done_train) * q_next
 
-        # masked loss
-        td_loss = F.smooth_l1_loss(q_current, td_target, reduction='none')   # (L, B)
-        mask_T = mask.transpose(0, 1)                                         # (L, B)
-        loss = (td_loss * mask_T).sum() / mask_T.sum().clamp(min=1)
+        td_loss = F.smooth_l1_loss(q_current, td_target, reduction='none')
+        mask_train = mask[:, bi:].transpose(0, 1)
+        loss = (td_loss * mask_train).sum() / mask_train.sum().clamp(min=1)
 
         with torch.no_grad():
             stats = TrainingStats(
                 loss=loss.item(),
                 extra={
                     "epsilon": self._current_epsilon,
-                    "q_mean": q_seq.mean().item(),
-                    "q_max": q_seq.max().item(),
-                    "td_error": ((td_target - q_current).abs() * mask_T).sum().item()
-                    / mask_T.sum().clamp(min=1).item(),
+                    "q_mean": q_train.mean().item(),
+                    "q_max": q_train.max().item(),
+                    "td_error": ((td_target - q_current).abs() * mask_train).sum().item()
+                    / mask_train.sum().clamp(min=1).item(),
                 },
             )
         return loss, stats

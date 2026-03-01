@@ -318,25 +318,16 @@ class OffPolicyTrainer(BaseTrainer):
         all_rewards: List[float] = []
         iter_steps = 0
 
-        # RNN 时需传 seq_len 给 collector.sample
-        is_recurrent = getattr(self.algorithm, "is_recurrent", False)
-        seq_len = getattr(self.algorithm, "seq_len", 20) if is_recurrent else 0
-
         while iter_steps < self.step_per_iteration:
-            # 1. Collect（数据自动存入 collector 内部的 buffer）
             self.algorithm.set_training_mode(True)
             result = self.collector.collect(n_steps=self.collect_per_step)
             iter_steps += result.n_steps
             self.total_steps += result.n_steps
             all_rewards.extend(result.episode_rewards)
 
-            # 2. Update（从 buffer 采样）
             if self.collector.can_sample(self.batch_size):
                 for _ in range(self.update_per_step):
-                    if is_recurrent:
-                        batch = self.collector.sample(self.batch_size, seq_len=seq_len)
-                    else:
-                        batch = self.collector.sample(self.batch_size)
+                    batch = self.collector.sample(self.batch_size)
                     stats = self.algorithm.update(batch)
                     all_stats.append(stats)
 

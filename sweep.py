@@ -75,7 +75,7 @@ def sweep_train():
     4. 调用 train.train()
     """
     try:
-        # wandb.agent 已调用 wandb.init()，此处获取注入的超参
+        wandb.init()
         sweep_cfg = dict(wandb.config)
 
         # 加载 base config

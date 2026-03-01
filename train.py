@@ -6,6 +6,7 @@
     python train.py configs/experiments/mappo_tsp12_scratch.yaml
 """
 
+import math
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Optional
@@ -33,7 +34,7 @@ from data.collector import (
     OnPolicyCollector, MAOnPolicyCollector,
     OffPolicyCollector, MAOffPolicyCollector,
 )
-from data.buffer import ReplayBuffer, EpisodeReplayBuffer
+from data.buffer import ReplayBuffer, SequenceReplayBuffer
 from policies.marl.marl_base import MultiAgentPolicy
 from policies.rl.rl_base import ActorPolicy, ValuePolicy
 from utils.model_io import save_model
@@ -246,7 +247,7 @@ def _build_collector(
     PettingZoo → MAOnPolicyCollector / MAOffPolicyCollector
     Gymnasium  → OnPolicyCollector / OffPolicyCollector
 
-    Off-policy + RNN Q-network → EpisodeReplayBuffer
+    Off-policy + RNN Q-network → SequenceReplayBuffer（R2D2 预切片）
     Off-policy + MLP Q-network → ReplayBuffer
     """
     trainer_type = get_trainer_type(config.algo_name)
@@ -255,15 +256,23 @@ def _build_collector(
     if trainer_type == "off_policy":
         tc: OffPolicyTrainerConfig = config.training
         is_q_recurrent = getattr(algorithm, "is_recurrent", False)
-        max_episodes = getattr(config.algo, "max_episodes", 5000)
 
-        # QMIX 超网络需要 global state；VDN 的 SumMixer 无参数，不需要 state
         needs_state = config.algo_name in ("qmix",)
 
         if is_parallel:
             if is_q_recurrent:
+                burn_in_len = getattr(config.algo, "burn_in_len", 0)
+                seq_len = getattr(config.algo, "seq_len", 20)
+                max_seqs = getattr(config.algo, "max_episodes", 5000)
                 buffers = {
-                    aid: EpisodeReplayBuffer(max_episodes=max_episodes)
+                    aid: SequenceReplayBuffer(
+                        obs_dim=dims["obs_dim"],
+                        seq_len=seq_len,
+                        burn_in_len=burn_in_len,
+                        max_seqs=max_seqs,
+                        has_action_mask=True,
+                        action_dim=dims["action_dim"],
+                    )
                     for aid in dims["agent_ids"]
                 }
             else:
@@ -285,7 +294,17 @@ def _build_collector(
             )
         else:
             if is_q_recurrent:
-                buffer = EpisodeReplayBuffer(max_episodes=max_episodes)
+                burn_in_len = getattr(config.algo, "burn_in_len", 0)
+                seq_len = getattr(config.algo, "seq_len", 20)
+                max_seqs = getattr(config.algo, "max_episodes", 5000)
+                buffer = SequenceReplayBuffer(
+                    obs_dim=dims["obs_dim"],
+                    seq_len=seq_len,
+                    burn_in_len=burn_in_len,
+                    max_seqs=max_seqs,
+                    has_action_mask=True,
+                    action_dim=dims["action_dim"],
+                )
             else:
                 buffer = ReplayBuffer(
                     obs_shape=(dims["obs_dim"],),
@@ -416,6 +435,11 @@ def train(config: ExperimentConfig):
         context_kwargs["optimizer_steps_per_iter"] = tc.compute_optimizer_steps_per_iter(
             num_agents=dims["num_agents"]
         )
+
+    if isinstance(tc, OffPolicyTrainerConfig):
+        steps_per_collect = tc.num_envs * math.ceil(tc.collect_per_step / tc.num_envs)
+        updates_per_iter = math.ceil(tc.step_per_iteration / steps_per_collect) * tc.update_per_step
+        context_kwargs["total_updates"] = tc.max_iterations * updates_per_iter
 
     if value_norm_config is not None:
         context_kwargs["value_norm_config"] = value_norm_config

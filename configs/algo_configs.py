@@ -117,8 +117,8 @@ class OffPolicyParams(AlgoParams):
     target_update_freq: int = 1       # target 更新周期（update 调用次数）
     # RNN 序列训练参数（MLP 时忽略）
     seq_len: int = 20                 # RNN 训练序列长度
-    burn_in_len: int = 0              # 可选 burn-in 长度（暂未实现）
-    max_episodes: int = 5000          # EpisodeReplayBuffer 容量
+    burn_in_len: int = 0              # R2D2 burn-in 长度（预热 RNN hidden state）
+    max_episodes: int = 5000          # SequenceReplayBuffer 最大序列条数
 
 
 @dataclass(kw_only=True)

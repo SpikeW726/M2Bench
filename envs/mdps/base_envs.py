@@ -3,6 +3,7 @@ from pettingzoo import ParallelEnv
 from envs.mdps.patrol_core import PatrolWorld, TickResult
 from typing import Dict, Any, Optional
 import gymnasium
+import numpy as np
 
 class BaseEnv(ParallelEnv):
     def __init__(self, config):
@@ -88,6 +89,18 @@ class BaseEnv(ParallelEnv):
     def _action_to_target(self, agent_id: int, action_idx: int) -> int:
         """将动作索引转换为目标节点"""
         pass
+
+    def get_episode_metrics(self) -> Optional[dict]:
+        """返回上一个完成 episode 的终止指标。
+
+        world.last_episode_metrics 在每次 reset 时从
+        metrics_tracker.current 拷贝，因此调用时机应在 reset 之后。
+        子类可覆盖以添加额外指标（如 MASUP 的 wait_ratio）。
+        """
+        m = self.world.last_episode_metrics
+        if m is None:
+            return None
+        return {"igi": m.igi, "agi": m.agi, "iwi": m.iwi, "wi": m.wi}
 
 
 class FixedStepEnv(BaseEnv):

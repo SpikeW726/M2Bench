@@ -1,0 +1,83 @@
+# IQL + MLP + S4R1 (TSP12) 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/iql_s4r1_tsp12.yaml \
+#                   --sweep-config configs/sweep/iql_mlp_s4r1.yaml --count 40
+#
+# 并行:
+#   python sweep.py --base-config configs/experiments/iql_s4r1_tsp12.yaml \
+#                   --sweep-config configs/sweep/iql_mlp_s4r1.yaml --create-only
+#   python sweep.py --base-config configs/experiments/iql_s4r1_tsp12.yaml \
+#                   --sweep-id <ID> --count 15   # 各 tmux 窗口
+
+method: bayes
+
+metric:
+  name: env/wi
+  goal: minimize
+
+early_terminate:
+  type: median_stopping_rule
+  min_iter: 1500
+  min_samples_to_check: 6
+
+parameters:
+  # ---- algo params (映射到 IQLParams / D3QNParams) ----
+  lr:
+    min: 0.00005
+    max: 0.003
+    distribution: log_uniform_values
+
+  gamma:
+    values: [0.97, 0.98, 0.99, 0.995]
+
+  tau:
+    min: 0.001
+    max: 0.01
+    distribution: log_uniform_values
+
+  target_update_freq:
+    values: [1, 5, 10]
+
+  epsilon_start:
+    value: 1.0
+
+  epsilon_end:
+    min: 0.01
+    max: 0.1
+    distribution: uniform
+
+  epsilon_decay:
+    min: 0.9990
+    max: 0.99995
+    distribution: uniform
+
+  max_grad_norm:
+    values: [0.5, 1.0, 10.0]
+
+  use_double_dqn:
+    value: true
+
+  # ---- training params (映射到 OffPolicyTrainerConfig) ----
+  batch_size:
+    values: [64, 128, 256]
+
+  buffer_size:
+    values: [50000, 100000, 200000]
+
+  warmup_steps:
+    values: [5000, 10000, 20000]
+
+  update_per_step:
+    values: [1, 2, 4]
+
+  collect_per_step:
+    value: 12
+
+  max_iterations:
+    value: 8000
+
+  save_interval:
+    value: 8000
+
+  num_steps:
+    values: [32, 64, 128]
