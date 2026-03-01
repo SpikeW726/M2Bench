@@ -688,6 +688,44 @@ def _build_info(self, result):
 - GAE 无 `active_mask` 时走标准路径，无任何行为变化
 - `update` 中 `am=None` 时退化为原始 `.mean()` 聚合
 
+## 经验回放同步机制（Synchronized Experience Replay）
+
+### 问题
+
+Off-policy 逐步存储 `(obs, act, rew, next_obs)` 时，决策步绑了 reward=0（agent 刚出发），到达步的 arrival reward 绑了 no-op 动作。Q-network 学到的是 Q(ON_EDGE, noop)=high 而非 Q(decision_obs, go_to_B)=high。
+
+### 适用范围
+
+- **IQL（MLP + RNN）**：完整支持。`sync_replay: true` 开启。
+- **VDN / QMIX**：**不支持**。
+
+### IQL MLP 同步路径
+
+Collector 层 per-agent per-env 跟踪 pending decision，ON_EDGE 步累积折扣 reward，agent 回到 READY 时 flush 一条同步 transition（含 `gamma_power = γ^k`）。算法层 TD target 使用 `gamma_power` 替代固定 `γ`。
+
+### IQL RNN 多步 Bootstrap
+
+保留所有步（hidden state 连续性），Collector 额外存 `active_mask` 到 `SequenceReplayBuffer`。算法层反向扫描计算多步 TD target 到下一个 active 步，loss 仅在 `active_mask * mask` 上计算。
+
+### VDN / QMIX 不适用说明
+
+VDN/QMIX 的 `Q_tot = mixer(Q_1, ..., Q_N, state)` 要求 per-agent buffer 保持 shared-index 对齐（同一 index = 同一时间步）。同步机制压缩掉 ON_EDGE 步后，各 agent transition 数量不对齐（不同边权 → 不同 decision 间隔），破坏 shared-index 前提。
+
+理论上可用"所有 agent 同时 READY"作为联合同步点，但巡逻环境中 agent 到达后立即出发，READY 窗口仅 1 step，多 agent 同时 READY 要求边权恰好对齐（LCM），在不规则图上几乎不可能。
+
+### 配置
+
+```yaml
+algo:
+  sync_replay: true   # 仅 IQL 生效
+```
+
+### 向后兼容
+
+- `sync_replay: false`（默认）时所有组件走原有路径，零行为变化
+- `gamma_power=None` 时 MLP 退化为标准 `γ` bootstrap
+- `active_mask=None` 时 RNN loss 退化为标准全步计算
+
 ## Key Dependencies
 
 - PettingZoo: Multi-agent environment interface

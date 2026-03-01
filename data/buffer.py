@@ -24,6 +24,7 @@ class ReplayBuffer:
         has_state: bool = False,
         state_dim: int = 0,
         has_active_mask: bool = False,
+        has_gamma_power: bool = False,
     ):
         """
         Args:
@@ -37,6 +38,7 @@ class ReplayBuffer:
             has_state: Whether to store global state (for CTDE: VDN/QMIX)
             state_dim: Dimension of global state. Required if has_state=True.
             has_active_mask: Whether to store active masks (1=READY, 0=ON_EDGE)
+            has_gamma_power: Whether to store per-transition γ^k (sync_replay)
         """
         self.obs_shape = obs_shape
         self.act_shape = act_shape if act_shape else (1,)
@@ -44,6 +46,7 @@ class ReplayBuffer:
         self.has_action_mask = has_action_mask
         self.has_state = has_state
         self.has_active_mask = has_active_mask
+        self.has_gamma_power = has_gamma_power
 
         # 预分配数组
         self.obs = np.zeros((max_size, *obs_shape), dtype=np.float32)
@@ -72,6 +75,10 @@ class ReplayBuffer:
         if self.has_active_mask:
             self.active_mask = np.ones(max_size, dtype=np.float32)
 
+        # γ^k per-transition bootstrap 折扣 (sync_replay 模式)
+        if self.has_gamma_power:
+            self.gamma_power = np.ones(max_size, dtype=np.float32)
+
         self._ptr = 0
         self._size = 0
 
@@ -87,6 +94,7 @@ class ReplayBuffer:
         state: Optional[np.ndarray] = None,
         next_state: Optional[np.ndarray] = None,
         active_mask: Optional[float] = None,
+        gamma_power: Optional[float] = None,
     ):
         """
         添加单个 transition（循环覆盖）
@@ -102,6 +110,7 @@ class ReplayBuffer:
             state: global state (for CTDE algorithms)
             next_state: next global state (for CTDE algorithms)
             active_mask: 1=READY (valid decision), 0=ON_EDGE (no-op)
+            gamma_power: γ^k bootstrap 折扣 (sync_replay 模式)
         """
         self.obs[self._ptr] = obs
         self.act[self._ptr] = act
@@ -128,6 +137,9 @@ class ReplayBuffer:
 
         if self.has_active_mask:
             self.active_mask[self._ptr] = active_mask if active_mask is not None else 1.0
+
+        if self.has_gamma_power:
+            self.gamma_power[self._ptr] = gamma_power if gamma_power is not None else 1.0
 
         self._ptr = (self._ptr + 1) % self.max_size
         self._size = min(self._size + 1, self.max_size)
@@ -157,6 +169,9 @@ class ReplayBuffer:
         if self.has_active_mask:
             result.active_mask = self.active_mask[indices].copy()
 
+        if self.has_gamma_power:
+            result.gamma_power = self.gamma_power[indices].copy()
+
         return result
 
     def sample(self, batch_size: int) -> TransitionBatch:
@@ -182,6 +197,7 @@ class ReplayBuffer:
         state: Optional[np.ndarray] = None,
         next_state: Optional[np.ndarray] = None,
         active_mask: Optional[np.ndarray] = None,
+        gamma_power: Optional[np.ndarray] = None,
     ):
         """
         批量添加 transitions（向量化写入，避免逐条 Python 循环）。
@@ -222,6 +238,8 @@ class ReplayBuffer:
                     self.next_state[s] = next_state
             if self.has_active_mask:
                 self.active_mask[s] = active_mask if active_mask is not None else 1.0
+            if self.has_gamma_power:
+                self.gamma_power[s] = gamma_power if gamma_power is not None else 1.0
         else:
             first = self.max_size - self._ptr
             second = batch_size - first
@@ -267,6 +285,13 @@ class ReplayBuffer:
                 else:
                     self.active_mask[s1] = 1.0
                     self.active_mask[s2] = 1.0
+            if self.has_gamma_power:
+                if gamma_power is not None:
+                    self.gamma_power[s1] = gamma_power[:first]
+                    self.gamma_power[s2] = gamma_power[first:]
+                else:
+                    self.gamma_power[s1] = 1.0
+                    self.gamma_power[s2] = 1.0
 
         self._ptr = end % self.max_size
         self._size = min(self._size + batch_size, self.max_size)
@@ -294,6 +319,7 @@ class SequenceReplayBuffer:
         max_seqs: int = 50_000,
         has_action_mask: bool = False,
         action_dim: int = 0,
+        has_active_mask: bool = False,
     ):
         self.obs_dim = obs_dim
         self.seq_len = seq_len
@@ -301,6 +327,7 @@ class SequenceReplayBuffer:
         self.total_len = burn_in_len + seq_len
         self.max_seqs = max_seqs
         self.has_action_mask = has_action_mask
+        self.has_active_mask = has_active_mask
         self.action_dim = action_dim
 
         # 预分配扁平循环数组
@@ -315,6 +342,9 @@ class SequenceReplayBuffer:
         if has_action_mask:
             self.action_mask_buf = np.zeros((max_seqs, T, action_dim), dtype=np.bool_)
             self.next_action_mask_buf = np.zeros((max_seqs, T, action_dim), dtype=np.bool_)
+
+        if has_active_mask:
+            self.active_mask_buf = np.zeros((max_seqs, T), dtype=np.float32)
 
         self._ptr = 0
         self._size = 0
@@ -333,6 +363,7 @@ class SequenceReplayBuffer:
             return
 
         has_am = "action_mask" in episode
+        has_actm = "active_mask" in episode
         s = self.seq_len
         b = self.burn_in_len
         T = self.total_len
@@ -362,6 +393,8 @@ class SequenceReplayBuffer:
             if has_am and self.has_action_mask:
                 self.action_mask_buf[idx] = False
                 self.next_action_mask_buf[idx] = False
+            if has_actm and self.has_active_mask:
+                self.active_mask_buf[idx] = 0
 
             self.obs[idx, dst_offset:dst_offset + src_data_len] = episode["obs"][src_lo:src_hi]
             self.act[idx, dst_offset:dst_offset + src_data_len] = episode["act"][src_lo:src_hi]
@@ -372,6 +405,9 @@ class SequenceReplayBuffer:
             if has_am and self.has_action_mask:
                 self.action_mask_buf[idx, dst_offset:dst_offset + src_data_len] = episode["action_mask"][src_lo:src_hi]
                 self.next_action_mask_buf[idx, dst_offset:dst_offset + src_data_len] = episode["next_action_mask"][src_lo:src_hi]
+
+            if has_actm and self.has_active_mask:
+                self.active_mask_buf[idx, dst_offset:dst_offset + src_data_len] = episode["active_mask"][src_lo:src_hi]
 
             # mask: burn-in 区间=0, 训练区间有效步=1, padding=0
             train_data_start = max(0, b - dst_offset)  # 训练数据在 src 中的起始偏移
@@ -406,6 +442,9 @@ class SequenceReplayBuffer:
         if self.has_action_mask:
             result.action_mask = self.action_mask_buf[indices].copy()
             result.next_action_mask = self.next_action_mask_buf[indices].copy()
+
+        if self.has_active_mask:
+            result.active_mask = self.active_mask_buf[indices].copy()
 
         return result
 

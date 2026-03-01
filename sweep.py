@@ -72,27 +72,28 @@ def sweep_train():
     1. wandb.init() 已由 wandb.agent 完成
     2. 从 base YAML 加载完整 config
     3. 用 wandb.config 中的 sweep 参数覆盖
-    4. 调用 train.train()
+    4. 设置有意义的 run name（算法_地图_时间戳_runID）
+    5. 调用 train.train()
     """
     try:
         wandb.init()
         sweep_cfg = dict(wandb.config)
 
-        # 加载 base config
         config = load_config(_BASE_CONFIG_PATH)
-
-        # 应用 sweep 覆盖
         apply_sweep_overrides(config, sweep_cfg)
 
-        # 覆盖 run_name 以包含 sweep 标识
-        now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
         config._timestamp = now
         config.exp_name = f"sweep-{wandb.run.id}"
 
-        # 强制开启 wandb（sweep 模式下必须）
+        # 设置 wandb run name: algo-graph-timestamp-shortID
+        short_id = wandb.run.id[:6]
+        wandb.run.name = f"{config.algo_name}-{config.graph_name}-{now}-{short_id}"
+        wandb.run.save()
+
         config.track_wandb = True
 
-        print(f"[Sweep] Run {wandb.run.id} with overrides:")
+        print(f"[Sweep] Run {wandb.run.name} with overrides:")
         for key, value in sweep_cfg.items():
             if not key.startswith("_"):
                 print(f"  {key}: {value}")
@@ -110,14 +111,30 @@ def sweep_train():
 #                          Sweep 创建
 # =============================================================================
 
-def create_sweep(args) -> str:
+def _resolve_project(args) -> str:
+    """从 base config YAML 推导 sweep project 名称。
+
+    优先级: CLI --project 显式指定 > 从 base config 自动推导。
+    自动推导格式: "sweep-{algo_name}-{graph_name}"
+    """
+    if args.project:
+        return args.project
+
+    with open(args.base_config) as f:
+        raw = yaml.safe_load(f)
+    algo = raw.get("algo_name", "unknown")
+    mdp = raw.get("env_type", "unknown")
+    graph = raw.get("graph_name", "unknown")
+    return f"sweep-{algo}-{mdp}-{graph}"
+
+
+def create_sweep(args, project: str) -> str:
     """创建新的 WandB Sweep 并返回 sweep_id。"""
     if args.sweep_config:
         with open(args.sweep_config) as f:
             sweep_config = yaml.safe_load(f)
         print(f"[Main] Loaded sweep config from {args.sweep_config}")
     else:
-        # 默认 sweep 配置
         sweep_config = {
             "method": args.method,
             "metric": {"name": "env/wi", "goal": "minimize"},
@@ -136,7 +153,7 @@ def create_sweep(args) -> str:
             },
         }
 
-    sweep_id = wandb.sweep(sweep_config, project=args.project)
+    sweep_id = wandb.sweep(sweep_config, project=project)
     return sweep_id
 
 
@@ -176,8 +193,8 @@ def main():
                         help="加入已有的 sweep（跳过创建），支持并行多终端")
 
     # 通用参数
-    parser.add_argument("--project", type=str, default="MAP-Sweep",
-                        help="WandB project name")
+    parser.add_argument("--project", type=str, default=None,
+                        help="WandB project name (默认自动推导: sweep-{algo}-{graph})")
     parser.add_argument("--count", type=int, default=50,
                         help="本 agent 运行的 trial 数量")
     parser.add_argument("--method", type=str, default="bayes",
@@ -188,21 +205,23 @@ def main():
 
     args = parser.parse_args()
     _BASE_CONFIG_PATH = args.base_config
+    project = _resolve_project(args)
 
     if args.sweep_id:
         # 模式 2: 加入已有 sweep
         sweep_id = args.sweep_id
         print(f"[Main] Joining existing sweep: {sweep_id}")
+        print(f"[Main] Project: {project}")
         print(f"[Main] Will run {args.count} trials in this agent")
-        wandb.agent(sweep_id, sweep_train, project=args.project, count=args.count)
+        wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
 
     elif args.create_only:
         # 模式 1: 仅创建 sweep
-        sweep_id = create_sweep(args)
+        sweep_id = create_sweep(args, project)
         print(f"\n{'=' * 60}")
         print(f"  Sweep created successfully!")
         print(f"  Sweep ID: {sweep_id}")
-        print(f"  Project:  {args.project}")
+        print(f"  Project:  {project}")
         print(f"{'=' * 60}")
         print(f"\n在各 tmux 终端运行以下命令来并行执行:")
         print(f"  python sweep.py --base-config {args.base_config} "
@@ -211,9 +230,10 @@ def main():
 
     else:
         # 模式 3: 创建并立即运行（默认）
-        sweep_id = create_sweep(args)
-        print(f"[Main] Created sweep: {sweep_id}, starting agent with {args.count} trials")
-        wandb.agent(sweep_id, sweep_train, count=args.count)
+        sweep_id = create_sweep(args, project)
+        print(f"[Main] Created sweep: {sweep_id} in project '{project}', "
+              f"starting agent with {args.count} trials")
+        wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
 
 
 if __name__ == "__main__":

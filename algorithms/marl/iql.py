@@ -113,7 +113,11 @@ class IQLAlgo(BaseAlgorithm):
         batch: TransitionBatch,
         agent_id: str,
     ) -> tuple[torch.Tensor, dict]:
-        """MLP 路径：计算单个 agent 的 Double DQN TD loss。"""
+        """MLP 路径：计算单个 agent 的 Double DQN TD loss。
+
+        sync_replay 模式下 buffer 仅含 active 步，gamma_power 替代固定 γ，
+        不需要 active_mask loss masking。
+        """
         agent_policy: ValuePolicy = self.policy.get_policy(agent_id)
         target_policy: ValuePolicy = self.target_policies[agent_id]
 
@@ -124,6 +128,7 @@ class IQLAlgo(BaseAlgorithm):
         dones = batch.done
         next_action_mask = getattr(batch, 'next_action_mask', None)
         active_mask = getattr(batch, 'active_mask', None)
+        gamma_power = getattr(batch, 'gamma_power', None)
 
         q_values = agent_policy.q_network(obs)
         q_current = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
@@ -140,12 +145,16 @@ class IQLAlgo(BaseAlgorithm):
                 )
                 q_next = next_q_target.max(dim=1)[0]
 
-            td_target = rewards + self.gamma * (1.0 - dones) * q_next
+            if gamma_power is not None:
+                td_target = rewards + gamma_power * (1.0 - dones) * q_next
+            else:
+                td_target = rewards + self.gamma * (1.0 - dones) * q_next
 
         per_sample_loss = F.mse_loss(q_current, td_target, reduction='none')
 
-        # active_mask: 仅对 READY 决策步计算 loss，跳过 ON_EDGE no-op 步
-        if active_mask is not None:
+        # sync_replay: buffer 仅含 active 步，不需要 active_mask masking
+        # 非 sync 模式: active_mask 仅对 READY 决策步计算 loss
+        if gamma_power is None and active_mask is not None:
             am_sum = active_mask.sum().clamp(min=1)
             loss = (per_sample_loss * active_mask).sum() / am_sum
         else:
@@ -171,6 +180,9 @@ class IQLAlgo(BaseAlgorithm):
 
         forward 全序列预热 hidden state，loss 仅在 [burn_in_len:] 训练区间计算。
         burn_in_len=0 时行为与无 burn-in 完全一致。
+
+        有 active_mask 时使用多步 bootstrap 到下一 active 步，并且 loss 仅在
+        active 且有效 (mask=1) 的步上计算。无 active_mask 时退化为标准 1-step TD。
         """
         agent_policy: ValuePolicy = self.policy.get_policy(agent_id)
         target_policy: ValuePolicy = self.target_policies[agent_id]
@@ -188,7 +200,6 @@ class IQLAlgo(BaseAlgorithm):
 
         h0 = agent_policy.q_network.get_initial_hidden(B, device)
 
-        # forward 全序列（含 burn-in），然后截取训练区间
         q_full, _ = agent_policy.q_network.forward_sequence(obs_seq, h0)  # (T, B, act_dim)
         q_train = q_full[bi:]  # (S, B, act_dim), S = T - bi
         act_train = actions[:, bi:].T.unsqueeze(-1)  # (S, B, 1)
@@ -220,19 +231,91 @@ class IQLAlgo(BaseAlgorithm):
 
             rew_train = rewards[:, bi:].T  # (S, B)
             done_train = dones[:, bi:].T   # (S, B)
-            td_target = rew_train + self.gamma * (1.0 - done_train) * q_next
+
+            active_mask = getattr(batch, 'active_mask', None)
+            if active_mask is not None:
+                am_train = active_mask[:, bi:].transpose(0, 1)  # (S, B)
+                td_target = self._compute_multistep_td_targets(
+                    rew_train, q_next, done_train, am_train,
+                )
+            else:
+                td_target = rew_train + self.gamma * (1.0 - done_train) * q_next
 
         td_loss = F.mse_loss(q_current, td_target, reduction='none')  # (S, B)
         mask_train = mask[:, bi:].transpose(0, 1)  # (S, B)
-        loss = (td_loss * mask_train).sum() / mask_train.sum().clamp(min=1)
+
+        if active_mask is not None:
+            loss_mask = mask_train * am_train
+        else:
+            loss_mask = mask_train
+
+        loss = (td_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1)
 
         info = {
             "q_mean": q_train.mean().item(),
             "q_max": q_train.max().item(),
-            "td_error": ((td_target - q_current).abs() * mask_train).sum().item()
-            / mask_train.sum().clamp(min=1).item(),
+            "td_error": ((td_target - q_current).abs() * loss_mask).sum().item()
+            / loss_mask.sum().clamp(min=1).item(),
         }
         return loss, info
+
+    def _compute_multistep_td_targets(
+        self,
+        rewards: torch.Tensor,
+        q_values: torch.Tensor,
+        dones: torch.Tensor,
+        active_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """反向扫描计算多步 TD target，跳过 inactive 步累积折扣 reward。
+
+        对于 active 步 t，TD target = r_t + γ*(acc_reward + acc_gamma * Q_next_active)。
+        inactive 步的 TD target 值无意义（会被 loss_mask 屏蔽）。
+
+        Args:
+            rewards: (S, B) per-step rewards
+            q_values: (S, B) max Q 值（来自 target network 的 next_obs Q）
+            dones: (S, B) episode 结束标志
+            active_mask: (S, B) 1=READY, 0=ON_EDGE
+        Returns:
+            td_targets: (S, B)
+        """
+        S, B = rewards.shape
+        gamma = self.gamma
+        td_targets = torch.zeros_like(rewards)
+
+        acc_reward = torch.zeros(B, device=rewards.device)
+        acc_gamma = torch.ones(B, device=rewards.device)
+        next_active_q = torch.zeros(B, device=rewards.device)
+
+        for s in range(S - 1, -1, -1):
+            done_s = dones[s]
+            am_s = active_mask[s]
+            rew_s = rewards[s]
+
+            # done 边界：重置累积器
+            reset = done_s > 0.5
+            acc_reward = torch.where(reset, torch.zeros_like(acc_reward), acc_reward)
+            acc_gamma = torch.where(reset, torch.ones_like(acc_gamma), acc_gamma)
+            next_active_q = torch.where(reset, torch.zeros_like(next_active_q), next_active_q)
+
+            is_active = am_s > 0.5
+
+            td_targets[s] = torch.where(
+                is_active,
+                rew_s + gamma * (acc_reward + acc_gamma * next_active_q),
+                torch.zeros_like(rew_s),
+            )
+
+            # active 步：重置累积器，自己成为 next_active
+            new_acc_reward = torch.where(is_active, torch.zeros_like(acc_reward), rew_s + gamma * acc_reward)
+            new_acc_gamma = torch.where(is_active, torch.ones_like(acc_gamma), acc_gamma * gamma)
+            new_next_active_q = torch.where(is_active, q_values[s], next_active_q)
+
+            acc_reward = new_acc_reward
+            acc_gamma = new_acc_gamma
+            next_active_q = new_next_active_q
+
+        return td_targets
 
     # ====================================================================
     #                       update (all agents)

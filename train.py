@@ -259,6 +259,12 @@ def _build_collector(
 
         needs_state = config.algo_name in ("qmix",)
 
+        # sync_replay 仅 IQL 生效
+        sync_replay = (
+            getattr(config.algo, "sync_replay", False)
+            and config.algo_name == "iql"
+        )
+
         if is_parallel:
             if is_q_recurrent:
                 burn_in_len = getattr(config.algo, "burn_in_len", 0)
@@ -272,6 +278,7 @@ def _build_collector(
                         max_seqs=max_seqs,
                         has_action_mask=True,
                         action_dim=dims["action_dim"],
+                        has_active_mask=sync_replay,
                     )
                     for aid in dims["agent_ids"]
                 }
@@ -285,12 +292,17 @@ def _build_collector(
                         action_dim=dims["action_dim"],
                         has_state=needs_state,
                         state_dim=dims["state_dim"] if needs_state else 0,
-                        has_active_mask=True,
+                        has_active_mask=not sync_replay,
+                        has_gamma_power=sync_replay,
                     )
                     for aid in dims["agent_ids"]
                 }
+            gamma = getattr(config.algo, "gamma", 0.99)
             return MAOffPolicyCollector(
-                algorithm, vec_env, buffers, collect_state=needs_state,
+                algorithm, vec_env, buffers,
+                collect_state=needs_state,
+                sync_mode=sync_replay and not is_q_recurrent,
+                gamma=gamma,
             )
         else:
             if is_q_recurrent:

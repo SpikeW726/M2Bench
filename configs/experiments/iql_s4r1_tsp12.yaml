@@ -25,6 +25,7 @@ env:
 
 # ---- 算法 ----
 algo:
+  sync_replay: true    # 启用经验回放同步
   lr: 0.00075
   gamma: 0.95
   tau: 0.001

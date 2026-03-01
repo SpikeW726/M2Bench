@@ -115,6 +115,8 @@ class OffPolicyParams(AlgoParams):
     max_grad_norm: float = 0.5
     tau: float = 0.005                # soft update 混合系数
     target_update_freq: int = 1       # target 更新周期（update 调用次数）
+    # 经验回放同步（仅 IQL 生效，VDN/QMIX 不支持）
+    sync_replay: bool = False
     # RNN 序列训练参数（MLP 时忽略）
     seq_len: int = 20                 # RNN 训练序列长度
     burn_in_len: int = 0              # R2D2 burn-in 长度（预热 RNN hidden state）

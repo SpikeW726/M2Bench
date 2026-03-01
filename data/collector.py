@@ -628,6 +628,8 @@ class MAOffPolicyCollector(BaseCollector):
         env: BaseVectorEnv,
         buffers: Dict[str, Union["ReplayBuffer", "SequenceReplayBuffer"]],
         collect_state: bool = False,
+        sync_mode: bool = False,
+        gamma: float = 0.99,
     ):
         if not env.is_parallel_env:
             raise ValueError(
@@ -639,6 +641,8 @@ class MAOffPolicyCollector(BaseCollector):
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         self._collect_state = collect_state
         self._shared_indices = collect_state
+        self._sync_mode = sync_mode
+        self._gamma = gamma
         self._hidden: Optional[Dict[str, torch.Tensor]] = None
         super().__init__(algorithm, env)
 
@@ -648,6 +652,8 @@ class MAOffPolicyCollector(BaseCollector):
         if getattr(self.buffers.get(agent), "has_action_mask", False):
             buf["action_mask"] = []
             buf["next_action_mask"] = []
+        if getattr(self.buffers.get(agent), "has_active_mask", False):
+            buf["active_mask"] = []
         return buf
 
     def _reset_buffer(self):
@@ -656,6 +662,11 @@ class MAOffPolicyCollector(BaseCollector):
                 agent: [self._init_ep_buf(agent) for _ in range(self.num_envs)]
                 for agent in self.agents
             }
+        if getattr(self, '_sync_mode', False) and not getattr(self, '_is_recurrent', False):
+            self._pending: Dict[str, List[Optional[dict]]] = {
+                agent: [None] * getattr(self, 'num_envs', 0)
+                for agent in getattr(self, 'agents', [])
+            }
 
     def reset(self, **kwargs):
         result = super().reset(**kwargs)
@@ -663,6 +674,11 @@ class MAOffPolicyCollector(BaseCollector):
             self._init_hidden()
             self._episode_buffers = {
                 agent: [self._init_ep_buf(agent) for _ in range(self.num_envs)]
+                for agent in self.agents
+            }
+        if self._sync_mode and not self._is_recurrent:
+            self._pending = {
+                agent: [None] * self.num_envs
                 for agent in self.agents
             }
         return result
@@ -717,11 +733,19 @@ class MAOffPolicyCollector(BaseCollector):
 
             next_state = self._get_global_states() if self._collect_state else None
 
+            # 提取 step 后的 active_mask（用于判断 agent 是否到达）
+            next_active_masks: Dict[str, Optional[np.ndarray]] = {}
+            for agent in self.agents:
+                next_active_masks[agent] = _extract_agent_active_mask_np(
+                    info, agent, self.num_envs
+                )
+
             if self._is_recurrent:
                 for agent in self.agents:
                     done = (term[agent] | trunc[agent]).astype(np.float32)
                     next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
                     am = cur_action_masks[agent]
+                    actm = cur_active_masks[agent]
                     for i in range(self.num_envs):
                         eb = self._episode_buffers[agent][i]
                         eb["obs"].append(self._obs[agent][i].copy())
@@ -733,6 +757,16 @@ class MAOffPolicyCollector(BaseCollector):
                             eb["action_mask"].append(am[i].copy())
                         if next_am is not None:
                             eb["next_action_mask"].append(next_am[i].copy())
+                        if "active_mask" in eb:
+                            eb["active_mask"].append(
+                                actm[i] if actm is not None else 1.0
+                            )
+            elif self._sync_mode:
+                self._collect_sync_mlp(
+                    actions, rew, next_obs, term, trunc, info,
+                    cur_action_masks, cur_active_masks, next_active_masks,
+                    cur_state, next_state,
+                )
             else:
                 for agent in self.agents:
                     done = (term[agent] | trunc[agent]).astype(np.float32)
@@ -794,8 +828,78 @@ class MAOffPolicyCollector(BaseCollector):
             if eb.get("action_mask"):
                 episode["action_mask"] = np.stack(eb["action_mask"])
                 episode["next_action_mask"] = np.stack(eb["next_action_mask"])
+            if eb.get("active_mask") is not None and len(eb.get("active_mask", [])) > 0:
+                episode["active_mask"] = np.array(eb["active_mask"], dtype=np.float32)
             self.buffers[agent].add_episode(episode)
             self._episode_buffers[agent][env_idx] = self._init_ep_buf(agent)
+
+    def _collect_sync_mlp(
+        self,
+        actions: Dict[str, np.ndarray],
+        rew: Dict[str, np.ndarray],
+        next_obs: Dict[str, np.ndarray],
+        term: Dict[str, np.ndarray],
+        trunc: Dict[str, np.ndarray],
+        info: Dict[str, np.ndarray],
+        cur_action_masks: Dict[str, Optional[np.ndarray]],
+        cur_active_masks: Dict[str, Optional[np.ndarray]],
+        next_active_masks: Dict[str, Optional[np.ndarray]],
+        cur_state: Optional[np.ndarray],
+        next_state: Optional[np.ndarray],
+    ):
+        """MLP 同步路径：跟踪 pending decision，累积折扣 reward，到达时 flush。"""
+        gamma = self._gamma
+        for agent in self.agents:
+            done = (term[agent] | trunc[agent]).astype(np.float32)
+            am = cur_active_masks[agent]
+            next_am_arr = next_active_masks[agent]
+            next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
+
+            for i in range(self.num_envs):
+                was_active = (am[i] > 0.5) if am is not None else True
+
+                if was_active:
+                    self._pending[agent][i] = {
+                        'obs': self._obs[agent][i].copy(),
+                        'act': actions[agent][i],
+                        'action_mask': (
+                            cur_action_masks[agent][i].copy()
+                            if cur_action_masks[agent] is not None else None
+                        ),
+                        'state': cur_state[i].copy() if cur_state is not None else None,
+                        'acc_reward': 0.0,
+                        'gamma_power': 1.0,
+                    }
+
+                pend = self._pending[agent][i]
+                if pend is not None:
+                    pend['acc_reward'] += pend['gamma_power'] * rew[agent][i]
+                    pend['gamma_power'] *= gamma
+
+                new_active = (next_am_arr[i] > 0.5) if next_am_arr is not None else True
+                is_done = done[i] > 0.5
+
+                if pend is not None and (new_active or is_done):
+                    self.buffers[agent].add(
+                        obs=pend['obs'],
+                        act=pend['act'],
+                        rew=pend['acc_reward'],
+                        next_obs=next_obs[agent][i].copy(),
+                        done=done[i],
+                        action_mask=pend['action_mask'],
+                        next_action_mask=(
+                            next_am[i].copy() if next_am is not None else None
+                        ),
+                        state=pend['state'],
+                        next_state=(
+                            next_state[i].copy() if next_state is not None else None
+                        ),
+                        gamma_power=pend['gamma_power'],
+                    )
+                    self._pending[agent][i] = None
+
+                if is_done:
+                    self._pending[agent][i] = None
 
     def _get_global_states(self) -> Optional[np.ndarray]:
         """获取所有 env 的 global state。

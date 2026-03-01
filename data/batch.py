@@ -246,6 +246,8 @@ class TransitionBatch(BaseBatch):
     next_state: torch.Tensor | np.ndarray = None    # (batch, state_dim)
     # For active agent masking (1=READY 决策步, 0=ON_EDGE 无效步)
     active_mask: torch.Tensor | np.ndarray = None   # (batch,)
+    # 同步 transition 的 bootstrap 折扣 γ^k（sync_replay 模式）
+    gamma_power: torch.Tensor | np.ndarray = None   # (batch,)
 
 
 @dataclass
@@ -263,6 +265,7 @@ class SequenceBatch(BaseBatch):
     mask: torch.Tensor | np.ndarray = None              # (B, L) — 有效步=1, padding=0
     action_mask: torch.Tensor | np.ndarray = None       # (B, L, act_dim)
     next_action_mask: torch.Tensor | np.ndarray = None  # (B, L, act_dim)
+    active_mask: torch.Tensor | np.ndarray = None       # (B, L) 1=READY, 0=ON_EDGE
     burn_in_len: int = 0                                # burn-in 步数（标量元数据，不转 tensor）
 
 
