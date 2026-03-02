@@ -481,6 +481,16 @@ def train(config: ExperimentConfig):
 
     actor_config_dict = _make_net_config_dict(actor_net, dims["obs_dim"], dims["action_dim"])
     critic_config_dict = _make_net_config_dict(critic_net, dims["critic_input_dim"], 1)
+    q_config_dict = _make_net_config_dict(q_net, dims["obs_dim"], dims["action_dim"])
+
+    # 评估时需要的元信息，写入 config.yaml 的 extra 段
+    _eval_meta = {
+        "algo_name": config.algo_name,
+        "env_type": config.env_type,
+        "policy_type": get_policy_type(config.algo_name),
+        "shared_policy": getattr(config.algo, "shared_policy", True),
+        "agent_ids": dims["agent_ids"],
+    }
 
     def _get_value_norm_config():
         if hasattr(algorithm, "use_value_norm") and algorithm.use_value_norm and algorithm.ret_rms is not None:
@@ -500,7 +510,9 @@ def train(config: ExperimentConfig):
             critic=critic_net,
             actor_config=actor_config_dict,
             critic_config=critic_config_dict,
+            q_config=q_config_dict,
             extra_info={
+                **_eval_meta,
                 "iteration": iteration,
                 "value_normalization": _get_value_norm_config(),
             },
@@ -556,7 +568,9 @@ def train(config: ExperimentConfig):
         critic=critic_net,
         actor_config=actor_config_dict,
         critic_config=critic_config_dict,
+        q_config=q_config_dict,
         extra_info={
+            **_eval_meta,
             "iteration": tc.max_iterations,
             "value_normalization": _get_value_norm_config(),
         },

@@ -412,6 +412,20 @@ def load_env_config(yaml_path: str | Path) -> EnvConfig:
     return EnvConfig(**_filter_dataclass_kwargs(EnvConfig, env_raw))
 
 
+def load_eval_config(yaml_path: str | Path) -> Tuple[str, EnvConfig]:
+    """从 eval YAML 加载 env_type 和 EnvConfig。
+
+    Returns:
+        (env_type, env_config) — env_type 缺省 "masup" 以兼容旧 YAML。
+    """
+    with open(yaml_path) as f:
+        raw = yaml.safe_load(f)
+    env_type = raw.get("env_type", "masup")
+    env_raw = raw.get("env", raw)
+    env_config = EnvConfig(**_filter_dataclass_kwargs(EnvConfig, env_raw))
+    return env_type, env_config
+
+
 # =============================================================================
 #                              查询函数
 # =============================================================================

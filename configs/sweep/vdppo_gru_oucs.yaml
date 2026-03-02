@@ -1,0 +1,88 @@
+# VDPPO + GRU + OUCSEnv (TSP12) 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/vdppo_gru_oucs_tsp12.yaml \
+#                   --sweep-config configs/sweep/vdppo_gru_oucs.yaml --count 40
+#
+# 并行:
+#   python sweep.py --base-config configs/experiments/vdppo_gru_oucs_tsp12.yaml \
+#                   --sweep-config configs/sweep/vdppo_gru_oucs.yaml --create-only
+#   python sweep.py --base-config configs/experiments/vdppo_gru_oucs_tsp12.yaml \
+#                   --sweep-id <ID> --count 15   # 各 tmux 窗口
+
+method: bayes
+
+metric:
+  name: env/wi
+  goal: minimize
+
+early_terminate:
+  type: median_stopping_rule
+  min_iter: 1000
+  min_samples_to_check: 6
+
+parameters:
+  # ---- VDPPOParams: actor 优化器 ----
+  actor_lr:
+    min: 0.00005
+    max: 0.002
+    distribution: log_uniform_values
+
+  # ---- VDPPOParams: Q 优化器 ----
+  q_lr:
+    min: 0.0001
+    max: 0.003
+    distribution: log_uniform_values
+
+  # ---- PPOParams ----
+  clip_range:
+    min: 0.1
+    max: 0.3
+
+  ent_coef:
+    min: 0.001
+    max: 0.05
+    distribution: log_uniform_values
+
+  vf_coef:
+    min: 0.1
+    max: 1.0
+
+  # ---- OnPolicyParams ----
+  gamma:
+    values: [0.99, 0.995, 0.999]
+
+  gae_lambda:
+    min: 0.9
+    max: 1.0
+
+  # ---- VDPPOParams: target 网络 ----
+  tau:
+    min: 0.01
+    max: 0.5
+    distribution: log_uniform_values
+
+  target_update_freq:
+    values: [1, 3, 5]
+
+  mixer_embed_dim:
+    values: [32, 64, 128]
+
+  # ---- RNN chunk 长度 ----
+  data_chunk_length:
+    values: [8, 10, 16]
+
+  # ---- OnPolicyTrainerConfig ----
+  minibatch_size:
+    values: [2048, 4096, 8192]
+
+  update_epochs:
+    values: [3, 5, 10]
+
+  num_steps:
+    values: [1024, 2048, 4096]
+
+  max_iterations:
+    value: 5000
+
+  save_interval:
+    value: 5000

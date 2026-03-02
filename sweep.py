@@ -87,9 +87,7 @@ def sweep_train():
         config.exp_name = f"sweep-{wandb.run.id}"
 
         # 设置 wandb run name: algo-graph-timestamp-shortID
-        short_id = wandb.run.id[:6]
-        wandb.run.name = f"{config.algo_name}-{config.graph_name}-{now}-{short_id}"
-        wandb.run.save()
+        wandb.run.name = f"{config.algo_name}-{config.env_type}-{config.graph_name}-{now}"
 
         config.track_wandb = True
 

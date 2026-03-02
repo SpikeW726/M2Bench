@@ -55,11 +55,11 @@ class ExperimentConfig(ToStringMixin):
 
     @property
     def run_name(self) -> str:
-        return f"{self.graph_name}_{self.exp_name}_{self._timestamp}"
+        return f"{self.algo_name}-{self.env_type}-{self.graph_name}-{self._timestamp}"
 
     @property
     def save_dir(self) -> Path:
-        return Path(f"models/{self.algo_name}-{self.graph_name}/{self.run_name}")
+        return Path(f"models/{self.algo_name}-{self.env_type}-{self.graph_name}/{self._timestamp}")
 
     @property
     def log_dir(self) -> Path:

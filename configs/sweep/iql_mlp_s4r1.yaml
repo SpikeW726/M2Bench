@@ -22,8 +22,6 @@ early_terminate:
 
 parameters:
   # ---- algo params (映射到 IQLParams / D3QNParams) ----
-  sync_replay: 
-    value: true    # 启用经验回放同步
 
   lr:
     min: 0.00005

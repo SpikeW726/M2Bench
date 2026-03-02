@@ -3,31 +3,30 @@ Model I/O utilities following HuggingFace/MMLab style.
 
 Save format:
     model_dir/
-    ├── config.yaml      # Network architecture config
+    ├── config.yaml      # Network architecture config + eval metadata
     ├── policy.pt        # Policy weights (state_dict only)
     └── critic.pt        # Critic weights (optional)
 
 Usage:
     # Save
-    save_model(save_dir, policy=ma_policy, critic=critic_net, 
-               actor_config={...}, critic_config={...})
-    
-    # Load
-    actor, critic = load_model(model_dir, device='cuda')
+    save_model(save_dir, policy=ma_policy, critic=critic_net,
+               actor_config={...}, critic_config={...}, q_config={...})
+
+    # Load for eval
+    multi_policy = load_policy_for_eval(model_dir, agent_ids, obs_space, action_space)
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type
 import yaml
 import torch
 import torch.nn as nn
 import numpy as np
+import gymnasium as gym
 
 
 def _convert_to_native_types(obj: Any) -> Any:
-    """
-    递归地将 numpy 类型转换为原生 Python 类型，确保 YAML 可以正确序列化。
-    """
+    """递归将 numpy 类型转为原生 Python 类型，确保 YAML 可序列化。"""
     if isinstance(obj, dict):
         return {k: _convert_to_native_types(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
@@ -44,57 +43,111 @@ def _convert_to_native_types(obj: Any) -> Any:
         return obj
 
 
+def _get_class_registry() -> Dict[str, type]:
+    """延迟导入，构建网络类名 → 类对象的映射。"""
+    from networks.mlp import ActorMLP, CriticMLP, QMLP
+    from networks.rnn import ActorRNN, CriticRNN, QRNN
+
+    return {
+        "ActorMLP": ActorMLP,
+        "CriticMLP": CriticMLP,
+        "QMLP": QMLP,
+        "ActorRNN": ActorRNN,
+        "CriticRNN": CriticRNN,
+        "QRNN": QRNN,
+    }
+
+
+def _build_network_from_config(net_cfg: dict, registry: Dict[str, type]) -> nn.Module:
+    """根据 config dict 实例化网络。
+
+    MLP 使用 hidden_sizes；RNN 使用 hidden_size / num_layers / rnn_type。
+    """
+    net_type = net_cfg["type"]
+    cls = registry.get(net_type)
+    if cls is None:
+        raise ValueError(f"Unknown network type: {net_type}")
+
+    if "hidden_sizes" in net_cfg:
+        kwargs = dict(
+            input_dim=net_cfg["input_dim"],
+            hidden_sizes=net_cfg["hidden_sizes"],
+            output_dim=net_cfg["output_dim"],
+        )
+        if "dueling" in net_cfg:
+            kwargs["dueling"] = net_cfg["dueling"]
+        return cls(**kwargs)
+    else:
+        kwargs = dict(
+            input_dim=net_cfg["input_dim"],
+            hidden_size=net_cfg["hidden_size"],
+            output_dim=net_cfg["output_dim"],
+            num_layers=net_cfg.get("num_layers", 1),
+            rnn_type=net_cfg.get("rnn_type", "gru"),
+        )
+        if "dueling" in net_cfg:
+            kwargs["dueling"] = net_cfg["dueling"]
+        if net_cfg.get("fc_hidden"):
+            kwargs["fc_hidden"] = net_cfg["fc_hidden"]
+        return cls(**kwargs)
+
+
+# =========================================================================
+#                              Save
+# =========================================================================
+
 def save_model(
     save_dir: str | Path,
     policy: nn.Module,
     critic: Optional[nn.Module] = None,
     actor_config: Optional[Dict[str, Any]] = None,
     critic_config: Optional[Dict[str, Any]] = None,
+    q_config: Optional[Dict[str, Any]] = None,
     extra_info: Optional[Dict[str, Any]] = None,
 ):
     """
     Save model in HuggingFace style (config + weights separately).
-    
+
     Args:
         save_dir: Directory to save model
         policy: Policy module (MultiAgentPolicy or single policy)
         critic: Critic module (optional)
-        actor_config: Actor network config (type, input_dim, hidden_sizes, output_dim)
+        actor_config: Actor network config
         critic_config: Critic network config
-        extra_info: Additional info to save in config (training params, etc.)
+        q_config: Q-network config (for value-based algorithms)
+        extra_info: Additional metadata (algo_name, policy_type, etc.)
     """
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Build config
-    config = {}
-    
+
+    config: dict = {}
+
     if actor_config:
         config['actor'] = actor_config
-    
     if critic_config:
         config['critic'] = critic_config
-    
+    if q_config:
+        config['q_network'] = q_config
     if extra_info:
         config['extra'] = extra_info
-    
-    # 将 numpy 类型转换为原生 Python 类型，避免 yaml.safe_load 无法解析
+
     config = _convert_to_native_types(config)
-    
-    # Save config
+
     config_path = save_dir / 'config.yaml'
     with open(config_path, 'w') as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-    
-    # Save policy weights
+
     policy_path = save_dir / 'policy.pt'
     torch.save(policy.state_dict(), policy_path)
-    
-    # Save critic weights (if provided)
+
     if critic is not None:
         critic_path = save_dir / 'critic.pt'
         torch.save(critic.state_dict(), critic_path)
 
+
+# =========================================================================
+#                              Load (legacy)
+# =========================================================================
 
 def load_model(
     model_dir: str | Path,
@@ -103,58 +156,43 @@ def load_model(
     critic_class: Optional[Type[nn.Module]] = None,
 ) -> Tuple[nn.Module, Optional[nn.Module], Dict[str, Any]]:
     """
-    Load model from HuggingFace style directory.
-    
-    Args:
-        model_dir: Directory containing config.yaml and weights
-        device: Device to load model to
-        actor_class: Actor network class (if None, uses class from config)
-        critic_class: Critic network class (if None, uses class from config)
-    
+    Load model from HuggingFace style directory (legacy API).
+
     Returns:
         actor: Loaded actor network
         critic: Loaded critic network (or None)
         config: Full config dict
     """
     model_dir = Path(model_dir)
-    
-    # Load config
+
     config_path = model_dir / 'config.yaml'
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
-    
+
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-    
-    # Import network classes dynamically
-    from networks.mlp import ActorMLP, CriticMLP
-    
-    CLASS_REGISTRY = {
-        'ActorMLP': ActorMLP,
-        'CriticMLP': CriticMLP,
-    }
-    
+
+    registry = _get_class_registry()
+
     # Build and load actor
     actor = None
     actor_config = config.get('actor', {})
     if actor_config:
         if actor_class is None:
             actor_type = actor_config.get('type', 'ActorMLP')
-            actor_class = CLASS_REGISTRY.get(actor_type)
+            actor_class = registry.get(actor_type)
             if actor_class is None:
                 raise ValueError(f"Unknown actor type: {actor_type}")
-        
+
         actor = actor_class(
             input_dim=actor_config['input_dim'],
             hidden_sizes=actor_config['hidden_sizes'],
             output_dim=actor_config['output_dim'],
         )
-        
-        # Load weights
+
         policy_path = model_dir / 'policy.pt'
         if policy_path.exists():
             state_dict = torch.load(policy_path, map_location=device, weights_only=True)
-            # Handle MultiAgentPolicy format
             if '_shared_policy.actor.network.0.weight' in state_dict:
                 actor_sd = {}
                 prefix = '_shared_policy.actor.'
@@ -163,10 +201,10 @@ def load_model(
                         actor_sd[k[len(prefix):]] = v
                 state_dict = actor_sd
             actor.load_state_dict(state_dict)
-        
+
         actor = actor.to(device)
         actor.eval()
-    
+
     # Build and load critic
     critic = None
     critic_config = config.get('critic', {})
@@ -174,23 +212,100 @@ def load_model(
     if critic_config and critic_path.exists():
         if critic_class is None:
             critic_type = critic_config.get('type', 'CriticMLP')
-            critic_class = CLASS_REGISTRY.get(critic_type)
+            critic_class = registry.get(critic_type)
             if critic_class is None:
                 raise ValueError(f"Unknown critic type: {critic_type}")
-        
+
         critic = critic_class(
             input_dim=critic_config['input_dim'],
             hidden_sizes=critic_config['hidden_sizes'],
             output_dim=critic_config.get('output_dim', 1),
         )
-        
+
         state_dict = torch.load(critic_path, map_location=device, weights_only=True)
         critic.load_state_dict(state_dict)
         critic = critic.to(device)
         critic.eval()
-    
+
     return actor, critic, config
 
+
+# =========================================================================
+#                     Load for Evaluation (通用)
+# =========================================================================
+
+def load_policy_for_eval(
+    model_dir: str | Path,
+    agent_ids: List[str],
+    obs_space: gym.Space,
+    action_space: gym.Space,
+    device: str | torch.device = 'cpu',
+) -> nn.Module:
+    """
+    从模型目录自动重建 MultiAgentPolicy 并加载权重。
+
+    读取 config.yaml 中的 extra 段获取 policy_type / shared_policy 等元信息,
+    自动选择 ActorPolicy 或 ValuePolicy 并实例化对应网络。
+
+    向后兼容: 若缺少 extra 段则回退到 actor + shared 默认值。
+    """
+    from policies.rl.rl_base import ActorPolicy, ValuePolicy
+    from policies.marl.marl_base import MultiAgentPolicy
+
+    model_dir = Path(model_dir)
+    config = get_model_config(model_dir)
+    extra = config.get('extra', {})
+    registry = _get_class_registry()
+
+    policy_type = extra.get('policy_type', 'actor')
+    shared = extra.get('shared_policy', True)
+
+    if policy_type == 'value':
+        q_cfg = config.get('q_network')
+        if q_cfg is None:
+            raise ValueError(
+                f"Value-based policy requires q_network config in {model_dir / 'config.yaml'}"
+            )
+        q_net = _build_network_from_config(q_cfg, registry)
+        policy_class = ValuePolicy
+        policy_kwargs = {"q_network": q_net}
+    else:
+        actor_cfg = config.get('actor')
+        if actor_cfg is None:
+            raise ValueError(
+                f"Actor-based policy requires actor config in {model_dir / 'config.yaml'}"
+            )
+        actor_net = _build_network_from_config(actor_cfg, registry)
+        policy_class = ActorPolicy
+        policy_kwargs = {"actor": actor_net, "deterministic_eval": True}
+
+    multi_policy = MultiAgentPolicy(
+        agent_ids=agent_ids,
+        obs_space=obs_space,
+        action_space=action_space,
+        policy_class=policy_class,
+        policy_kwargs=policy_kwargs,
+        shared=shared,
+    )
+
+    # 加载权重
+    policy_path = model_dir / 'policy.pt'
+    if not policy_path.exists():
+        raise FileNotFoundError(f"Policy weights not found: {policy_path}")
+
+    state_dict = torch.load(policy_path, map_location=device, weights_only=True)
+    multi_policy.load_state_dict(state_dict)
+    multi_policy.to(device)
+    multi_policy.set_training_mode(False)
+
+    print(f"[ModelIO] Loaded {policy_type}-based policy "
+          f"(shared={shared}) from {model_dir}")
+    return multi_policy
+
+
+# =========================================================================
+#                           Convenience
+# =========================================================================
 
 def load_actor_only(
     model_dir: str | Path,
