@@ -153,3 +153,17 @@ class QMIXParams(IQLParams):
     """QMIX 参数，额外含 mixer 超网络维度。"""
     shared_policy: bool = True
     mixer_embed_dim: int = 32
+
+
+# =============================================================================
+#                     Tabular 系列
+# =============================================================================
+
+@dataclass(kw_only=True)
+class QTableParams(AlgoParams):
+    """Q-table 参数，用于 BBLA / GBLA / ExGBLA 论文复现。"""
+    lr: float = 0.1               # Q-learning alpha
+    gamma: float = 0.99
+    epsilon_start: float = 1.0
+    epsilon_end: float = 0.01
+    epsilon_decay: float = 0.9995  # 指数衰减（per episode）

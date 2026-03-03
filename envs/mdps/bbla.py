@@ -12,7 +12,6 @@ Description:
 
 from typing import Any, Dict, List, Optional
 import numpy as np
-import random
 from gymnasium.spaces import Box, Discrete
 
 from envs.mdps.patrol_core import AgentState, TickResult
@@ -57,8 +56,12 @@ class BBLAEnv(FixedStepEnv):
                 continue
 
             current_pos = self.world.agents[agent_id].position
-            last_pos = self.world.agents[agent_id].last_position
-            last_pos = self.world.graph.neighbor_to_edge(current_pos, last_pos)
+            raw_last = self.world.agents[agent_id].last_position
+            if raw_last == current_pos:
+                # 初始状态：last_position == position，用 -1 标记
+                last_pos = -1
+            else:
+                last_pos = self.world.graph.neighbor_to_edge(current_pos, raw_last)
 
             # 获取邻居信息
             neighbors = [n for n, _ in self.world.graph.adj_list.get(current_pos, [])]
@@ -71,11 +74,10 @@ class BBLAEnv(FixedStepEnv):
                 
                 max_nodes = [n for n, idle in zip(neighbors, neighbor_idleness) if idle == max_idle]
                 min_nodes = [n for n, idle in zip(neighbors, neighbor_idleness) if idle == min_idle]
-                
-                max_node = random.choice(max_nodes)
-                max_node = self.world.graph.neighbor_to_edge(current_pos, max_node)
-                min_node = random.choice(min_nodes)
-                min_node = self.world.graph.neighbor_to_edge(current_pos, min_node)
+
+                # 平局时取 node_id 最小的邻居，保证同一状态映射到唯一 Q-table key
+                max_node = self.world.graph.neighbor_to_edge(current_pos, min(max_nodes))
+                min_node = self.world.graph.neighbor_to_edge(current_pos, min(min_nodes))
             else:
                 max_node = min_node = -1
             

@@ -1,0 +1,124 @@
+"""Q-table 算法：纯 numpy 实现，用于复现 BBLA / GBLA / ExGBLA 论文。
+
+QTablePolicy — 单 agent 的 Q-table + epsilon-greedy 动作选择
+QTableAlgo   — 多 agent 独立 Q-learning 在线更新 + epsilon 衰减
+"""
+
+from collections import defaultdict
+from typing import Dict, Optional
+
+import numpy as np
+
+from configs.algo_configs import QTableParams
+
+
+class QTablePolicy:
+    """单 agent 的 Q-table，纯 numpy 实现。
+
+    状态编码: tuple(obs) 作为字典 key（适用于小整数离散观测）。
+    """
+
+    def __init__(self, action_dim: int, epsilon: float = 1.0):
+        self.action_dim = action_dim
+        self.epsilon = epsilon
+        self.q_table: Dict[tuple, np.ndarray] = defaultdict(
+            lambda: np.zeros(action_dim, dtype=np.float64)
+        )
+
+    def _obs_to_key(self, obs: np.ndarray) -> tuple:
+        return tuple(obs.flat)
+
+    def get_q(self, obs: np.ndarray) -> np.ndarray:
+        """返回 Q(s, ·)，未见状态初始化为零向量。"""
+        return self.q_table[self._obs_to_key(obs)]
+
+    def select_action(self, obs: np.ndarray, action_mask: np.ndarray) -> int:
+        """Epsilon-greedy，respect action_mask。"""
+        valid = np.where(action_mask)[0]
+        if len(valid) == 0:
+            return 0
+        if np.random.random() < self.epsilon:
+            return int(np.random.choice(valid))
+        q = self.get_q(obs).copy()
+        q[~action_mask.astype(bool)] = -np.inf
+        return int(np.argmax(q))
+
+    def set_epsilon(self, eps: float):
+        self.epsilon = eps
+
+    def save(self, path: str):
+        np.save(path, dict(self.q_table))
+
+    def load(self, path: str):
+        d = np.load(path, allow_pickle=True).item()
+        self.q_table = defaultdict(
+            lambda: np.zeros(self.action_dim, dtype=np.float64), d
+        )
+
+
+class QTableAlgo:
+    """多 agent 独立 Q-learning，纯 numpy。
+
+    每个 agent 维护独立的 QTablePolicy，update_step 仅在决策步调用。
+    """
+
+    def __init__(self, policies: Dict[str, QTablePolicy], params: QTableParams):
+        self.policies = policies
+        self.alpha = params.lr
+        self.gamma = params.gamma
+        self.epsilon_start = params.epsilon_start
+        self.epsilon_end = params.epsilon_end
+        self.epsilon_decay = params.epsilon_decay
+        self._episode = 0
+
+    def update_step(
+        self,
+        agent_id: str,
+        obs: np.ndarray,
+        action: int,
+        reward: float,
+        next_obs: np.ndarray,
+        done: bool,
+        next_action_mask: Optional[np.ndarray] = None,
+    ):
+        """标准 Q-learning 单步在线更新。"""
+        pol = self.policies[agent_id]
+        q = pol.get_q(obs)
+
+        if done:
+            td_target = reward
+        else:
+            next_q = pol.get_q(next_obs).copy()
+            if next_action_mask is not None:
+                next_q[~next_action_mask.astype(bool)] = -np.inf
+            td_target = reward + self.gamma * np.max(next_q)
+
+        q[action] += self.alpha * (td_target - q[action])
+
+    def decay_epsilon(self):
+        """指数衰减 epsilon（per episode），所有 agent 统一。"""
+        self._episode += 1
+        first_pol = next(iter(self.policies.values()))
+        new_eps = max(self.epsilon_end, first_pol.epsilon * self.epsilon_decay)
+        for pol in self.policies.values():
+            pol.set_epsilon(new_eps)
+
+    def get_epsilon(self) -> float:
+        return next(iter(self.policies.values())).epsilon
+
+    def save(self, save_dir: str):
+        """逐 agent 保存 Q-table 到指定目录。"""
+        from pathlib import Path
+        d = Path(save_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        for aid, pol in self.policies.items():
+            pol.save(str(d / f"{aid}_qtable.npy"))
+
+    def load(self, save_dir: str):
+        """从目录加载各 agent 的 Q-table。"""
+        from pathlib import Path
+        d = Path(save_dir)
+        for aid, pol in self.policies.items():
+            path = d / f"{aid}_qtable.npy"
+            if path.exists():
+                pol.load(str(path))

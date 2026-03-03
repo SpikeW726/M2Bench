@@ -1,0 +1,31 @@
+# Q-table + GBLA 环境 (TSP12) — 3 agents
+# 用法: python train.py configs/experiments/qtable_gbla_tsp12.yaml
+
+algo_name: qtable
+env_type: gbla
+
+exp_name: qtable-gbla
+graph_name: TSP12
+track_wandb: false
+wandb_project: MAP-RL
+
+env:
+  graph_path: graphs/simple_TSP_12.json
+  enable_wait: false
+  num_agents: 3
+  episode_len: 300
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.1
+  gamma: 0.99
+  epsilon_start: 1.0
+  epsilon_end: 0.01
+  epsilon_decay: 0.9995
+
+training:
+  num_envs: 4
+  use_subproc: false
+  max_iterations: 5000
+  save_interval: 1000

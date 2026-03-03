@@ -17,7 +17,7 @@ import yaml
 from configs.env_configs import EnvConfig
 from configs.algo_configs import (
     AlgoParams, MAPPOParams, IPPOParams, VDPPOParams, D3QNParams, IQLParams,
-    VDNParams, QMIXParams,
+    VDNParams, QMIXParams, QTableParams,
 )
 from configs.training_configs import (
     TrainerConfig, OnPolicyTrainerConfig, OffPolicyTrainerConfig,
@@ -92,6 +92,11 @@ ALGO_REGISTRY: Dict[str, Dict[str, Any]] = {
         "trainer_type": "off_policy",
         "policy_type": "value",
     },
+    # ---- tabular ----
+    "qtable": {
+        "params_class": QTableParams,
+        "trainer_type": "tabular",
+    },
 }
 
 # ---- 环境 ----
@@ -107,6 +112,18 @@ ENV_REGISTRY: Dict[str, Dict[str, str]] = {
     "s4r1": {
         "module": "envs.mdps.s4r1",
         "class_name": "S4R1Env",
+    },
+    "bbla": {
+        "module": "envs.mdps.bbla",
+        "class_name": "BBLAEnv",
+    },
+    "gbla": {
+        "module": "envs.mdps.gbla",
+        "class_name": "GBLAEnv",
+    },
+    "ex_gbla": {
+        "module": "envs.mdps.ex_gbla",
+        "class_name": "ExGBLAEnv",
     },
 }
 
@@ -142,6 +159,7 @@ TRAINER_REGISTRY: Dict[str, Dict[str, str]] = {
 TRAINER_CONFIG_REGISTRY: Dict[str, Type[TrainerConfig]] = {
     "on_policy": OnPolicyTrainerConfig,
     "off_policy": OffPolicyTrainerConfig,
+    "tabular": TrainerConfig,
 }
 
 

@@ -64,8 +64,11 @@ class ExGBLAEnv(GBLAEnv):
                 continue
 
             current_pos = self.world.agents[agent_id].position
-            last_pos = self.world.agents[agent_id].last_position
-            last_edge = self.world.graph.neighbor_to_edge(current_pos, last_pos)
+            raw_last = self.world.agents[agent_id].last_position
+            if raw_last == current_pos:
+                last_edge = -1
+            else:
+                last_edge = self.world.graph.neighbor_to_edge(current_pos, raw_last)
 
             # ---- 邻居按 idleness 降序排列, 转为边索引 ----
             neighbors = [n for n, _ in self.world.graph.adj_list.get(current_pos, [])]

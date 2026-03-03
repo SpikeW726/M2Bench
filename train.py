@@ -334,6 +334,90 @@ def _build_collector(
 
 
 # =============================================================================
+#                          Q-table 独立训练路径
+# =============================================================================
+
+def _train_qtable(config: ExperimentConfig):
+    """Q-table 独立训练路径：复用日志/环境，绕过 nn.Module 流水线。"""
+    from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
+    from trainers.qtable_trainer import QTableTrainer
+
+    tc = config.training
+
+    config.save_dir.mkdir(parents=True, exist_ok=True)
+    config.log_dir.mkdir(parents=True, exist_ok=True)
+    tb_writer = SummaryWriter(config.log_dir)
+
+    if config.track_wandb:
+        import wandb
+        if wandb.run is None:
+            wandb.init(
+                project=config.wandb_project,
+                name=config.run_name,
+                config=asdict(config),
+                sync_tensorboard=True,
+            )
+
+    logger = SimpleLogger(tb_writer, use_wandb=config.track_wandb)
+
+    vec_env = create_vec_env(
+        env_type=config.env_type,
+        env_config=config.env,
+        num_envs=tc.num_envs,
+        use_subproc=tc.use_subproc,
+    )
+    vec_env.reset()
+    action_dim = list(vec_env.action_space.values())[0].n
+    agent_ids = vec_env.agents
+
+    print(f"[Train] Q-table mode: {config.env_type}, agents={agent_ids}, "
+          f"action_dim={action_dim}, num_envs={tc.num_envs}")
+
+    policies = {
+        aid: QTablePolicy(action_dim, config.algo.epsilon_start)
+        for aid in agent_ids
+    }
+    algo = QTableAlgo(policies, config.algo)
+
+    def log_extra_fn() -> Dict[str, float]:
+        try:
+            metrics_list = vec_env.call_env_method("get_episode_metrics")
+            finished = [m for m in metrics_list if m is not None]
+            if finished:
+                return {
+                    "env/igi": np.mean([m["igi"] for m in finished]),
+                    "env/agi": np.mean([m["agi"] for m in finished]),
+                    "env/iwi": np.mean([m["iwi"] for m in finished]),
+                    "env/wi": np.mean([m["wi"] for m in finished]),
+                }
+        except Exception:
+            pass
+        return {}
+
+    trainer = QTableTrainer(
+        algo=algo,
+        vec_env=vec_env,
+        config=tc,
+        save_dir=config.save_dir,
+        logger=logger,
+        log_extra_fn=log_extra_fn,
+    )
+
+    print(f"\n[Train] Starting Q-table training")
+    print(f"  Max episodes: {tc.max_iterations}")
+    print(f"  Save dir: {config.save_dir}")
+
+    trainer.train()
+
+    tb_writer.close()
+    if config.track_wandb:
+        import wandb
+        if wandb.run is not None and wandb.run.sweep_id is None:
+            wandb.finish()
+    vec_env.close()
+
+
+# =============================================================================
 #                              主训练函数
 # =============================================================================
 
@@ -343,6 +427,10 @@ def train(config: ExperimentConfig):
 
     流程：环境 → 维度推断 → 网络 → 预训练加载 → Policy → 算法 → Collector → Trainer → 训练
     """
+    if config.algo_name == "qtable":
+        _train_qtable(config)
+        return
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tc = config.training
     trainer_type = get_trainer_type(config.algo_name)
