@@ -3,6 +3,7 @@
 
 import json
 import heapq
+import math
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
@@ -16,13 +17,13 @@ class Graph:
             self.phi: Dict[int, int] = {int(k): int(v) for k, v in data["phi"].items()}
 
         # Initialize adjacency list
-        self.adj_list: Dict[int, List[Tuple[int, int]]] = {node: [] for node in self.nodes}
+        self.adj_list: Dict[int, List[Tuple[int, float]]] = {node: [] for node in self.nodes}
 
         # Populate edges
         for edge in tmp_edges:
             src = edge["from"]
             dst = edge["to"]
-            weight = edge["weight"]
+            weight = float(edge["weight"])
             self.adj_list[src].append((dst, weight))
         
         self.total_node = len(self.nodes)
@@ -52,6 +53,13 @@ class Graph:
         """
         for src in self.nodes:
             self._shortest_paths[src] = self._dijkstra(src)
+        
+        self.max_shortest_path_len = max(
+            dist
+            for d in self._shortest_paths.values()
+            for dist in d.values()
+            if math.isfinite(dist)
+        )
     
     def _dijkstra(self, src: int) -> Dict[int, float]:
         """
@@ -100,6 +108,22 @@ class Graph:
         if src not in self._shortest_paths:
             return float('inf')
         return self._shortest_paths[src].get(dst, float('inf'))
+
+    def get_shotest_path_len_mat(self):
+        """返回最短路长度矩阵,元素(i,j)为 node_i 到 node_j 的最短距离。"""
+        n = self.total_node
+        spl_mat = np.full((n, n), float('inf'), dtype=float)
+
+        ordered_nodes = sorted(self.nodes)
+        node_to_idx = {node: idx for idx, node in enumerate(ordered_nodes)}
+
+        for src in ordered_nodes:
+            src_idx = node_to_idx[src]
+            for dst in ordered_nodes:
+                dst_idx = node_to_idx[dst]
+                spl_mat[src_idx, dst_idx] = self.shortest_path_length(src, dst)
+
+        return spl_mat
     
     def get_shortest_path(self, src: int, dst: int) -> Optional[List[int]]:
         """
@@ -158,7 +182,7 @@ class Graph:
                 return float(weight)
         return 0.0
 
-    def get_max_edge_length(self):
+    def get_max_edge_length(self) -> float:
         edge_length = []
         for n in self.nodes:
             for _, weight in self.adj_list[n]:
@@ -189,12 +213,26 @@ class Graph:
         neighbors = [m for m,_ in self.adj_list[n]]
         return sorted(neighbors)
 
+    def get_adjacency_matrix(self) -> np.ndarray:
+        """返回邻接矩阵,有向图语义,存在边记为1"""
+        n = self.total_node
+        adj_mat = np.full((n, n), 0, dtype=int)
+
+        # Node index starts from 0 or 1 are both compatible
+        node_to_idx = {node: idx for idx, node in enumerate(sorted(self.nodes))}
+
+        for i in self.nodes:
+            for j, _ in self.adj_list[i]:
+                adj_mat[node_to_idx[i], node_to_idx[j]] = 1
+
+        return adj_mat
+
     def get_adj_weight_mat(self):
         """
         Return np.ndarray Adjacent Matrix and Edge Weight Matrix
         """
         n = self.total_node
-        adj_mat = np.full((n, n), 0, dtype=int)
+        adj_mat = self.get_adjacency_matrix()
         weight_mat = np.full((n, n), -1, dtype=float)
 
         # Node index starts from 0 or 1 are both compatible
@@ -202,7 +240,6 @@ class Graph:
 
         for i in self.nodes:
             for j, weight in self.adj_list[i]:
-                adj_mat[node_to_idx[i], node_to_idx[j]] = 1
                 weight_mat[node_to_idx[i], node_to_idx[j]] = weight
 
         return adj_mat, weight_mat

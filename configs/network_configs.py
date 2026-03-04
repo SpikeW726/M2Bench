@@ -7,8 +7,9 @@
     NetworkConfig (base, 无字段)
     ├── MLPConfig (hidden)
     │   └── QMLPConfig (hidden, dueling)
-    └── RNNConfig (rnn_type, hidden_size, num_layers)
-        └── QRNNConfig (rnn_type, hidden_size, num_layers, dueling)
+    ├── RNNConfig (rnn_type, hidden_size, num_layers)
+    │   └── QRNNConfig (rnn_type, hidden_size, num_layers, dueling)
+    └── SUNConfig (num_nodes, node_feat_dim, f1_hidden, f2_hidden)
 """
 
 from dataclasses import dataclass, field
@@ -51,3 +52,13 @@ class QMLPConfig(MLPConfig):
 class QRNNConfig(RNNConfig):
     """Q-network RNN 参数（继承 RNNConfig，增加 dueling）"""
     dueling: bool = False
+
+
+@dataclass(kw_only=True)
+class SUNConfig(NetworkConfig):
+    """SUN (Spatial Utility Network) 参数，用于 SUNActor / SUNCritic"""
+    num_nodes: int
+    node_feat_dim: int = 2
+    f1_hidden: int = 4
+    f2_hidden: int = 6
+    num_layers: int = 1       # k: GNN 堆叠次数，增大可扩展感知范围

@@ -78,6 +78,8 @@ def _infer_dims(vec_env, algo_name: str) -> dict:
 
 def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
     """PettingZoo 多智能体环境维度推断。"""
+    CTDE_ALGOS = {"mappo", "maa2c", "vdppo"}
+
     agent_ids = vec_env.agents
     num_agents = len(agent_ids)
     obs_space = vec_env.observation_space[agent_ids[0]]
@@ -87,15 +89,19 @@ def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
     action_dim = action_space.n
 
     vec_env.reset()
-    states = vec_env.call_env_method("state")
-    state_dim = len(states[0])
 
-    # MAPPO/VDPPO: centralized critic = global_state + agent one-hot
-    # IPPO 等: critic = global_state（无 one-hot）
-    if algo_name in ("mappo", "vdppo"):
-        critic_input_dim = state_dim + num_agents
+    if algo_name in CTDE_ALGOS:
+        states = vec_env.call_env_method("state")
+        state_dim = len(states[0])
+        # MAPPO/VDPPO: centralized critic = global_state + agent one-hot
+        if algo_name in ("mappo", "vdppo"):
+            critic_input_dim = state_dim + num_agents
+        else:
+            critic_input_dim = state_dim
     else:
-        critic_input_dim = state_dim
+        # 非 CTDE：critic 直接使用 obs，不需要 env.state()
+        state_dim = obs_dim
+        critic_input_dim = obs_dim
 
     return {
         "agent_ids": agent_ids,
@@ -328,7 +334,9 @@ def _build_collector(
             return OffPolicyCollector(algorithm, vec_env, buffer)
     else:
         if is_parallel:
-            return MAOnPolicyCollector(algorithm, vec_env)
+            CTDE_ALGOS = {"mappo", "maa2c", "vdppo"}
+            needs_state = config.algo_name in CTDE_ALGOS
+            return MAOnPolicyCollector(algorithm, vec_env, collect_state=needs_state)
         else:
             return OnPolicyCollector(algorithm, vec_env)
 
@@ -559,7 +567,13 @@ def train(config: ExperimentConfig):
         if net is None:
             return None
         d = {"type": type(net).__name__, "input_dim": input_dim, "output_dim": output_dim}
-        if hasattr(net, "hidden_sizes"):
+        if hasattr(net, "num_nodes"):
+            d["num_nodes"] = net.num_nodes
+            d["node_feat_dim"] = net.node_feat_dim
+            d["f1_hidden"] = net.f1.fc1.out_features
+            d["f2_hidden"] = net.f2.fc1.out_features
+            d["num_layers"] = net.num_layers
+        elif hasattr(net, "hidden_sizes"):
             d["hidden_sizes"] = net.hidden_sizes
         elif hasattr(net, "hidden_size"):
             d["hidden_size"] = net.hidden_size

@@ -1,20 +1,20 @@
-"""MAPPO: Multi-Agent PPO with Parameter Sharing and Centralized Critic."""
+"""MAA2C: Multi-Agent A2C with Parameter Sharing and Centralized Critic."""
 
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import torch
 import torch.nn as nn
 
-from algorithms.rl.ppo import PPOBase
+from algorithms.rl.a2c import A2CBase
 from algorithms.marl.ctde_mixin import CentralizedCriticMixin
-from configs.algo_configs import MAPPOParams
+from configs.algo_configs import MAA2CParams
 from policies.marl.marl_base import MultiAgentPolicy
 from data.batch import RolloutBatch
 
 
-class MAPPOAlgo(PPOBase, CentralizedCriticMixin):
-    """MAPPO: 参数共享 + Centralized Critic + 双优化器。
+class MAA2CAlgo(A2CBase, CentralizedCriticMixin):
+    """MAA2C: 参数共享 + Centralized Critic + 双优化器。
 
-    继承 PPOBase 的 PPO hook（clipped surrogate + KL stopping），
+    继承 A2CBase 的默认 hook（vanilla PG + MSE + 无 KL stopping），
     通过 CentralizedCriticMixin 获得 CTDE prepare_batch。
 
     override:
@@ -27,7 +27,7 @@ class MAPPOAlgo(PPOBase, CentralizedCriticMixin):
         self,
         policy: MultiAgentPolicy,
         critic: nn.Module,
-        params: MAPPOParams,
+        params: MAA2CParams,
         num_envs: int,
         total_iterations: Optional[int] = None,
         optimizer_steps_per_iter: Optional[int] = None,
@@ -42,20 +42,19 @@ class MAPPOAlgo(PPOBase, CentralizedCriticMixin):
         self.critic_scheduler = None
 
         if params.use_lr_scheduler and total_iterations is not None and optimizer_steps_per_iter is not None:
-            actor_decay_steps = int(total_iterations * params.actor_lr_decay_ratio * optimizer_steps_per_iter)
+            actor_decay = int(total_iterations * params.actor_lr_decay_ratio * optimizer_steps_per_iter)
             self.actor_scheduler = torch.optim.lr_scheduler.LinearLR(
                 self.actor_optimizer,
                 start_factor=params.actor_lr_start_factor,
                 end_factor=params.actor_lr_end_factor,
-                total_iters=actor_decay_steps,
+                total_iters=actor_decay,
             )
-
-            critic_decay_steps = int(total_iterations * params.critic_lr_decay_ratio * optimizer_steps_per_iter)
+            critic_decay = int(total_iterations * params.critic_lr_decay_ratio * optimizer_steps_per_iter)
             self.critic_scheduler = torch.optim.lr_scheduler.LinearLR(
                 self.critic_optimizer,
                 start_factor=params.critic_lr_start_factor,
                 end_factor=params.critic_lr_end_factor,
-                total_iters=critic_decay_steps,
+                total_iters=critic_decay,
             )
 
     # ====================================================================

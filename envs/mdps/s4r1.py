@@ -48,6 +48,24 @@ class S4R1Env(FixedStepEnv):
     def action_space(self, agent):
         return Discrete(self.world.max_neighbors + 1) # The last dimension means no-op
 
+    def state(self) -> np.ndarray:
+        """全局状态: 所有智能体位置 + 全节点空闲度 + 当前时间"""
+        agent_metrics = []
+        for agent_id in range(self.world.num_agents):
+            agent = self.world.agents[agent_id]
+            last_pos = float(agent.last_position)
+            target = float(agent.target_node)
+            time_left = float(agent.action_remaining)
+            agent_metrics.extend([last_pos, target, time_left])
+
+        idleness = [
+            float(self.world.graph.phi.get(n, 1.0)) * float(self.world.node_idleness.get(n, 0.0))
+            for n in self.world.graph.nodes
+        ]
+
+        return np.asarray(agent_metrics + idleness + [float(self.world.current_time)], dtype=np.float32)
+        
+
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, Any]:
         obs = {}
         num_agents = self.world.num_agents
@@ -147,23 +165,6 @@ class S4R1Env(FixedStepEnv):
                 f"无效动作: agent_id={agent_id}, action_idx={action_idx}, "
                 f"可用邻居数量={len(neighbors)}"
             )    
-    
-    def state(self) -> np.ndarray:
-        """全局状态: 所有智能体位置 + 全节点空闲度 + 当前时间"""
-        agent_metrics = []
-        for agent_id in range(self.world.num_agents):
-            agent = self.world.agents[agent_id]
-            last_pos = float(agent.last_position)
-            target = float(agent.target_node)
-            time_left = float(agent.action_remaining)
-            agent_metrics.extend([last_pos, target, time_left])
-
-        idleness = [
-            float(self.world.graph.phi.get(n, 1.0)) * float(self.world.node_idleness.get(n, 0.0))
-            for n in self.world.graph.nodes
-        ]
-
-        return np.asarray(agent_metrics + idleness + [float(self.world.current_time)], dtype=np.float32)
 
     # ==================== 辅助方法 ====================
     

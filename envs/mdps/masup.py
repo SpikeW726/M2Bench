@@ -299,7 +299,7 @@ class MASUPEnv(EventDrivenEnv):
             else:
                 # 移动动作
                 target = self._action_to_target(agent_id, action_idx)
-                self.world.set_move_action(agent_id, target)
+                self._dispatch_move(agent_id, target)
                 self.move_action_count[agent_id] += 1
 
     def _advance_with_T_time(self):
@@ -377,7 +377,6 @@ class MASUPEnv(EventDrivenEnv):
         else:
             # T_time = 0, obs_timer恒为0
             self.obs_timer = 0.0
-
 
     def _compute_truncations(self) -> Dict[str, bool]:
         """计算截断状态"""
@@ -611,11 +610,11 @@ class MASUPEnv(EventDrivenEnv):
     # ==================== 启发式采样接口（委托给 PatrolWorld）====================
     
     def get_heuristic_obs(self) -> Dict[str, Dict]:
-        """返回启发式算法需要的观测格式（委托给 PatrolWorld）"""
+        """返回启发式算法需要的观测格式"""
         return self.world.get_heuristic_obs()
     
     def get_global_state_for_heuristic(self) -> Dict:
-        """返回启发式算法需要的全局状态（委托给 PatrolWorld）"""
+        """返回启发式算法需要的全局状态"""
         return self.world.get_global_state_for_heuristic()
     
     def convert_heuristic_action(self, agent_str: str, neighbor_idx: int) -> int:

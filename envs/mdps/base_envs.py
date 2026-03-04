@@ -90,6 +90,14 @@ class BaseEnv(ParallelEnv):
         """将动作索引转换为目标节点"""
         pass
 
+    def _dispatch_move(self, agent_id: int, target_node: int):
+        """将目标节点提交给 PatrolWorld。
+
+        默认为单跳邻居移动。全图动作空间的子类（如 SUNS）
+        可覆盖为 set_route_action 以支持多跳路由。
+        """
+        self.world.set_move_action(agent_id, target_node)
+
     def get_episode_metrics(self) -> Optional[dict]:
         """返回上一个完成 episode 的终止指标。
 
@@ -117,14 +125,14 @@ class FixedStepEnv(BaseEnv):
             
             if self.world.is_ready(agent_id):
                 if self.enable_wait:
-                    if action_idx == 0: # 所有动作空间有"等待"的环境须遵循 action_idx=0 代表"等待"
+                    if action_idx == 0:
                         self.world.set_wait_action(agent_id)
                     else:
                         target = self._action_to_target(agent_id, action_idx)
-                        self.world.set_move_action(agent_id, target)
+                        self._dispatch_move(agent_id, target)
                 else:
                     target = self._action_to_target(agent_id, action_idx)
-                    self.world.set_move_action(agent_id, target)
+                    self._dispatch_move(agent_id, target)
         
         # 2. 推进一个时间步
         result = self.world.tick(dt=1.0)
@@ -147,7 +155,6 @@ class FixedStepEnv(BaseEnv):
         infos = self._build_info(result=None)
         
         return obs, infos
-
     
     
 class EventDrivenEnv(BaseEnv):
@@ -164,14 +171,14 @@ class EventDrivenEnv(BaseEnv):
             
             if self.world.is_ready(agent_id):
                 if self.enable_wait:
-                    if action_idx == 0: # 所有动作空间有"等待"的环境须遵循 action_idx=0 代表"等待"
+                    if action_idx == 0:
                         self.world.set_wait_action(agent_id)
                     else:
                         target = self._action_to_target(agent_id, action_idx)
-                        self.world.set_move_action(agent_id, target)
+                        self._dispatch_move(agent_id, target)
                 else:
                     target = self._action_to_target(agent_id, action_idx)
-                    self.world.set_move_action(agent_id, target)
+                    self._dispatch_move(agent_id, target)
         
         # 2. 推进到最近的事件
         result = self.world.tick_to_next_event()

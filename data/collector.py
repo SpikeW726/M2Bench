@@ -245,13 +245,15 @@ class MAOnPolicyCollector(BaseCollector):
     RNN 时维护 per-agent per-env hidden state 并在 episode 边界重置。
     """
 
-    def __init__(self, algorithm: BaseAlgorithm, env: BaseVectorEnv):
+    def __init__(self, algorithm: BaseAlgorithm, env: BaseVectorEnv,
+                 collect_state: bool = True):
         if not env.is_parallel_env:
             raise ValueError(
                 "MAOnPolicyCollector 只支持 ParallelEnv，"
                 "单智能体请用 OnPolicyCollector"
             )
         self.agents = env.agents
+        self._collect_state = collect_state
         # 必须在 super().__init__ 之前设置，_reset_buffer 依赖此标志
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         super().__init__(algorithm, env)
@@ -305,7 +307,7 @@ class MAOnPolicyCollector(BaseCollector):
 
         step_count = 0
         while step_count < n_steps:
-            global_states = self._get_global_states()
+            global_states = self._get_global_states() if self._collect_state else None
 
             # RNN: 存储当前步的 hidden（作为该步的 initial hidden）
             if self._is_recurrent:
@@ -352,18 +354,19 @@ class MAOnPolicyCollector(BaseCollector):
                 self._buffers[agent]['truncated'].append(trunc[agent].astype(np.float32))
 
             first_agent = self.agents[0]
-            final_gs_list = []
-            for i in range(self.num_envs):
-                if trunc[first_agent][i]:
-                    info_i = info[first_agent][i]
-                    if isinstance(info_i, dict) and 'final_state' in info_i:
-                        final_gs_list.append(info_i['final_state'].copy())
+            if self._collect_state:
+                final_gs_list = []
+                for i in range(self.num_envs):
+                    if trunc[first_agent][i]:
+                        info_i = info[first_agent][i]
+                        if isinstance(info_i, dict) and 'final_state' in info_i:
+                            final_gs_list.append(info_i['final_state'].copy())
+                        else:
+                            final_gs_list.append(None)
                     else:
                         final_gs_list.append(None)
-                else:
-                    final_gs_list.append(None)
-            for agent in self.agents:
-                self._buffers[agent]['final_global_state'].append(final_gs_list)
+                for agent in self.agents:
+                    self._buffers[agent]['final_global_state'].append(final_gs_list)
 
             # 所有智能体平均 reward
             mean_rew = sum(rew[a] for a in self.agents) / len(self.agents)

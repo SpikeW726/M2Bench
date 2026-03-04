@@ -58,8 +58,10 @@ class PatrolWorld:
         # 图特征
         self.max_neighbors = self.graph.get_max_degree()
         self.max_edge_length = self.graph.get_max_edge_length()
+        self.max_path_length = self.graph.max_shortest_path_len
         self.max_phi = self.graph.get_max_phi()
         self.num_nodes = len(self.graph.nodes)
+        self.num_edges = self.graph.get_num_edges(True) # 有向图
 
         # 智能体状态
         self.num_agents = cfg["num_agents"]
@@ -79,6 +81,10 @@ class PatrolWorld:
      
         # 记录哪些节点当前有智能体"占据"（恰好有智能体到达或有智能体在该节点等待）
         self._occupied_nodes: Set[int] = set()
+
+        # 路由模式（全图动作空间）: 存储多跳路径剩余节点 & 中间累积奖励
+        self._routes: Dict[int, List[int]] = {}
+        self._acc_rewards: Dict[int, float] = {}
     
     def reset(self, initial_positions: Optional[List[int]] = None) -> None:
         """重置物理世界"""
@@ -100,6 +106,8 @@ class PatrolWorld:
             initial_positions = random.sample(list(self.graph.nodes), self.num_agents)
         
         self._occupied_nodes.clear()
+        self._routes.clear()
+        self._acc_rewards.clear()
         for i in range(self.num_agents):
             pos = initial_positions[i]
             self.agents[i] = AgentStatus(
@@ -158,15 +166,28 @@ class PatrolWorld:
                         status.position = arrived_node
                         status.state = AgentState.READY
                         status.target_node = -1
-                        
+
                         # 更新占据状态
                         self._occupied_nodes.add(arrived_node)
-                        
+
                         # 清零到达节点的空闲度
-                        result.raw_rewards[agent_id] = self.node_idleness[arrived_node] * self.graph.phi[arrived_node]
+                        arrival_reward = self.node_idleness[arrived_node] * self.graph.phi[arrived_node]
                         self.node_idleness[arrived_node] = 0.0
-                        
-                        result.arrivals[agent_id] = arrived_node
+
+                        # 路由续航：中间节点累积奖励并自动跳下一跳
+                        if agent_id in self._routes and self._routes[agent_id]:
+                            self._acc_rewards[agent_id] = (
+                                self._acc_rewards.get(agent_id, 0.0) + arrival_reward
+                            )
+                            next_hop = self._routes[agent_id].pop(0)
+                            self.set_move_action(agent_id, next_hop)
+                            # 中间节点不暴露为 arrival，reward 暂存
+                            result.raw_rewards[agent_id] = 0.0
+                        else:
+                            # 最终目标到达：合并累积奖励
+                            acc = self._acc_rewards.pop(agent_id, 0.0)
+                            result.raw_rewards[agent_id] = acc + arrival_reward
+                            result.arrivals[agent_id] = arrived_node
                         
                     elif status.state == AgentState.WAITING:
                         # 等待完成
@@ -197,11 +218,12 @@ class PatrolWorld:
         - 某个智能体等待完成
         
         Returns:
-            TickResult: 如果没有待处理事件，dt=0
+            TickResult: 如果没有待处理事件，dt=0，raw_rewards 全零
         """
         dt = self._compute_next_event_time()
         if dt < 0:
-            return TickResult(dt=0.0)
+            raw_rewards = {a: 0.0 for a in range(self.num_agents)}
+            return TickResult(dt=0.0, raw_rewards=raw_rewards)
         return self.tick(dt)
 
     def _compute_next_event_time(self) -> float:
@@ -250,6 +272,40 @@ class PatrolWorld:
         
         return True
     
+    def set_route_action(self, agent_id: int, target_node: int) -> bool:
+        """设置路由移动：目标可以是任意可达节点，自动沿最短路径逐跳移动。
+
+        中间节点到达时累积奖励并自动续航，直到最终目标才标记 READY。
+        若目标是当前位置的直接邻居，退化为 set_move_action。
+
+        Returns:
+            bool: 是否设置成功
+        """
+        status = self.agents[agent_id]
+        if status.state != AgentState.READY:
+            return False
+
+        current_pos = status.position
+
+        if target_node == current_pos:
+            return self.set_wait_action(agent_id)
+
+        # 直接邻居：无需路由
+        if target_node in self.graph.get_neighbors(current_pos):
+            return self.set_move_action(agent_id, target_node)
+
+        # 计算最短路径 [current, hop1, hop2, ..., target]
+        path = self.graph.get_shortest_path(current_pos, target_node)
+        if path is None or len(path) < 2:
+            return False
+
+        # path[0] == current_pos，path[1] 是第一跳，path[2:] 是后续路径点
+        first_hop = path[1]
+        remaining = path[2:]  # 可能为空（两跳路径时只有 target）
+        self._routes[agent_id] = remaining
+        self._acc_rewards[agent_id] = 0.0
+        return self.set_move_action(agent_id, first_hop)
+
     def set_wait_action(self, agent_id: int) -> bool:
         """
         设置智能体在当前节点等待

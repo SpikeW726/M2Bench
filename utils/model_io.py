@@ -47,6 +47,7 @@ def _get_class_registry() -> Dict[str, type]:
     """延迟导入，构建网络类名 → 类对象的映射。"""
     from networks.mlp import ActorMLP, CriticMLP, QMLP
     from networks.rnn import ActorRNN, CriticRNN, QRNN
+    from networks.custom.suns import SUNActor, SUNCritic
 
     return {
         "ActorMLP": ActorMLP,
@@ -55,20 +56,32 @@ def _get_class_registry() -> Dict[str, type]:
         "ActorRNN": ActorRNN,
         "CriticRNN": CriticRNN,
         "QRNN": QRNN,
+        "SUNActor": SUNActor,
+        "SUNCritic": SUNCritic,
     }
 
 
 def _build_network_from_config(net_cfg: dict, registry: Dict[str, type]) -> nn.Module:
     """根据 config dict 实例化网络。
 
-    MLP 使用 hidden_sizes；RNN 使用 hidden_size / num_layers / rnn_type。
+    MLP 使用 hidden_sizes；RNN 使用 hidden_size / num_layers / rnn_type；
+    SUN 使用 num_nodes / node_feat_dim / f1_hidden / f2_hidden。
     """
     net_type = net_cfg["type"]
     cls = registry.get(net_type)
     if cls is None:
         raise ValueError(f"Unknown network type: {net_type}")
 
-    if "hidden_sizes" in net_cfg:
+    if "num_nodes" in net_cfg:
+        return cls(
+            obs_dim=net_cfg["input_dim"],
+            num_nodes=net_cfg["num_nodes"],
+            node_feat_dim=net_cfg.get("node_feat_dim", 2),
+            f1_hidden=net_cfg.get("f1_hidden", 4),
+            f2_hidden=net_cfg.get("f2_hidden", 6),
+            num_layers=net_cfg.get("num_layers", 1),
+        )
+    elif "hidden_sizes" in net_cfg:
         kwargs = dict(
             input_dim=net_cfg["input_dim"],
             hidden_sizes=net_cfg["hidden_sizes"],

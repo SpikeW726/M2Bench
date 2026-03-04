@@ -256,17 +256,20 @@ class MultiAgentPolicy(nn.Module):
     
     def evaluate_actions(
         self,
-        obs_dict: Dict[str, torch.Tensor],
-        act_dict: Dict[str, torch.Tensor],
+        obs_dict,
+        act_dict,
         **kwargs
-    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    ):
+        """Evaluate actions for all agents.
+
+        支持 Dict[str, Tensor]（多智能体）和 Tensor（单体算法经
+        prepare_batch 解包后的 flat tensor）两种输入格式。
         """
-        Evaluate actions for all agents.
-        
-        Returns:
-            log_probs: {agent_id: log_prob}
-            entropies: {agent_id: entropy}
-        """
+        # 单体算法 + ParallelEnv: prepare_batch 已解包为 flat tensor
+        if isinstance(obs_dict, torch.Tensor):
+            policy = self._shared_policy if self.shared else next(iter(self._policy_dict.values()))
+            return policy.evaluate_actions(obs_dict, act_dict, **kwargs)
+
         if self.shared:
             return self._evaluate_shared(obs_dict, act_dict, **kwargs)
         
@@ -338,6 +341,17 @@ class MultiAgentPolicy(nn.Module):
         if not self.shared:
             raise ValueError("evaluate_actions_flat requires shared=True")
         return self._shared_policy.evaluate_actions(obs, act, **kwargs)
+
+    def evaluate_actions_sequence(
+        self,
+        obs_seq: torch.Tensor,
+        act_seq: torch.Tensor,
+        hidden_init: torch.Tensor,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Tensor passthrough: 单体算法 + ParallelEnv 的 RNN 路径。"""
+        policy = self._shared_policy if self.shared else next(iter(self._policy_dict.values()))
+        return policy.evaluate_actions_sequence(obs_seq, act_seq, hidden_init, **kwargs)
 
     def evaluate_actions_sequence_flat(
         self,

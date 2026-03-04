@@ -16,14 +16,14 @@ import yaml
 
 from configs.env_configs import EnvConfig
 from configs.algo_configs import (
-    AlgoParams, MAPPOParams, IPPOParams, VDPPOParams, D3QNParams, IQLParams,
-    VDNParams, QMIXParams, QTableParams,
+    AlgoParams, A2CParams, MAA2CParams, MAPPOParams, IPPOParams, VDPPOParams,
+    D3QNParams, IQLParams, VDNParams, QMIXParams, QTableParams,
 )
 from configs.training_configs import (
     TrainerConfig, OnPolicyTrainerConfig, OffPolicyTrainerConfig,
 )
 from configs.network_configs import (
-    NetworkConfig, MLPConfig, RNNConfig, QMLPConfig, QRNNConfig,
+    NetworkConfig, MLPConfig, RNNConfig, QMLPConfig, QRNNConfig, SUNConfig,
 )
 from configs.exp_configs import ExperimentConfig
 
@@ -34,7 +34,22 @@ from configs.exp_configs import ExperimentConfig
 
 # ---- 算法 ----
 ALGO_REGISTRY: Dict[str, Dict[str, Any]] = {
-    # ---- on-policy (actor-critic) ----
+    # ---- on-policy (actor-critic): A2C 系列 ----
+    "a2c": {
+        "module": "algorithms.rl.a2c",
+        "class_name": "A2CAlgo",
+        "params_class": A2CParams,
+        "trainer_type": "on_policy",
+        "policy_type": "actor",
+    },
+    "maa2c": {
+        "module": "algorithms.marl.maa2c",
+        "class_name": "MAA2CAlgo",
+        "params_class": MAA2CParams,
+        "trainer_type": "on_policy",
+        "policy_type": "actor",
+    },
+    # ---- on-policy (actor-critic): PPO 系列 ----
     "ppo": {
         "module": "algorithms.rl.ppo",
         "class_name": "PPOAlgo",
@@ -125,17 +140,23 @@ ENV_REGISTRY: Dict[str, Dict[str, str]] = {
         "module": "envs.mdps.ex_gbla",
         "class_name": "ExGBLAEnv",
     },
+    "suns": {
+        "module": "envs.mdps.suns",
+        "class_name": "SUNSEnv",
+    },
 }
 
 # ---- 网络 (三路独立注册表) ----
 ACTOR_REGISTRY: Dict[str, Dict[str, Any]] = {
     "mlp": {"module": "networks.mlp", "class_name": "ActorMLP", "config_class": MLPConfig},
     "rnn": {"module": "networks.rnn", "class_name": "ActorRNN", "config_class": RNNConfig},
+    "sun": {"module": "networks.custom.suns", "class_name": "SUNActor", "config_class": SUNConfig},
 }
 
 CRITIC_REGISTRY: Dict[str, Dict[str, Any]] = {
     "mlp": {"module": "networks.mlp", "class_name": "CriticMLP", "config_class": MLPConfig},
     "rnn": {"module": "networks.rnn", "class_name": "CriticRNN", "config_class": RNNConfig},
+    "sun": {"module": "networks.custom.suns", "class_name": "SUNCritic", "config_class": SUNConfig},
 }
 
 Q_NETWORK_REGISTRY: Dict[str, Dict[str, Any]] = {
@@ -277,11 +298,20 @@ def create_actor(
     action_dim: int,
     device: str = "cpu",
 ) -> nn.Module:
-    """创建 Actor 网络 (ActorMLP / ActorRNN)。"""
+    """创建 Actor 网络 (ActorMLP / ActorRNN / SUNActor)。"""
     entry = ACTOR_REGISTRY[actor_type]
     cls = _import_class(entry["module"], entry["class_name"])
 
-    if isinstance(actor_config, RNNConfig):
+    if isinstance(actor_config, SUNConfig):
+        return cls(
+            obs_dim=obs_dim,
+            num_nodes=actor_config.num_nodes,
+            node_feat_dim=actor_config.node_feat_dim,
+            f1_hidden=actor_config.f1_hidden,
+            f2_hidden=actor_config.f2_hidden,
+            num_layers=actor_config.num_layers,
+        ).to(device)
+    elif isinstance(actor_config, RNNConfig):
         return cls(
             input_dim=obs_dim,
             hidden_size=actor_config.hidden_size,
@@ -300,11 +330,20 @@ def create_critic(
     critic_input_dim: int,
     device: str = "cpu",
 ) -> nn.Module:
-    """创建 Critic 网络 (CriticMLP / CriticRNN)。"""
+    """创建 Critic 网络 (CriticMLP / CriticRNN / SUNCritic)。"""
     entry = CRITIC_REGISTRY[critic_type]
     cls = _import_class(entry["module"], entry["class_name"])
 
-    if isinstance(critic_config, RNNConfig):
+    if isinstance(critic_config, SUNConfig):
+        return cls(
+            obs_dim=critic_input_dim,
+            num_nodes=critic_config.num_nodes,
+            node_feat_dim=critic_config.node_feat_dim,
+            f1_hidden=critic_config.f1_hidden,
+            f2_hidden=critic_config.f2_hidden,
+            num_layers=critic_config.num_layers,
+        ).to(device)
+    elif isinstance(critic_config, RNNConfig):
         return cls(
             input_dim=critic_input_dim,
             hidden_size=critic_config.hidden_size,

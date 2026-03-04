@@ -2,15 +2,20 @@
 
 BaseAlgorithm
 ├── ActorCriticOnPolicyAlgo  ← AC On-Policy 通用基础设施 (GAE, prepare_batch)
-│   └── PPOBase              ← PPO 家族共享 update (在 rl/ppo.py 中定义)
-│       ├── PPOAlgo
-│       ├── IPPOAlgo
-│       └── MAPPOAlgo
+│   └── A2CBase              ← update 骨架 + hook methods (在 rl/a2c.py 中定义)
+│       ├── A2CAlgo          ← 单智能体 A2C
+│       ├── MAA2CAlgo        ← 多智能体 A2C (+ CentralizedCriticMixin)
+│       └── PPOBase          ← PPO hook overrides (在 rl/ppo.py 中定义)
+│           ├── PPOAlgo
+│           ├── IPPOAlgo
+│           └── MAPPOAlgo    ← (+ CentralizedCriticMixin)
 └── QLearningOffPolicyAlgo   (DQN/SAC, 待完善)
 
 设计原则：
 - ActorCriticOnPolicyAlgo 只含算法无关的公共逻辑 (GAE, value norm, prepare_batch)
-- PPO 特有逻辑 (clipped surrogate, KL early stopping) 在 PPOBase 中
+- A2CBase 提供 update 骨架 (Template Method)，通过 hook 支持 A2C/PPO 差异化
+- PPO 特有逻辑 (clipped surrogate, KL early stopping) 在 PPOBase 中 override
+- CTDE 辅助方法在 CentralizedCriticMixin (marl/ctde_mixin.py) 中
 - optimizer / lr_scheduler 由最终子类创建
 """
 
@@ -381,13 +386,22 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
     #                     Batch 预处理（通用 GAE 预处理）
     # ====================================================================
 
-    def prepare_batch(self, batch: RolloutBatch) -> RolloutBatch:
+    def prepare_batch(self, batch) -> RolloutBatch:
         """
         单 RolloutBatch 的 GAE 预处理。
 
         流程: reshape → compute values → trunc bootstrap → vectorized GAE → value norm → flatten
         RNN critic 时逐步处理序列并记录 hidden，供 update 中 chunk_split 使用。
+
+        支持 Dict[str, RolloutBatch] 输入（1-agent ParallelEnv 场景自动解包）。
         """
+        if isinstance(batch, dict):
+            assert len(batch) == 1, (
+                f"非 CTDE 算法只支持 1 个 agent 的 ParallelEnv，"
+                f"收到 {len(batch)} 个 agent"
+            )
+            batch = next(iter(batch.values()))
+
         final_gs = batch.final_global_state
         batch = batch.to_tensor(self.device)
 

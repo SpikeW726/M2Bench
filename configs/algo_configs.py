@@ -2,15 +2,18 @@
 
 AlgoParams
 ├── OnPolicyParams         ← Actor-Critic On-Policy 通用参数
+│   ├── A2CParams          ← 单优化器 A2C
+│   ├── MAA2CParams        ← 双优化器 MAA2C
 │   └── PPOParams          ← PPO 家族特有参数 (clip, KL)
 │       ├── IPPOParams     ← 单优化器 (PPO / IPPO 共用)
 │       ├── MAPPOParams    ← 双优化器 + MAPPO 特有功能
 │       └── VDPPOParams    ← 值分解 + PPO actor + 双优化器
-└── OffPolicyParams        ← Off-Policy 通用参数
-    └── D3QNParams
-        └── IQLParams      ← 独立 Q-Learning
-            ├── VDNParams  ← VDN (SumMixer, 默认参数共享)
-            └── QMIXParams ← QMIX (超网络 Mixer, 默认参数共享)
+├── OffPolicyParams        ← Off-Policy 通用参数
+│   └── D3QNParams
+│       └── IQLParams      ← 独立 Q-Learning
+│           ├── VDNParams  ← VDN (SumMixer, 默认参数共享)
+│           └── QMIXParams ← QMIX (超网络 Mixer, 默认参数共享)
+└── QTableParams           ← Tabular Q-learning
 """
 
 from dataclasses import dataclass
@@ -98,6 +101,34 @@ class VDPPOParams(PPOParams):
     q_lr_start_factor: float = 1.0
     q_lr_end_factor: float = 0.1
     q_lr_decay_ratio: float = 0.8
+
+
+# =============================================================================
+#                          A2C 系列
+# =============================================================================
+
+@dataclass(kw_only=True)
+class A2CParams(OnPolicyParams):
+    """单优化器 A2C 参数。"""
+    lr: float = 7e-4
+    use_lr_scheduler: bool = False
+    lr_start_factor: float = 1.0
+    lr_end_factor: float = 0.1
+    lr_decay_ratio: float = 0.8
+
+
+@dataclass(kw_only=True)
+class MAA2CParams(OnPolicyParams):
+    """MAA2C 参数（双优化器 + LR scheduler）。"""
+    actor_lr: float = 7e-4
+    critic_lr: float = 7e-4
+    use_lr_scheduler: bool = False
+    actor_lr_start_factor: float = 1.0
+    actor_lr_end_factor: float = 0.1
+    actor_lr_decay_ratio: float = 0.8
+    critic_lr_start_factor: float = 1.0
+    critic_lr_end_factor: float = 0.1
+    critic_lr_decay_ratio: float = 0.8
 
 
 # =============================================================================

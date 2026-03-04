@@ -23,7 +23,7 @@ class GBLAEnv(BBLAEnv):
     def __init__(self, config: Dict, **kwargs):
         super().__init__(config, **kwargs)
 
-        # agent_id -> 意图目标节点 (None 表示无意图)
+        # agent_id:意图目标节点 (None 表示无意图)
         self.agent_intentions: Dict[int, Optional[int]] = {}
 
     def observation_space(self, agent: str):
@@ -59,7 +59,7 @@ class GBLAEnv(BBLAEnv):
                     # 有效移动 → 意图 = 目标节点
                     self.agent_intentions[agent_id] = neighbors[action_idx]
                 else:
-                    # no-op → 意图 = 留在当前节点
+                    # 无效动作 → 意图 = 留在当前节点
                     self.agent_intentions[agent_id] = current_pos
 
         return super().step(actions)
