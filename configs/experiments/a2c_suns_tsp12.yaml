@@ -1,9 +1,10 @@
-# A2C + SUNSEnv (TSP12) — 单智能体训练 (论文复现)
-# 用法: python train.py configs/experiments/a2c_suns_tsp12.yaml
+# A2C + SUNSGymEnv (TSP12) — 单智能体训练 (论文复现)
+# 训练: python train.py configs/experiments/a2c_suns_tsp12.yaml
+# 多智能体评估: 使用 configs/eval/suns_tsp12.yaml (env_type: suns)
 
 # ---- 分发字段 ----
 algo_name: a2c
-env_type: suns
+env_type: suns_gym
 actor_type: sun
 critic_type: sun
 

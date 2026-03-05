@@ -78,8 +78,6 @@ def _infer_dims(vec_env, algo_name: str) -> dict:
 
 def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
     """PettingZoo 多智能体环境维度推断。"""
-    CTDE_ALGOS = {"mappo", "maa2c", "vdppo"}
-
     agent_ids = vec_env.agents
     num_agents = len(agent_ids)
     obs_space = vec_env.observation_space[agent_ids[0]]
@@ -89,19 +87,15 @@ def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
     action_dim = action_space.n
 
     vec_env.reset()
+    states = vec_env.call_env_method("state")
+    state_dim = len(states[0])
 
-    if algo_name in CTDE_ALGOS:
-        states = vec_env.call_env_method("state")
-        state_dim = len(states[0])
-        # MAPPO/VDPPO: centralized critic = global_state + agent one-hot
-        if algo_name in ("mappo", "vdppo"):
-            critic_input_dim = state_dim + num_agents
-        else:
-            critic_input_dim = state_dim
+    # MAPPO/VDPPO: centralized critic = global_state + agent one-hot
+    # IPPO/MAA2C 等: critic = global_state（无 one-hot）
+    if algo_name in ("mappo", "vdppo"):
+        critic_input_dim = state_dim + num_agents
     else:
-        # 非 CTDE：critic 直接使用 obs，不需要 env.state()
-        state_dim = obs_dim
-        critic_input_dim = obs_dim
+        critic_input_dim = state_dim
 
     return {
         "agent_ids": agent_ids,
@@ -334,9 +328,7 @@ def _build_collector(
             return OffPolicyCollector(algorithm, vec_env, buffer)
     else:
         if is_parallel:
-            CTDE_ALGOS = {"mappo", "maa2c", "vdppo"}
-            needs_state = config.algo_name in CTDE_ALGOS
-            return MAOnPolicyCollector(algorithm, vec_env, collect_state=needs_state)
+            return MAOnPolicyCollector(algorithm, vec_env)
         else:
             return OnPolicyCollector(algorithm, vec_env)
 

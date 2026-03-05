@@ -144,6 +144,10 @@ ENV_REGISTRY: Dict[str, Dict[str, str]] = {
         "module": "envs.mdps.suns",
         "class_name": "SUNSEnv",
     },
+    "suns_gym": {
+        "module": "envs.mdps.suns_gym",
+        "class_name": "SUNSGymEnv",
+    },
 }
 
 # ---- 网络 (三路独立注册表) ----

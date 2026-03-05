@@ -386,22 +386,13 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
     #                     Batch 预处理（通用 GAE 预处理）
     # ====================================================================
 
-    def prepare_batch(self, batch) -> RolloutBatch:
+    def prepare_batch(self, batch: RolloutBatch) -> RolloutBatch:
         """
         单 RolloutBatch 的 GAE 预处理。
 
         流程: reshape → compute values → trunc bootstrap → vectorized GAE → value norm → flatten
         RNN critic 时逐步处理序列并记录 hidden，供 update 中 chunk_split 使用。
-
-        支持 Dict[str, RolloutBatch] 输入（1-agent ParallelEnv 场景自动解包）。
         """
-        if isinstance(batch, dict):
-            assert len(batch) == 1, (
-                f"非 CTDE 算法只支持 1 个 agent 的 ParallelEnv，"
-                f"收到 {len(batch)} 个 agent"
-            )
-            batch = next(iter(batch.values()))
-
         final_gs = batch.final_global_state
         batch = batch.to_tensor(self.device)
 
