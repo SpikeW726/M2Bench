@@ -53,6 +53,9 @@ class QTableTrainer:
         self.log_extra_fn = log_extra_fn
         self.verbose = config.verbose
 
+        self._sync_mode = getattr(algo.params, 'sync_update', False)
+        self._gamma = algo.gamma
+
         self.total_steps = 0
         self.best_reward = -float("inf")
 
@@ -96,6 +99,11 @@ class QTableTrainer:
         done_flags = np.zeros(self.num_envs, dtype=bool)
         ep_rewards = np.zeros(self.num_envs)
         ep_steps = 0
+
+        if self._sync_mode:
+            self._pending: Dict[str, List[Optional[dict]]] = {
+                agent: [None] * self.num_envs for agent in self.agents
+            }
 
         while not done_flags.all():
             actions = self._select_actions(obs_dict, info_dict)
@@ -162,7 +170,29 @@ class QTableTrainer:
         obs_dict, actions, rew, next_obs, term, trunc,
         info_dict, next_info, done_flags,
     ):
-        """对每个 active agent 做 Q-learning 单步更新。"""
+        """对每个 agent 做 Q-learning 更新。
+
+        sync_mode=False: 仅 active 步逐步更新（原始逻辑）。
+        sync_mode=True:  决策→到达折叠为一次 Q-update，
+                         中间累积折扣 reward，到达时用 γ^(K+1) 做 bootstrap。
+        """
+        if self._sync_mode:
+            self._update_qtables_sync(
+                obs_dict, actions, rew, next_obs, term, trunc,
+                info_dict, next_info, done_flags,
+            )
+        else:
+            self._update_qtables_standard(
+                obs_dict, actions, rew, next_obs, term, trunc,
+                info_dict, next_info, done_flags,
+            )
+
+    def _update_qtables_standard(
+        self,
+        obs_dict, actions, rew, next_obs, term, trunc,
+        info_dict, next_info, done_flags,
+    ):
+        """非同步：仅 active 步做单步 Q-update。"""
         for agent in self.agents:
             for i in range(self.num_envs):
                 if done_flags[i]:
@@ -186,6 +216,61 @@ class QTableTrainer:
                     done=done,
                     next_action_mask=next_am,
                 )
+
+    def _update_qtables_sync(
+        self,
+        obs_dict, actions, rew, next_obs, term, trunc,
+        info_dict, next_info, done_flags,
+    ):
+        """同步更新：决策→到达折叠为一次 Q-update。
+
+        per agent per env 维护 pending:
+          决策点(active): 记录 (s, a), 重置累积器
+          每步: acc_reward += γ^k * r_k, gamma_power *= γ
+          到达(next_active) 或 done: flush 一次 Q-update
+        """
+        gamma = self._gamma
+        for agent in self.agents:
+            for i in range(self.num_envs):
+                if done_flags[i]:
+                    continue
+
+                info_i = info_dict[agent][i] if info_dict and agent in info_dict else {}
+                was_active = bool(info_i.get("active_mask", 1))
+
+                if was_active:
+                    self._pending[agent][i] = {
+                        'obs': obs_dict[agent][i].copy(),
+                        'act': int(actions[agent][i]),
+                        'acc_reward': 0.0,
+                        'gamma_power': 1.0,
+                    }
+
+                pend = self._pending[agent][i]
+                if pend is not None:
+                    pend['acc_reward'] += pend['gamma_power'] * float(rew[agent][i])
+                    pend['gamma_power'] *= gamma
+
+                is_done = bool(term[agent][i] or trunc[agent][i])
+                next_info_i = next_info[agent][i] if next_info and agent in next_info else {}
+                now_active = bool(next_info_i.get("active_mask", 1))
+
+                if pend is not None and (now_active or is_done):
+                    next_am = next_info_i.get("action_mask", None)
+                    self.algo.update_step(
+                        agent_id=agent,
+                        obs=pend['obs'],
+                        action=pend['act'],
+                        reward=pend['acc_reward'],
+                        next_obs=next_obs[agent][i],
+                        done=is_done,
+                        next_action_mask=next_am,
+                        gamma_power=pend['gamma_power'],
+                    )
+                    self._pending[agent][i] = None
+
+                if is_done:
+                    self._pending[agent][i] = None
 
     def _log_episode(self, ep: int, ep_result: Dict, start_time: float):
         elapsed = time.time() - start_time

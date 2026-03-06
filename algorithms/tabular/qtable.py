@@ -64,6 +64,7 @@ class QTableAlgo:
 
     def __init__(self, policies: Dict[str, QTablePolicy], params: QTableParams):
         self.policies = policies
+        self.params = params
         self.alpha = params.lr
         self.gamma = params.gamma
         self.epsilon_start = params.epsilon_start
@@ -80,10 +81,16 @@ class QTableAlgo:
         next_obs: np.ndarray,
         done: bool,
         next_action_mask: Optional[np.ndarray] = None,
+        gamma_power: Optional[float] = None,
     ):
-        """标准 Q-learning 单步在线更新。"""
+        """Q-learning 单步在线更新。
+
+        gamma_power 非 None 时用于同步模式: td = reward + gamma_power * max Q(s')，
+        其中 reward 已经是累积折扣奖励，gamma_power = γ^(K+1)。
+        """
         pol = self.policies[agent_id]
         q = pol.get_q(obs)
+        discount = gamma_power if gamma_power is not None else self.gamma
 
         if done:
             td_target = reward
@@ -91,7 +98,7 @@ class QTableAlgo:
             next_q = pol.get_q(next_obs).copy()
             if next_action_mask is not None:
                 next_q[~next_action_mask.astype(bool)] = -np.inf
-            td_target = reward + self.gamma * np.max(next_q)
+            td_target = reward + discount * np.max(next_q)
 
         q[action] += self.alpha * (td_target - q[action])
 

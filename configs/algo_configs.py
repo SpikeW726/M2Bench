@@ -198,3 +198,4 @@ class QTableParams(AlgoParams):
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
     epsilon_decay: float = 0.9995  # 指数衰减（per episode）
+    sync_update: bool = False      # 同步更新: 决策→到达折叠为一次 Q-update
