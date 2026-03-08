@@ -338,9 +338,14 @@ def _build_collector(
 # =============================================================================
 
 def _train_qtable(config: ExperimentConfig):
-    """Q-table 独立训练路径：复用日志/环境，绕过 nn.Module 流水线。"""
+    """Q-table 独立训练路径：复用日志/环境，绕过 nn.Module 流水线。
+
+    根据环境类型自动分派：
+    - ParallelEnv → QTableTrainer（per-agent 独立 Q-table）
+    - Gymnasium Env → JointQTableTrainer（单一集中式 Q-table）
+    """
     from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
-    from trainers.qtable_trainer import QTableTrainer
+    from trainers.qtable_trainer import QTableTrainer, JointQTableTrainer
 
     tc = config.training
 
@@ -367,17 +372,6 @@ def _train_qtable(config: ExperimentConfig):
         use_subproc=tc.use_subproc,
     )
     vec_env.reset()
-    action_dim = list(vec_env.action_space.values())[0].n
-    agent_ids = vec_env.agents
-
-    print(f"[Train] Q-table mode: {config.env_type}, agents={agent_ids}, "
-          f"action_dim={action_dim}, num_envs={tc.num_envs}")
-
-    policies = {
-        aid: QTablePolicy(action_dim, config.algo.epsilon_start)
-        for aid in agent_ids
-    }
-    algo = QTableAlgo(policies, config.algo)
 
     def log_extra_fn() -> Dict[str, float]:
         try:
@@ -394,14 +388,32 @@ def _train_qtable(config: ExperimentConfig):
             pass
         return {}
 
-    trainer = QTableTrainer(
-        algo=algo,
-        vec_env=vec_env,
-        config=tc,
-        save_dir=config.save_dir,
-        logger=logger,
-        log_extra_fn=log_extra_fn,
-    )
+    if vec_env.is_parallel_env:
+        # ParallelEnv：每个 agent 独立 Q-table
+        action_dim = list(vec_env.action_space.values())[0].n
+        agent_ids = vec_env.agents
+        print(f"[Train] Q-table (parallel) mode: env={config.env_type}, "
+              f"agents={agent_ids}, action_dim={action_dim}, num_envs={tc.num_envs}")
+        policies = {
+            aid: QTablePolicy(action_dim, config.algo.epsilon_start)
+            for aid in agent_ids
+        }
+        algo = QTableAlgo(policies, config.algo)
+        trainer = QTableTrainer(
+            algo=algo, vec_env=vec_env, config=tc,
+            save_dir=config.save_dir, logger=logger, log_extra_fn=log_extra_fn,
+        )
+    else:
+        # Gymnasium Env：单一集中式 Q-table，虚拟 key "agent_0"
+        action_dim = vec_env.action_space.n
+        print(f"[Train] Q-table (joint) mode: env={config.env_type}, "
+              f"action_dim={action_dim}, num_envs={tc.num_envs}")
+        policies = {"agent_0": QTablePolicy(action_dim, config.algo.epsilon_start)}
+        algo = QTableAlgo(policies, config.algo)
+        trainer = JointQTableTrainer(
+            algo=algo, vec_env=vec_env, config=tc,
+            save_dir=config.save_dir, logger=logger, log_extra_fn=log_extra_fn,
+        )
 
     print(f"\n[Train] Starting Q-table training")
     print(f"  Max episodes: {tc.max_iterations}")

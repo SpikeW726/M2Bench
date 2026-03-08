@@ -1,0 +1,29 @@
+# Q-table + NEP 环境 (TSP12) — 4 agents，复现 Hu & Zhao 2010
+# 用法: python train.py configs/experiments/qtable_nep_tsp12.yaml
+
+algo_name: qtable
+env_type: nep
+
+exp_name: qtable-nep
+graph_name: TSP12
+track_wandb: false
+wandb_project: MAP-RL
+
+env:
+  graph_path: graphs/simple_TSP_12.json
+  enable_wait: false
+  num_agents: 4
+  episode_len: 300
+
+algo:
+  lr: 0.9          # 论文中 alpha = 0.9
+  gamma: 0.9        # 论文中 discount factor = 0.9
+  epsilon_start: 0.2
+  epsilon_end: 0.1
+  epsilon_decay: 0.9999
+
+training:
+  num_envs: 4
+  use_subproc: false
+  max_iterations: 5000
+  save_interval: 1000

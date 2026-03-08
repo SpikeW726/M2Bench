@@ -1,4 +1,4 @@
-"""SUNSGymEnv — gymnasium.Env 版本的 SUNS 环境，用于单智能体 RL 训练。
+"""SUNSGymEnv — JointEventDrivenEnv 版本的 SUNS 环境，用于单智能体 RL 训练。
 
 与 SUNSEnv(ParallelEnv) 共享同一套观测/奖励/截断逻辑，
 但遵循标准 gymnasium.Env 接口，可直接搭配 OnPolicyCollector + A2C/PPO。
@@ -11,16 +11,14 @@ import numpy as np
 import gymnasium
 from gymnasium.spaces import Box, Discrete
 
-from envs.mdps.patrol_core import PatrolWorld, TickResult
+from envs.mdps.patrol_core import TickResult
+from envs.mdps.base_envs import JointEventDrivenEnv
 
 
-class SUNSGymEnv(gymnasium.Env):
-
-    metadata = {"render_modes": []}
+class SUNSGymEnv(JointEventDrivenEnv):
 
     def __init__(self, config: Dict, **kwargs):
-        super().__init__()
-        self.world = PatrolWorld(config)
+        super().__init__(config)   # 创建 self.world
         assert self.world.num_agents == 1, (
             "SUNSGymEnv 仅支持 1 个智能体，多智能体请用 SUNSEnv(ParallelEnv)"
         )
@@ -67,34 +65,22 @@ class SUNSGymEnv(gymnasium.Env):
     # ------------------------------------------------------------------
 
     def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        init_pos = self.init_pos if self.init_pos else None
-        self.world.reset(initial_positions=init_pos)
-        obs = self._build_obs()
-        info = {"action_mask": np.ones(self.world.num_nodes, dtype=bool)}
-        return obs, info
+        # 直接调 gymnasium.Env.reset 处理 seed，再用 init_pos 重置 world
+        gymnasium.Env.reset(self, seed=seed)
+        self.world.reset(initial_positions=self.init_pos if self.init_pos else None)
+        return self._build_obs(None), self._build_info(None)
 
-    def step(self, action: int):
+    # ------------------------------------------------------------------
+    #  JointBaseEnv 抽象方法实现
+    # ------------------------------------------------------------------
+
+    def _dispatch_actions(self, action: int):
+        """将节点索引动作提交给 world（全图路由）。"""
         target_node = self._ordered_nodes[action]
         self.world.set_route_action(0, target_node)
 
-        result = self.world.tick_to_next_event()
-
-        obs = self._build_obs()
-        reward = result.raw_rewards.get(0, 0.0)
-        terminated = False
-        truncated = self._is_truncated()
-        info = {
-            "action_mask": np.ones(self.world.num_nodes, dtype=bool),
-            "active_mask": 1 if self.world.is_ready(0) else 0,
-        }
-        return obs, reward, terminated, truncated, info
-
-    # ------------------------------------------------------------------
-    #  内部方法（与 SUNSEnv 保持一致）
-    # ------------------------------------------------------------------
-
-    def _build_obs(self) -> np.ndarray:
+    def _build_obs(self, result: Optional[TickResult]) -> np.ndarray:
+        """构建观测：[node_features_flat(2N), weight_mat_flat(N²)]"""
         ordered_nodes = self._ordered_nodes
         weighted_idleness = [
             self.world.graph.phi[n] * self.world.node_idleness[n]
@@ -111,14 +97,23 @@ class SUNSGymEnv(gymnasium.Env):
             self._weight_mat_flat,
         ])
 
+    def _build_info(self, result: Optional[TickResult]) -> dict:
+        info = {"action_mask": np.ones(self.world.num_nodes, dtype=bool)}
+        if result is not None:
+            info["active_mask"] = 1 if self.world.is_ready(0) else 0
+        return info
+
+    def _compute_reward(self, result: TickResult) -> float:
+        return result.raw_rewards.get(0, 0.0)
+
+    def _compute_truncation(self) -> bool:
+        return self._is_truncated()
+
+    # ------------------------------------------------------------------
+    #  内部辅助
+    # ------------------------------------------------------------------
+
     def _is_truncated(self) -> bool:
         if self.truncate_by_time:
             return self.world.current_time >= (self.episode_len - 1e-9)
         return self.world.step_count >= self.episode_len
-
-    def get_episode_metrics(self) -> Optional[dict]:
-        """供 vec_env.call_env_method('get_episode_metrics') 使用。"""
-        m = self.world.last_episode_metrics
-        if m is None:
-            return None
-        return {"igi": m.igi, "agi": m.agi, "iwi": m.iwi, "wi": m.wi}

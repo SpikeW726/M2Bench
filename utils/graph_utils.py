@@ -41,7 +41,31 @@ class Graph:
         # 预计算所有节点对之间的最短路径长度
         self._shortest_paths: Dict[int, Dict[int, float]] = {}
         self._precompute_shortest_paths()
+
+        # 构建边的排序
+        self._ordered_edges: List[Tuple[int, int]] = []
+        for src in sorted(self.nodes):
+            for dst, _ in sorted(self.adj_list.get(src, []), key=lambda x: x[0]):
+                self._ordered_edges.append((src, dst))
+
+        self._edge_to_index: Dict[Tuple[int, int], int] = {
+            (src, dst): idx for idx, (src, dst) in enumerate(self._ordered_edges)
+        }
         
+
+    def get_edge_index(self, src: int, dst: int) -> int:
+        """返回有向边 (src, dst) 的全局序号, 无边则抛错。"""
+        key = (src, dst)
+        if key not in self._edge_to_index:
+            raise ValueError(f"边 ({src}, {dst}) 不存在")
+        return self._edge_to_index[key]
+
+    def get_edge_by_index(self, idx: int) -> Tuple[int, int]:
+        """返回序号为 idx 的边 (src, dst), idx从0开始。"""
+        if idx < 1 or idx > len(self._ordered_edges):
+            raise ValueError(f"边序号 {idx} 越界")
+        return self._ordered_edges[idx - 1]
+
     def _precompute_shortest_paths(self):
         """
         预计算所有节点对之间的最短路径长度（使用 Dijkstra 算法）

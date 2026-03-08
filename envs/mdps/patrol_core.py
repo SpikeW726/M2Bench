@@ -231,7 +231,7 @@ class PatrolWorld:
         min_time = float('inf')
         
         for status in self.agents.values():
-            if status.state in (AgentState.ON_EDGE, AgentState.WAITING):
+            if status.state in (AgentState.ON_EDGE, AgentState.WAITING, AgentState.READY):
                 if status.action_remaining >= 0:
                     min_time = min(min_time, status.action_remaining)
         

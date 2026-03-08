@@ -201,3 +201,125 @@ class EventDrivenEnv(BaseEnv):
         infos = self._build_info(result=None)
         
         return obs, infos
+
+
+# =============================================================================
+#  Joint Gymnasium Env 基类层（集中式控制器，gymnasium.Env）
+#
+#  obs / action / reward 都是单一值（非 per-agent Dict），
+#  子类通过 observation_space / action_space 属性声明空间，
+#  动作类型完全由子类决定，基类不做任何假设。
+# =============================================================================
+
+class JointBaseEnv(gymnasium.Env):
+    """集中式巡逻环境基类（gymnasium.Env）。
+
+    与 BaseEnv(ParallelEnv) 对称，但面向单一控制器视角：
+    - obs: 子类定义的单一 np.ndarray
+    - action: 子类定义的任意类型（int / tuple / ndarray 均可）
+    - reward: float
+    """
+
+    metadata = {"render_modes": []}
+
+    def __init__(self, config: Dict):
+        super().__init__()
+        self.config = config
+        self.world = PatrolWorld(config)
+        # 子类必须在 __init__ 中赋值这两个属性
+        self.observation_space: gymnasium.spaces.Space = None
+        self.action_space: gymnasium.spaces.Space = None
+
+    # ------------------------------------------------------------------
+    #  gymnasium 标准接口（由两个具体子类实现 tick 逻辑）
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def step(self, action):
+        """执行一步，返回 (obs, reward, terminated, truncated, info)"""
+        pass
+
+    def reset(self, seed: Optional[int] = None, options=None):
+        """重置环境，返回 (obs, info)"""
+        super().reset(seed=seed)
+        self.world.reset()
+        return self._build_obs(None), self._build_info(None)
+
+    # ------------------------------------------------------------------
+    #  子类必须实现的抽象方法
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def _dispatch_actions(self, action):
+        """将 action 解释并提交给 PatrolWorld（set_move_action / set_wait_action）。
+
+        action 的类型由子类的 action_space 决定，基类不做假设。
+        """
+        pass
+
+    @abstractmethod
+    def _build_obs(self, result: Optional[TickResult]) -> np.ndarray:
+        """构建观测，reset 时 result=None"""
+        pass
+
+    @abstractmethod
+    def _build_info(self, result: Optional[TickResult]) -> dict:
+        """构建 info，reset 时 result=None"""
+        pass
+
+    @abstractmethod
+    def _compute_reward(self, result: TickResult) -> float:
+        """计算联合奖励"""
+        pass
+
+    def _compute_termination(self) -> bool:
+        """是否 terminated（默认 False）"""
+        return False
+
+    @abstractmethod
+    def _compute_truncation(self) -> bool:
+        """是否 truncated（子类按 episode_len 实现）"""
+        pass
+
+    def get_episode_metrics(self) -> Optional[dict]:
+        """返回上一个完成 episode 的终止指标，与 BaseEnv 保持一致。"""
+        m = self.world.last_episode_metrics
+        if m is None:
+            return None
+        return {"igi": m.igi, "agi": m.agi, "iwi": m.iwi, "wi": m.wi}
+
+
+class JointFixedStepEnv(JointBaseEnv):
+    """集中式固定时间步环境：每步推进 tick(dt=1.0)。"""
+
+    def __init__(self, config: Dict):
+        super().__init__(config)
+
+    def step(self, action):
+        self._dispatch_actions(action)
+        result = self.world.tick(dt=1.0)
+        return (
+            self._build_obs(result),
+            self._compute_reward(result),
+            self._compute_termination(),
+            self._compute_truncation(),
+            self._build_info(result),
+        )
+
+
+class JointEventDrivenEnv(JointBaseEnv):
+    """集中式事件驱动环境：每步推进 tick_to_next_event()。"""
+
+    def __init__(self, config: Dict):
+        super().__init__(config)
+
+    def step(self, action):
+        self._dispatch_actions(action)
+        result = self.world.tick_to_next_event()
+        return (
+            self._build_obs(result),
+            self._compute_reward(result),
+            self._compute_termination(),
+            self._compute_truncation(),
+            self._build_info(result),
+        )
