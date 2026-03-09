@@ -17,6 +17,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 os.chdir(project_root)
 
+import yaml
 import torch
 import numpy as np
 
@@ -219,6 +220,160 @@ def test_trained_policy(
 
 
 # =============================================================================
+#                     Q-table 评估（BBLA / GBLA / ExGBLA 等）
+# =============================================================================
+
+def test_qtable_policy(
+    model_dir: str,
+    env_config_path: str,
+    num_episodes: int = 5,
+    save_plot: str = None,
+    show_plot: bool = True,
+):
+    """评估训练好的 Q-table 策略。
+
+    支持 ParallelEnv（BBLA / GBLA / ExGBLA，per-agent 独立 Q-table）
+    和 Gymnasium Env（JointBaseEnv 系列，单一集中式 Q-table）。
+
+    Args:
+        model_dir: checkpoint 目录（含 *_qtable.npy 文件）
+        env_config_path: eval YAML（含 env_type + env 参数 + algo_name: qtable）
+        num_episodes: 评估 episode 数
+        save_plot: 指标图保存路径（None = 不保存）
+        show_plot: 是否弹窗显示图表
+    """
+    from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
+    from configs.algo_configs import QTableParams
+
+    # ---- 1. 创建环境 ----
+    env_type, env_cfg = load_eval_config(env_config_path)
+    print(f"\n=== Creating {env_type} environment ===")
+    env = _create_env(env_type, env_cfg)
+
+    cfg_dict, _ = _env_config_to_dicts(env_cfg)
+    graph_path = cfg_dict.get("graph_path", "unknown")
+    graph_name = Path(graph_path).stem
+    num_agents = cfg_dict.get("num_agents", None)
+
+    print(f"Graph: {graph_path} ({graph_name})")
+
+    # ---- 2. 检测环境类型并构建 Q-table ----
+    is_parallel = hasattr(env, "possible_agents")  # ParallelEnv vs Gymnasium Env
+
+    if is_parallel:
+        agent_ids = env.possible_agents
+        action_dim = env.action_space(agent_ids[0]).n
+        num_agents = num_agents or len(agent_ids)
+    else:
+        agent_ids = ["agent_0"]
+        action_dim = env.action_space.n
+        num_agents = num_agents or 1
+
+    print(f"Num agents: {num_agents}, Action dim: {action_dim}")
+    print(f"Mode: {'ParallelEnv (per-agent Q-table)' if is_parallel else 'GymnasiumEnv (joint Q-table)'}")
+
+    # 评估时 epsilon=0（纯 greedy），lr/gamma 不影响 eval，填默认值即可
+    dummy_params = QTableParams(lr=0.0, gamma=0.99,
+                                epsilon_start=0.0, epsilon_end=0.0, epsilon_decay=1.0)
+    policies = {aid: QTablePolicy(action_dim, epsilon=0.0) for aid in agent_ids}
+    algo = QTableAlgo(policies, dummy_params)
+
+    # ---- 3. 加载 Q-table ----
+    model_dir = Path(model_dir)
+    algo.load(str(model_dir))
+    for pol in algo.policies.values():
+        pol.set_epsilon(0.0)
+
+    qtable_sizes = {aid: len(pol.q_table) for aid, pol in algo.policies.items()}
+    print(f"\n=== Q-table loaded from {model_dir} ===")
+    print(f"Q-table sizes: {qtable_sizes}")
+
+    # ---- 4. 评估循环 ----
+    print(f"\n=== Running {num_episodes} episodes (greedy, epsilon=0) ===")
+
+    episode_metrics = []
+    metrics_history = []
+    episode_times = []
+
+    for ep in range(num_episodes):
+        obs, infos = env.reset()
+        truncated = False
+        terminated = False
+
+        while not (truncated or terminated):
+            if is_parallel:
+                actions = {}
+                for agent_str in env.agents:
+                    info_i = infos[agent_str]
+                    action_mask = info_i.get("action_mask", None)
+                    pol = algo.policies[agent_str]
+
+                    if info_i.get("active_mask", 1):
+                        if action_mask is not None:
+                            actions[agent_str] = pol.select_action(obs[agent_str], action_mask)
+                        else:
+                            actions[agent_str] = int(np.argmax(pol.get_q(obs[agent_str])))
+                    else:
+                        # ON_EDGE：选 action_mask 中最后一个有效位（no-op）
+                        if action_mask is not None:
+                            valid = np.where(action_mask)[0]
+                            actions[agent_str] = int(valid[-1]) if len(valid) > 0 else 0
+                        else:
+                            actions[agent_str] = 0
+
+                obs, _, terms, truncs, infos = env.step(actions)
+                first = env.agents[0]
+                truncated = bool(truncs[first])
+                terminated = bool(terms[first])
+
+            else:
+                # Gymnasium Env（Joint 控制器）
+                info_i = infos if isinstance(infos, dict) else {}
+                action_mask = info_i.get("action_mask", None)
+                pol = algo.policies["agent_0"]
+                if action_mask is not None:
+                    action = pol.select_action(obs, action_mask)
+                else:
+                    action = int(np.argmax(pol.get_q(obs)))
+                obs, _, terminated, truncated, infos = env.step(action)
+
+        final_metrics = env.world.current_metrics
+        episode_metrics.append(final_metrics)
+        episode_times.append(final_metrics.time)
+        metrics_history.append(env.world.metrics_tracker.get_history_dict())
+
+        print(f"Episode {ep + 1}/{num_episodes}: "
+              f"IGI={final_metrics.igi:.4f}, "
+              f"AGI={final_metrics.agi:.4f}, "
+              f"IWI={final_metrics.iwi:.4f}, "
+              f"WI={final_metrics.wi:.4f}, "
+              f"time={final_metrics.time:.2f}s")
+
+    # ---- 5. 汇总统计 ----
+    print(f"\n=== Summary Statistics ({num_episodes} episodes) ===")
+    for metric_name in ['IGI', 'AGI', 'IWI', 'WI']:
+        values = [getattr(m, metric_name.lower()) for m in episode_metrics]
+        print(f"{metric_name}: {np.mean(values):.4f} ± {np.std(values):.4f}")
+
+    # ---- 6. 可视化 ----
+    if metrics_history:
+        print(f"\n=== Generating aggregated visualization ===")
+        save_dir = str(Path(save_plot).parent) if save_plot else 'evaluators/results'
+        aggregated = aggregate_episode_metrics(metrics_history)
+        avg_time = np.mean(episode_times)
+        subtitle = f"Graph: {graph_name} | Agents: {num_agents} | Avg Time: {avg_time:.2f}s"
+        plot_aggregated_metrics(
+            aggregated,
+            title=f'Q-table Evaluation ({num_episodes} episodes)',
+            subtitle=subtitle,
+            save_path=save_plot,
+            show=show_plot,
+        )
+
+    return episode_metrics
+
+
+# =============================================================================
 #                              CLI 入口
 # =============================================================================
 
@@ -249,14 +404,28 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    test_trained_policy(
-        model_dir=args.model,
-        env_config_path=args.env_config,
-        num_episodes=args.num_episodes,
-        max_steps=args.max_steps,
-        save_plot=args.save_plot,
-        show_plot=not args.no_show,
-        record_animation=args.animation,
-        event_driven=not args.no_event_driven,
-        max_frames=args.max_frames,
-    )
+    # 读取 algo_name 字段（默认 None，表示 RL 神经网络路径）
+    with open(args.env_config) as _f:
+        _raw = yaml.safe_load(_f)
+    _algo_name = _raw.get("algo_name", None)
+
+    if _algo_name == "qtable":
+        test_qtable_policy(
+            model_dir=args.model,
+            env_config_path=args.env_config,
+            num_episodes=args.num_episodes,
+            save_plot=args.save_plot,
+            show_plot=not args.no_show,
+        )
+    else:
+        test_trained_policy(
+            model_dir=args.model,
+            env_config_path=args.env_config,
+            num_episodes=args.num_episodes,
+            max_steps=args.max_steps,
+            save_plot=args.save_plot,
+            show_plot=not args.no_show,
+            record_animation=args.animation,
+            event_driven=not args.no_event_driven,
+            max_frames=args.max_frames,
+        )

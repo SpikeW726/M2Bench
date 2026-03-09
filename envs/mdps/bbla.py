@@ -12,6 +12,7 @@ Description:
 
 from typing import Any, Dict, List, Optional
 import numpy as np
+import random
 from gymnasium.spaces import Box, Discrete
 
 from envs.mdps.patrol_core import AgentState, TickResult
@@ -38,7 +39,7 @@ class BBLAEnv(FixedStepEnv):
         max_num_neighbor = self.world.max_neighbors
 
         low = np.array([-1, -1, -1, -1])
-        high = np.array([max_node_id, max_node_id, max_num_neighbor, max_num_neighbor])
+        high = np.array([max_node_id, max_num_neighbor, max_num_neighbor, max_num_neighbor])
 
         return Box(low=low, high=high, dtype=np.int32)
 
@@ -75,9 +76,9 @@ class BBLAEnv(FixedStepEnv):
                 max_nodes = [n for n, idle in zip(neighbors, neighbor_idleness) if idle == max_idle]
                 min_nodes = [n for n, idle in zip(neighbors, neighbor_idleness) if idle == min_idle]
 
-                # 平局时取 node_id 最小的邻居，保证同一状态映射到唯一 Q-table key
-                max_node = self.world.graph.neighbor_to_edge(current_pos, min(max_nodes))
-                min_node = self.world.graph.neighbor_to_edge(current_pos, min(min_nodes))
+                # 平局时随机选取
+                max_node = self.world.graph.neighbor_to_edge(current_pos, random.choice(max_nodes))
+                min_node = self.world.graph.neighbor_to_edge(current_pos, random.choice(max_nodes))
             else:
                 max_node = min_node = -1
             

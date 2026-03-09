@@ -41,7 +41,7 @@ class GBLAEnv(BBLAEnv):
         ]).astype(np.int32)
 
         high = np.concatenate([
-            np.array([max_node_id, max_node_id,
+            np.array([max_node_id, max_num_neighbor,
                       max_num_neighbor, max_num_neighbor]),  # BBLA 部分
             np.ones(max_num_neighbor),                       # 意图向量
         ]).astype(np.int32)

@@ -6,7 +6,7 @@ env_type: nep
 
 exp_name: qtable-nep
 graph_name: TSP12
-track_wandb: false
+track_wandb: True
 wandb_project: MAP-RL
 
 env:

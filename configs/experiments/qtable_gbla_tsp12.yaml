@@ -6,7 +6,7 @@ env_type: gbla
 
 exp_name: qtable-gbla
 graph_name: TSP12
-track_wandb: false
+track_wandb: True
 wandb_project: MAP-RL
 
 env:
@@ -23,6 +23,7 @@ algo:
   epsilon_start: 1.0
   epsilon_end: 0.01
   epsilon_decay: 0.9995
+  sync_update: true
 
 training:
   num_envs: 4
