@@ -13,7 +13,7 @@ env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: false
   num_agents: 4
-  episode_len: 300
+  episode_len: 10000
 
 algo:
   lr: 0.9          # 论文中 alpha = 0.9
@@ -25,5 +25,5 @@ algo:
 training:
   num_envs: 4
   use_subproc: false
-  max_iterations: 5000
+  max_iterations: 1000
   save_interval: 1000

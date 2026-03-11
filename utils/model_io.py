@@ -307,6 +307,19 @@ def load_policy_for_eval(
         raise FileNotFoundError(f"Policy weights not found: {policy_path}")
 
     state_dict = torch.load(policy_path, map_location=device, weights_only=True)
+
+    # 兼容单体训练→多体评估场景（如 A2C+suns_gym → suns）：
+    # 单体训练保存的是裸 Policy state_dict（key 无 _shared_policy./_policy_dict. 前缀），
+    # 而 MultiAgentPolicy(shared=True) 期望 _shared_policy.* 前缀。
+    if state_dict:
+        first_key = next(iter(state_dict))
+        is_bare_policy = not (
+            first_key.startswith('_shared_policy.')
+            or first_key.startswith('_policy_dict.')
+        )
+        if is_bare_policy and shared:
+            state_dict = {f'_shared_policy.{k}': v for k, v in state_dict.items()}
+
     multi_policy.load_state_dict(state_dict)
     multi_policy.to(device)
     multi_policy.set_training_mode(False)

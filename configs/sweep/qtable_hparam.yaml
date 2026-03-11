@@ -34,7 +34,7 @@ parameters:
     distribution: log_uniform_values
 
   gamma:
-    values: [0.9, 0.95, 0.99, 0.995, 0.999]
+    values: [0.9, 0.99, 0.999]
 
   epsilon_start:
     values: [0.5, 0.8, 1.0]
@@ -50,11 +50,8 @@ parameters:
     distribution: uniform
 
   # ---- training params (映射到 TrainerConfig) ----
-  num_envs:
-    values: [4, 8, 16]
-
   max_iterations:
-    value: 10000
+    value: 1000
 
   save_interval:
-    value: 10000
+    value: 1000

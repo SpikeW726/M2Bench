@@ -13,7 +13,7 @@ env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: false
   num_agents: 3
-  episode_len: 300
+  episode_len: 10000
   custom_configs:
     truncate_by_time: true
 
