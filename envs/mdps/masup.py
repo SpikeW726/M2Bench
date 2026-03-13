@@ -50,7 +50,7 @@ class MASUPEnv(EventDrivenEnv):
         elif self.role_ifm == "position":
             self.obs_size = 3*self.world.num_agents + self.world.num_nodes + 4
         elif self.role_ifm == "decision":
-            self.obs_size = 3*self.world.num_agents + self.world.num_nodes + 5
+            self.obs_size = 3*self.world.num_agents + self.world.num_nodes + 4 + self.world.num_agents
 
 
     def observation_space(self, agent):
@@ -86,15 +86,18 @@ class MASUPEnv(EventDrivenEnv):
                 + [1, idleness_upper_bound, self.T_time, self.world.num_nodes]
             )
         elif self.role_ifm == "decision":
+            N = self.world.num_agents
             low = np.array(
-                [0, 0, 0] * self.world.num_agents
+                [0, 0, 0] * N
                 + [0] * self.world.num_nodes
-                + [0, 0, 0, 0, 0]
+                + [0, 0, 0, 0]
+                + [0] * N
             )
             high = np.array(
-                [self.world.num_nodes, self.world.num_nodes, max(self.world.max_edge_length, self.world.waitT)] * self.world.num_agents
+                [self.world.num_nodes, self.world.num_nodes, max(self.world.max_edge_length, self.world.waitT)] * N
                 + [idleness_upper_bound] * self.world.num_nodes
-                + [1, idleness_upper_bound, self.T_time, self.world.num_nodes, self.world.num_agents]
+                + [1, idleness_upper_bound, self.T_time, self.world.num_nodes]
+                + [1] * N
             )
 
         obs = Box(low=low, high=high, dtype=np.float32)
@@ -134,23 +137,15 @@ class MASUPEnv(EventDrivenEnv):
         # 2. 推进物理世界（考虑 T_time 截断）
         result = self._advance_with_T_time()
 
-        # 3. 为本次决策计算每个 agent 的决策序号
+        # 3. 为本次决策计算每个 agent 的决策序号（同节点内随机顺序）
         self._decision_index_map = {}
         node_to_deciders = {}
-        for aid in range(self.world.num_agents):
-            # 只有动作剩余时间为 0 的 agent 才被视为需要决策
-            agents_action_time_left = {aid: self.world.agents[aid].action_remaining for aid in range(self.world.num_agents)}
-            agent_positions = {aid: self.world.agents[aid].position for aid in range(self.world.num_agents)}
-            agents_on_edge = {aid: self.world.agents[aid].state == AgentState.ON_EDGE for aid in range(self.world.num_agents)}
-
-            if float(agents_action_time_left.get(aid, 0.0)) < 1e-9 and not agents_on_edge.get(aid, False):
-                node = agent_positions.get(aid, None)
-                if node is not None:
-                    node_to_deciders.setdefault(node, []).append(aid)
-
-        # 按节点分配有序序号（按 agent_id 升序保证确定性）
+        for aid in self.world.get_ready_agents():
+            node = self.world.get_position(aid)
+            node_to_deciders.setdefault(node, []).append(aid)
         for node, aids in node_to_deciders.items():
-            for idx, aid in enumerate(sorted(aids), start=1):
+            random.shuffle(aids)
+            for idx, aid in enumerate(aids, start=1):
                 self._decision_index_map[aid] = idx
 
         # 4. 计算截断条件
@@ -419,11 +414,15 @@ class MASUPEnv(EventDrivenEnv):
                     + [ready_flag, self.worst_idleness_fromT, self.obs_timer, agent_status.position]
                 )
             elif self.role_ifm == "decision":
-                decision_index = float(self._decision_index_map.get(agent_id, 0)) if hasattr(self, '_decision_index_map') else 0.0
+                N = self.world.num_agents
+                decision_idx = int(self._decision_index_map.get(agent_id, 0)) if hasattr(self, '_decision_index_map') else 0
+                one_hot = [0.0] * N
+                one_hot[decision_idx] = 1.0
                 single_obs = (
                     agent_positions
                     + weighted_idleness
-                    + [ready_flag, self.worst_idleness_fromT, self.obs_timer, agent_status.position, decision_index]
+                    + [ready_flag, self.worst_idleness_fromT, self.obs_timer, agent_status.position]
+                    + one_hot
                 )
 
             single_obs = np.asarray(single_obs, dtype=np.float32)

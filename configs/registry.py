@@ -23,7 +23,7 @@ from configs.training_configs import (
     TrainerConfig, OnPolicyTrainerConfig, OffPolicyTrainerConfig,
 )
 from configs.network_configs import (
-    NetworkConfig, MLPConfig, RNNConfig, QMLPConfig, QRNNConfig, SUNConfig,
+    NetworkConfig, MLPConfig, RNNConfig, QMLPConfig, QRNNConfig, SUNConfig, MPNNConfig,
 )
 from configs.exp_configs import ExperimentConfig
 
@@ -152,6 +152,10 @@ ENV_REGISTRY: Dict[str, Dict[str, str]] = {
         "module": "envs.mdps.nep",
         "class_name": "NEPEnv",
     },
+    "masup_gnn": {
+        "module": "envs.mdps.masup_gnn",
+        "class_name": "MASUPGraphEnv",
+    },
 }
 
 # ---- 网络 (三路独立注册表) ----
@@ -159,6 +163,7 @@ ACTOR_REGISTRY: Dict[str, Dict[str, Any]] = {
     "mlp": {"module": "networks.mlp", "class_name": "ActorMLP", "config_class": MLPConfig},
     "rnn": {"module": "networks.rnn", "class_name": "ActorRNN", "config_class": RNNConfig},
     "sun": {"module": "networks.custom.suns", "class_name": "SUNActor", "config_class": SUNConfig},
+    "mpnn": {"module": "networks.gnn", "class_name": "MPNNActor", "config_class": MPNNConfig},
 }
 
 CRITIC_REGISTRY: Dict[str, Dict[str, Any]] = {
@@ -328,6 +333,8 @@ def create_actor(
             rnn_type=actor_config.rnn_type,
             fc_hidden=actor_config.fc_hidden or None,
         ).to(device)
+    elif isinstance(actor_config, MPNNConfig):
+        return cls(obs_dim=obs_dim, action_dim=action_dim, config=actor_config).to(device)
     else:
         return cls(obs_dim, actor_config.hidden, action_dim).to(device)
 

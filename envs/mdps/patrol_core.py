@@ -264,7 +264,8 @@ class PatrolWorld:
         status.state = AgentState.ON_EDGE
         status.target_node = target_node
         edge_length = self.graph.get_edge_length(current_pos, target_node)
-        status.action_remaining = float(edge_length)
+        # 行驶时间 = 距离 / 速度
+        status.action_remaining = float(edge_length) / max(status.speed, 1e-6)
         status.last_position = current_pos
         
         # 离开当前节点
@@ -371,7 +372,8 @@ class PatrolWorld:
         for agent_id, status in self.agents.items():
             if status.state == AgentState.ON_EDGE:
                 edge_len = self.graph.get_edge_length(status.position, status.target_node)
-                progress = 1.0 - status.action_remaining / edge_len if edge_len > 0 else 1.0
+                travel_time = edge_len / max(status.speed, 1e-6)
+                progress = 1.0 - status.action_remaining / travel_time if travel_time > 0 else 1.0
                 progress = max(0.0, min(1.0, progress))
                 snapshot[agent_id] = (status.position, status.target_node, progress)
             else:

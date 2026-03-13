@@ -62,3 +62,16 @@ class SUNConfig(NetworkConfig):
     f1_hidden: int = 4
     f2_hidden: int = 6
     num_layers: int = 1       # k: GNN 堆叠次数，增大可扩展感知范围
+
+
+@dataclass(kw_only=True)
+class MPNNConfig(NetworkConfig):
+    """MPNN Actor 参数，用于 MPNNActor"""
+    graph_path: str
+    agent_num: int
+    role_imformation: str = "agent-index"
+    hidden_dim: int = 64
+    gnn_layers: int = 2
+    actor_mlp_layers: int = 1
+    gnn_mlp_layers: int = 2
+    mlp_activation: str = "silu"

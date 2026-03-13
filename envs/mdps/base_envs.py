@@ -42,6 +42,11 @@ class BaseEnv(ParallelEnv):
         PettingZoo 标准：必须为相同 agent name 返回相同值
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def state(self) -> np.ndarray:
+        """为 MAPPO/QMIX 等算法提供全局观测。ParallelEnv 子类必须实现。"""
+        pass
     
     @property
     def observation_spaces(self) -> Dict[str, gymnasium.spaces.Space]:

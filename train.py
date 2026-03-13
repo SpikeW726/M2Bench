@@ -571,7 +571,7 @@ def train(config: ExperimentConfig):
         if net is None:
             return None
         d = {"type": type(net).__name__, "input_dim": input_dim, "output_dim": output_dim}
-        if hasattr(net, "num_nodes"):
+        if hasattr(net, "num_nodes") and hasattr(net, "f1") and hasattr(net, "f2"):
             d["num_nodes"] = net.num_nodes
             d["node_feat_dim"] = net.node_feat_dim
             d["f1_hidden"] = net.f1.fc1.out_features
