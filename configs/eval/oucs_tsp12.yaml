@@ -1,0 +1,11 @@
+env_type: oucs
+
+env:
+  graph_path: graphs/simple_TSP_12.json
+  enable_wait: false
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 300
+  custom_configs:
+    truncate_by_time: true
+    penalised_factor: 1.5

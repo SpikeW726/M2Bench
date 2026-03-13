@@ -25,8 +25,10 @@ class QTablePolicy:
             lambda: np.zeros(action_dim, dtype=np.float64)
         )
 
-    def _obs_to_key(self, obs: np.ndarray) -> tuple:
-        return tuple(obs.flat)
+    def _obs_to_key(self, obs) -> tuple:
+        if isinstance(obs, np.ndarray):
+            return tuple(obs.flat)
+        return (obs,)  # 标量直接包装成单元素 tuple
 
     def get_q(self, obs: np.ndarray) -> np.ndarray:
         """返回 Q(s, ·)，未见状态初始化为零向量。"""

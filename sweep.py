@@ -54,6 +54,11 @@ def apply_sweep_overrides(config: ExperimentConfig, sweep_cfg: dict):
             setattr(config.training, key, value)
         elif key in top_fields:
             setattr(config, key, value)
+        elif key.startswith("custom_configs."):
+            sub_key = key[len("custom_configs."):]
+            if config.env.custom_configs is None:
+                config.env.custom_configs = {}
+            config.env.custom_configs[sub_key] = value
 
 
 # =============================================================================
@@ -74,6 +79,7 @@ def sweep_train():
     3. 用 wandb.config 中的 sweep 参数覆盖
     4. 设置有意义的 run name（算法_地图_时间戳_runID）
     5. 调用 train.train()
+    6. 训练结束后将 save_dir 写入 wandb summary，供 eval_best_runs 查询
     """
     try:
         wandb.init()
@@ -98,11 +104,64 @@ def sweep_train():
 
         train(config)
 
+        # 训练完成后记录 save_dir，供 eval_best_runs 事后查询
+        final_dir = str(config.save_dir / "final")
+        wandb.run.summary["save_dir"] = final_dir
+        print(f"[Sweep] Recorded save_dir={final_dir}")
+
     except Exception as e:
         print(f"[Sweep] Error during training: {e}")
         import traceback
         traceback.print_exc()
         raise
+
+
+# =============================================================================
+#                          Sweep 批量评估
+# =============================================================================
+
+def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: int = 5):
+    """用 wandb API 找出最优 N 个 trial，批量评估。
+
+    Args:
+        sweep_id: WandB sweep ID。
+        project: WandB project 名称。
+        eval_config_path: 评估 YAML 路径。
+        top_n: 取最优 N 个 trial。
+    """
+    api = wandb.Api()
+    sweep = api.sweep(f"{project}/{sweep_id}")
+    metric_name = sweep.config.get("metric", {}).get("name", "env/wi")
+    goal = sweep.config.get("metric", {}).get("goal", "minimize")
+
+    runs = [r for r in sweep.runs if r.state == "finished"]
+    if not runs:
+        print(f"[Eval] No finished runs found in sweep {sweep_id}")
+        return
+
+    reverse = (goal == "maximize")
+    runs_sorted = sorted(
+        runs,
+        key=lambda r: r.summary.get(metric_name, float("inf") if not reverse else float("-inf")),
+        reverse=reverse,
+    )
+    best = runs_sorted[:top_n]
+
+    print(f"\n[Eval] Evaluating top-{top_n} runs by {metric_name} ({goal})")
+    from evaluators.test import run_eval_from_config
+    for i, run in enumerate(best):
+        model_dir = run.summary.get("save_dir")
+        if not model_dir:
+            print(f"  [Skip] Run {run.id}: no save_dir in summary")
+            continue
+        metric_val = run.summary.get(metric_name, "?")
+        print(f"\n  [{i+1}/{top_n}] Run {run.id} | {metric_name}={metric_val} | {model_dir}")
+        try:
+            run_eval_from_config(model_dir, eval_config_path)
+        except Exception as e:
+            print(f"  [Error] Run {run.id} eval failed: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 # =============================================================================
@@ -200,6 +259,10 @@ def main():
                         help="Sweep method (仅创建时生效)")
     parser.add_argument("--sweep-config", type=str, default=None,
                         help="Sweep 配置 YAML 文件路径 (仅创建时生效)")
+    parser.add_argument("--eval-config", type=str, default=None,
+                        help="评估 YAML 路径；提供则 sweep 结束后评估最优 N 个 trial")
+    parser.add_argument("--top-n", type=int, default=5,
+                        help="sweep 结束后评估最优的 N 个 trial（默认 5）")
 
     args = parser.parse_args()
     _BASE_CONFIG_PATH = args.base_config
@@ -212,6 +275,8 @@ def main():
         print(f"[Main] Project: {project}")
         print(f"[Main] Will run {args.count} trials in this agent")
         wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
+        if args.eval_config:
+            eval_best_runs(sweep_id, project, args.eval_config, top_n=args.top_n)
 
     elif args.create_only:
         # 模式 1: 仅创建 sweep
@@ -232,6 +297,8 @@ def main():
         print(f"[Main] Created sweep: {sweep_id} in project '{project}', "
               f"starting agent with {args.count} trials")
         wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
+        if args.eval_config:
+            eval_best_runs(sweep_id, project, args.eval_config, top_n=args.top_n)
 
 
 if __name__ == "__main__":

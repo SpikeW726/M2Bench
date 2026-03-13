@@ -8,6 +8,21 @@
 
 模型重建信息来自模型目录的 config.yaml (训练时自动保存);
 环境类型和参数来自 eval YAML。
+
+用法示例:
+  1) 基础评估
+     python evaluators/test.py --model models/iql-s4r1-TSP12/2026-03-01_17-40-36/final \
+                               --env_config configs/eval/s4r1_tsp12.yaml
+
+  2) 生成最后一个 episode 动画
+     python evaluators/test.py --model models/mappo-masup-TSP12/2026-03-01_10-20-30/final \
+                               --env_config configs/eval/masup_tsp12.yaml \
+                               --animation --max_frames 500
+
+  3) 仅保存图，不弹窗
+     python evaluators/test.py --model models/xxx/final \
+                               --env_config configs/eval/suns_tsp12.yaml \
+                               --save_plot evaluators/results/eval.png --no_show
 """
 import os
 import sys
@@ -416,6 +431,49 @@ def test_qtable_policy(
             )
 
     return episode_metrics
+
+
+# =============================================================================
+#                     自动化评估入口（供 train.py / sweep.py 调用）
+# =============================================================================
+
+def run_eval_from_config(model_dir: str, eval_config_path: str):
+    """从 eval yaml 读取所有评估参数，自动调用对应评估函数。
+
+    eval yaml 需包含 env_type、env 段（环境参数），以及可选的 eval 段：
+        eval:
+          num_episodes: 10
+          max_steps: 1000
+          save_plot: evaluators/results/auto_eval.png
+          show_plot: false
+          animation: false
+          event_driven: true
+          max_frames: null
+
+    若未提供 eval 段，则使用各评估函数的默认参数。
+    """
+    with open(eval_config_path) as f:
+        raw = yaml.safe_load(f)
+    algo_name = raw.get("algo_name", None)
+    eval_params = raw.get("eval", {})
+
+    # animation 字段在 CLI 中叫 record_animation，统一映射
+    if "animation" in eval_params:
+        eval_params.setdefault("record_animation", eval_params.pop("animation"))
+
+    print(f"\n[Eval] model_dir={model_dir}, config={eval_config_path}")
+    if algo_name == "qtable":
+        test_qtable_policy(
+            model_dir=model_dir,
+            env_config_path=eval_config_path,
+            **eval_params,
+        )
+    else:
+        test_trained_policy(
+            model_dir=model_dir,
+            env_config_path=eval_config_path,
+            **eval_params,
+        )
 
 
 # =============================================================================

@@ -52,4 +52,4 @@ training:
 # ---- Q-network ----
 q_network:
   hidden: [128, 84]
-  dueling: true
+  dueling: True

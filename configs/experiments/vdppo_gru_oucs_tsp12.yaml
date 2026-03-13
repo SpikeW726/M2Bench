@@ -46,7 +46,7 @@ training:
   num_envs: 12
   use_subproc: true
   num_steps: 2048
-  max_iterations: 5000
+  max_iterations: 1500
   save_interval: 800
   minibatch_size: 4096
   update_epochs: 5
@@ -60,4 +60,4 @@ actor:
 
 q_network:
   hidden: [64, 64]
-  dueling: false
+  dueling: True

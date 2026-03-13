@@ -433,14 +433,23 @@ def _train_qtable(config: ExperimentConfig):
 #                              主训练函数
 # =============================================================================
 
-def train(config: ExperimentConfig):
+def train(config: ExperimentConfig, eval_config_path: str = None):
     """
     根据 ExperimentConfig 执行完整训练流程。
 
     流程：环境 → 维度推断 → 网络 → 预训练加载 → Policy → 算法 → Collector → Trainer → 训练
+
+    Args:
+        config: 实验配置。
+        eval_config_path: 评估 YAML 路径；提供则训练结束后自动评估最终模型。
     """
     if config.algo_name == "qtable":
         _train_qtable(config)
+        if eval_config_path:
+            from evaluators.test import run_eval_from_config
+            qtable_dir = config.save_dir / "final"
+            print(f"\n[Train] Starting auto-eval from {eval_config_path}")
+            run_eval_from_config(str(qtable_dir), eval_config_path)
         return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -682,6 +691,12 @@ def train(config: ExperimentConfig):
             wandb.finish()
     vec_env.close()
 
+    # 训练结束后自动评估
+    if eval_config_path:
+        from evaluators.test import run_eval_from_config
+        print(f"\n[Train] Starting auto-eval from {eval_config_path}")
+        run_eval_from_config(str(final_dir), eval_config_path)
+
 
 # =============================================================================
 #                              入口
@@ -696,8 +711,14 @@ if __name__ == "__main__":
         type=str,
         help="YAML 配置文件路径 (例: configs/experiments/mappo_tsp12_imi.yaml)",
     )
+    parser.add_argument(
+        "--eval-config",
+        type=str,
+        default=None,
+        help="评估配置 YAML 路径；提供则训练结束后自动评估最终模型",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     print(f"[Train] Loaded config from {args.config}")
-    train(cfg)
+    train(cfg, eval_config_path=args.eval_config)
