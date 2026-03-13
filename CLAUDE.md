@@ -327,6 +327,55 @@ Actor / Critic / Q-network 完全解耦，可以任意组合（如 RNN actor + M
 
 MLP Q-network 路径通过 `is_recurrent` 条件守卫完全不受影响。
 
+## 模型参数保存与读取
+
+### 保存流程
+
+训练结束（或 checkpoint 触发）时，`train.py` 调用 `net.get_config_dict(input_dim, output_dim)` 获得包含完整重建信息的 config dict，由 `utils/model_io.save_model` 写入 `model_dir/config.yaml`；权重写入 `policy.pt` / `critic.pt`。
+
+```
+train.py
+  └── _make_net_config_dict(net, input_dim, output_dim)
+        └── net.get_config_dict(input_dim, output_dim)  ← 网络类实现
+              └── save_model → config.yaml + policy.pt / critic.pt
+```
+
+### 读取流程
+
+评估时 `evaluators/test.py` 调用 `load_policy_for_eval`，读取 `config.yaml`，通过 `registry[type].from_config_dict(cfg)` 重建网络结构，再加载 `policy.pt` 权重。
+
+```
+evaluators/test.py
+  └── load_policy_for_eval(model_dir, ...)
+        ├── 读取 config.yaml
+        ├── _get_class_registry()[type].from_config_dict(cfg)  ← 网络类实现
+        └── 加载 policy.pt 权重
+```
+
+### 网络类必须实现的协议
+
+所有参与 checkpoint 保存与评估加载的网络类必须实现：
+
+```python
+def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+    """返回可重建该网络的完整配置 dict，必须包含 type、input_dim、output_dim。"""
+
+@classmethod
+def from_config_dict(cls, cfg: dict) -> nn.Module:
+    """从 get_config_dict 产出的 cfg 重建网络实例。"""
+```
+
+同时必须在 `utils/model_io._get_class_registry` 中注册（类名 → 类对象映射）。
+
+### 各网络类实现位置
+
+| 网络类 | 文件 |
+|--------|------|
+| ActorMLP, CriticMLP, QMLP | `networks/mlp.py` |
+| ActorRNN, CriticRNN, QRNN | `networks/rnn.py` |
+| SUNActor, SUNCritic | `networks/custom/suns.py` |
+| MPNNActor | `networks/gnn.py` |
+
 ## Core Classes
 
 ### PatrolWorld (`envs/mdps/patrol_core.py`)
@@ -414,6 +463,9 @@ JSON files in `graphs/` directory:
 2. **info['active_mask']**: Required in all environments to mark which agents need decisions
 3. **Sequential heuristic decisions**: Agent 0 decides first, intention recorded, then Agent 1, etc.
 4. **HuggingFace-style model format**: `model_dir/` contains `config.yaml`, `policy.pt`, `critic.pt`
+5. **训练与评估闭环**：新增任何环境类或网络类时，必须同时考虑训练和评估两个环节。
+   - **新环境**：在 `configs/registry.py` 的 `ENV_REGISTRY` 注册，并在 `configs/eval/` 下提供对应的 env_config YAML，确保 `evaluators/test.py` 能正确加载。
+   - **新网络**：实现 `get_config_dict(input_dim, output_dim)` 和 `from_config_dict(cls, cfg)` 两个方法，并在 `utils/model_io._get_class_registry` 中注册，否则 checkpoint 无法在评估时重建网络。如不遵守，`train.py` 和 `imitation_trainer` 会在 checkpoint 保存时抛出 `NotImplementedError`。
 
 ## Algorithm Factory System
 

@@ -467,14 +467,11 @@ class imi_trainer:
         actor_dir = self.save_dir / f"{self.run_name}_actor_best"
         actor_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save config
+        # 通过 get_config_dict 协议序列化网络参数
+        actor_cfg = self.actor.get_config_dict(self.actor.input_dim, self.actor.output_dim)
+
         config = {
-            'actor': {
-                'type': self.actor.__class__.__name__,
-                'input_dim': self.actor.input_dim,
-                'hidden_sizes': self.actor.hidden_sizes,
-                'output_dim': self.actor.output_dim,
-            },
+            'actor': actor_cfg,
             'extra': {
                 'actor_loss': actor_loss,
                 'actor_accuracy': actor_acc,
@@ -490,21 +487,10 @@ class imi_trainer:
         }
         with open(actor_dir / 'config.yaml', 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
-        
+
         # Save weights
         torch.save(self.actor.state_dict(), actor_dir / 'policy.pt')
         print(f"[ImiTrainer] Saved best actor to {actor_dir}")
-        
-        # Also save legacy format for backward compatibility
-        legacy_checkpoint = {
-            "actor_state_dict": self.actor.state_dict(),
-            "hidden_sizes": self.actor.hidden_sizes,
-            "actor_loss": actor_loss,
-            "actor_accuracy": actor_acc,
-            "stopped_iteration": stopped_iter,
-            "run_name": self.run_name,
-        }
-        torch.save(legacy_checkpoint, self.save_dir / f"{self.run_name}_actor_best.pt")
     
     def _save_checkpoint(self, final_actor_loss: float, final_critic_loss: float, 
                         final_acc: float, total_iterations: int):
@@ -513,20 +499,13 @@ class imi_trainer:
         ckpt_dir = self.save_dir / f"{self.run_name}_final"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save config
+        # 通过 get_config_dict 协议序列化网络参数（所有网络类必须实现此协议）
+        actor_cfg = self.actor.get_config_dict(self.actor.input_dim, self.actor.output_dim)
+        critic_cfg = self.critic.get_config_dict(self.critic.input_dim, self.critic.output_dim)
+
         config = {
-            'actor': {
-                'type': self.actor.__class__.__name__,
-                'input_dim': self.actor.input_dim,
-                'hidden_sizes': self.actor.hidden_sizes,
-                'output_dim': self.actor.output_dim,
-            },
-            'critic': {
-                'type': self.critic.__class__.__name__,
-                'input_dim': self.critic.input_dim,
-                'hidden_sizes': self.critic.hidden_sizes,
-                'output_dim': self.critic.output_dim,
-            },
+            'actor': actor_cfg,
+            'critic': critic_cfg,
             'extra': {
                 'final_actor_loss': final_actor_loss,
                 'final_critic_loss': final_critic_loss,
@@ -543,25 +522,11 @@ class imi_trainer:
         }
         with open(ckpt_dir / 'config.yaml', 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
-        
+
         # Save weights
         torch.save(self.actor.state_dict(), ckpt_dir / 'policy.pt')
         torch.save(self.critic.state_dict(), ckpt_dir / 'critic.pt')
         print(f"[ImiTrainer] Saved final checkpoint to {ckpt_dir}")
-        
-        # Also save legacy format for backward compatibility
-        legacy_checkpoint = {
-            "actor_state_dict": self.actor.state_dict(),
-            "critic_state_dict": self.critic.state_dict(),
-            "actor_hidden_sizes": self.actor.hidden_sizes,
-            "critic_hidden_sizes": self.critic.hidden_sizes,
-            "final_actor_loss": final_actor_loss,
-            "final_critic_loss": final_critic_loss,
-            "final_accuracy": final_acc,
-            "total_iterations": total_iterations,
-            "run_name": self.run_name,
-        }
-        torch.save(legacy_checkpoint, self.save_dir / f"{self.run_name}.pt")
 
 if __name__ == "__main__":
     # 切换工作目录到项目根目录 (确保配置文件路径正确)

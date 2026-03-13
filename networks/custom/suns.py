@@ -25,6 +25,7 @@ class SUNBase(nn.Module):
     def __init__(self, obs_dim, num_nodes, node_feat_dim=2,
                  f1_hidden=4, f2_hidden=6, num_layers=1):
         super().__init__()
+        self.obs_dim = obs_dim
         self.num_nodes = num_nodes
         self.node_feat_dim = node_feat_dim
         self.num_layers = num_layers
@@ -86,6 +87,29 @@ class SUNActor(SUNBase):
         node_feat, weight_mat = self._parse_obs(obs)
         return self._compute_utilities(node_feat, weight_mat, apply_tanh=True)
 
+    def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+        return {
+            "type": type(self).__name__,
+            "input_dim": input_dim,
+            "output_dim": output_dim,
+            "num_nodes": self.num_nodes,
+            "node_feat_dim": self.node_feat_dim,
+            "f1_hidden": self.f1.fc1.out_features,
+            "f2_hidden": self.f2.fc1.out_features,
+            "num_layers": self.num_layers,
+        }
+
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "SUNActor":
+        return cls(
+            obs_dim=cfg["input_dim"],
+            num_nodes=cfg["num_nodes"],
+            node_feat_dim=cfg.get("node_feat_dim", 2),
+            f1_hidden=cfg.get("f1_hidden", 4),
+            f2_hidden=cfg.get("f2_hidden", 6),
+            num_layers=cfg.get("num_layers", 1),
+        )
+
 
 class SUNCritic(SUNBase):
     """SUN Critic: 1D max-pool → (B, 1) value。"""
@@ -99,3 +123,26 @@ class SUNCritic(SUNBase):
         node_feat, weight_mat = self._parse_obs(obs)
         utilities = self._compute_utilities(node_feat, weight_mat, apply_tanh=False)
         return utilities.max(dim=-1, keepdim=True)[0]  # (B, 1)
+
+    def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+        return {
+            "type": type(self).__name__,
+            "input_dim": input_dim,
+            "output_dim": output_dim,
+            "num_nodes": self.num_nodes,
+            "node_feat_dim": self.node_feat_dim,
+            "f1_hidden": self.f1.fc1.out_features,
+            "f2_hidden": self.f2.fc1.out_features,
+            "num_layers": self.num_layers,
+        }
+
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "SUNCritic":
+        return cls(
+            obs_dim=cfg["input_dim"],
+            num_nodes=cfg["num_nodes"],
+            node_feat_dim=cfg.get("node_feat_dim", 2),
+            f1_hidden=cfg.get("f1_hidden", 4),
+            f2_hidden=cfg.get("f2_hidden", 6),
+            num_layers=cfg.get("num_layers", 1),
+        )

@@ -46,6 +46,7 @@ class _BaseRNN(nn.Module):
         self.output_dim = output_dim
         self.num_layers = num_layers
         self.rnn_type = rnn_type.lower()
+        self.fc_hidden: List[int] = list(fc_hidden) if fc_hidden else []
 
         # 构建编码层: fc_hidden 为空时退化为 [hidden_size]
         fc_sizes = list(fc_hidden) if fc_hidden else [hidden_size]
@@ -135,6 +136,17 @@ class _BaseRNN(nn.Module):
         output = output.view(seq_len, batch, -1)
         return output, final_hidden
 
+    def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+        return {
+            "type": type(self).__name__,
+            "input_dim": input_dim,
+            "output_dim": output_dim,
+            "hidden_size": self.hidden_size,
+            "num_layers": self.num_layers,
+            "rnn_type": self.rnn_type,
+            "fc_hidden": self.fc_hidden,
+        }
+
 
 # =============================================================================
 #                       具体 RNN 网络类
@@ -149,6 +161,17 @@ class ActorRNN(_BaseRNN):
                          num_layers, rnn_type, output_std=0.01,
                          fc_hidden=fc_hidden)
 
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "ActorRNN":
+        return cls(
+            input_dim=cfg["input_dim"],
+            hidden_size=cfg["hidden_size"],
+            output_dim=cfg["output_dim"],
+            num_layers=cfg.get("num_layers", 1),
+            rnn_type=cfg.get("rnn_type", "gru"),
+            fc_hidden=cfg.get("fc_hidden") or None,
+        )
+
 
 class CriticRNN(_BaseRNN):
     """RNN Critic (Value Function): output_dim=1, output_std=1.0。"""
@@ -158,6 +181,17 @@ class CriticRNN(_BaseRNN):
         super().__init__(input_dim, hidden_size, output_dim,
                          num_layers, rnn_type, output_std=1.0,
                          fc_hidden=fc_hidden)
+
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "CriticRNN":
+        return cls(
+            input_dim=cfg["input_dim"],
+            hidden_size=cfg["hidden_size"],
+            output_dim=cfg.get("output_dim", 1),
+            num_layers=cfg.get("num_layers", 1),
+            rnn_type=cfg.get("rnn_type", "gru"),
+            fc_hidden=cfg.get("fc_hidden") or None,
+        )
 
 
 class QRNN(_BaseRNN):
@@ -184,3 +218,20 @@ class QRNN(_BaseRNN):
             a = self.a_stream(rnn_out)
             return v + a - a.mean(dim=-1, keepdim=True)
         return self.fc_out(rnn_out)
+
+    def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+        cfg = super().get_config_dict(input_dim, output_dim)
+        cfg["dueling"] = self.dueling
+        return cfg
+
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "QRNN":
+        return cls(
+            input_dim=cfg["input_dim"],
+            hidden_size=cfg["hidden_size"],
+            output_dim=cfg["output_dim"],
+            num_layers=cfg.get("num_layers", 1),
+            rnn_type=cfg.get("rnn_type", "gru"),
+            dueling=cfg.get("dueling", False),
+            fc_hidden=cfg.get("fc_hidden") or None,
+        )

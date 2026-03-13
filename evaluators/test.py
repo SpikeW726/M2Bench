@@ -229,6 +229,9 @@ def test_qtable_policy(
     num_episodes: int = 5,
     save_plot: str = None,
     show_plot: bool = True,
+    record_animation: bool = False,
+    event_driven: bool = True,
+    max_frames: int = None,
 ):
     """评估训练好的 Q-table 策略。
 
@@ -241,6 +244,9 @@ def test_qtable_policy(
         num_episodes: 评估 episode 数
         save_plot: 指标图保存路径（None = 不保存）
         show_plot: 是否弹窗显示图表
+        record_animation: 是否录制最后一个 episode 的动画
+        event_driven: True=事件驱动动画，False=固定步长动画
+        max_frames: 动画最大帧数限制
     """
     from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
     from configs.algo_configs import QTableParams
@@ -294,11 +300,19 @@ def test_qtable_policy(
     episode_metrics = []
     metrics_history = []
     episode_times = []
+    anim_positions_history = []
+    anim_time_intervals = []
 
     for ep in range(num_episodes):
         obs, infos = env.reset()
         truncated = False
         terminated = False
+
+        is_last = (ep == num_episodes - 1)
+        record = record_animation and is_last
+        if record:
+            anim_positions_history = [env.world.snapshot_agent_positions()]
+            anim_time_intervals = []
 
         while not (truncated or terminated):
             if is_parallel:
@@ -337,6 +351,10 @@ def test_qtable_policy(
                     action = int(np.argmax(pol.get_q(obs)))
                 obs, _, terminated, truncated, infos = env.step(action)
 
+            if record:
+                anim_time_intervals.append(env.last_time_interval)
+                anim_positions_history.append(env.world.snapshot_agent_positions())
+
         final_metrics = env.world.current_metrics
         episode_metrics.append(final_metrics)
         episode_times.append(final_metrics.time)
@@ -356,9 +374,9 @@ def test_qtable_policy(
         print(f"{metric_name}: {np.mean(values):.4f} ± {np.std(values):.4f}")
 
     # ---- 6. 可视化 ----
+    save_dir = str(Path(save_plot).parent) if save_plot else 'evaluators/results'
     if metrics_history:
         print(f"\n=== Generating aggregated visualization ===")
-        save_dir = str(Path(save_plot).parent) if save_plot else 'evaluators/results'
         aggregated = aggregate_episode_metrics(metrics_history)
         avg_time = np.mean(episode_times)
         subtitle = f"Graph: {graph_name} | Agents: {num_agents} | Avg Time: {avg_time:.2f}s"
@@ -369,6 +387,33 @@ def test_qtable_policy(
             save_path=save_plot,
             show=show_plot,
         )
+
+    # ---- 7. 动画 ----
+    if record_animation and anim_positions_history:
+        print(f"\n=== Generating animation for last episode ===")
+        algorithm_name = "qtable"
+        if event_driven:
+            from utils.vis_utils import create_event_driven_animation
+            create_event_driven_animation(
+                map_graph=env.world.graph,
+                agent_positions_history=anim_positions_history,
+                time_intervals=anim_time_intervals,
+                algorithm_name=algorithm_name,
+                map_name=graph_name,
+                save_dir=save_dir,
+                max_frames=max_frames,
+            )
+        else:
+            from utils.vis_utils import create_animation
+            create_animation(
+                map_graph=env.world.graph,
+                agent_positions_history=anim_positions_history,
+                total_frames=len(anim_positions_history),
+                algorithm_name=algorithm_name,
+                map_name=graph_name,
+                save_dir=save_dir,
+                max_frames=max_frames,
+            )
 
     return episode_metrics
 
@@ -416,6 +461,9 @@ if __name__ == '__main__':
             num_episodes=args.num_episodes,
             save_plot=args.save_plot,
             show_plot=not args.no_show,
+            record_animation=args.animation,
+            event_driven=not args.no_event_driven,
+            max_frames=args.max_frames,
         )
     else:
         test_trained_policy(

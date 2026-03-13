@@ -44,10 +44,11 @@ def _convert_to_native_types(obj: Any) -> Any:
 
 
 def _get_class_registry() -> Dict[str, type]:
-    """延迟导入，构建网络类名 → 类对象的映射。"""
+    """延迟导入，构建网络类名 → 类对象的映射。新增网络时在此注册。"""
     from networks.mlp import ActorMLP, CriticMLP, QMLP
     from networks.rnn import ActorRNN, CriticRNN, QRNN
     from networks.custom.suns import SUNActor, SUNCritic
+    from networks.gnn import MPNNActor
 
     return {
         "ActorMLP": ActorMLP,
@@ -58,51 +59,27 @@ def _get_class_registry() -> Dict[str, type]:
         "QRNN": QRNN,
         "SUNActor": SUNActor,
         "SUNCritic": SUNCritic,
+        "MPNNActor": MPNNActor,
     }
 
 
 def _build_network_from_config(net_cfg: dict, registry: Dict[str, type]) -> nn.Module:
     """根据 config dict 实例化网络。
 
-    MLP 使用 hidden_sizes；RNN 使用 hidden_size / num_layers / rnn_type；
-    SUN 使用 num_nodes / node_feat_dim / f1_hidden / f2_hidden。
+    每个网络类须实现 from_config_dict(cls, cfg) 类方法，此处仅做调度。
     """
     net_type = net_cfg["type"]
     cls = registry.get(net_type)
     if cls is None:
-        raise ValueError(f"Unknown network type: {net_type}")
-
-    if "num_nodes" in net_cfg:
-        return cls(
-            obs_dim=net_cfg["input_dim"],
-            num_nodes=net_cfg["num_nodes"],
-            node_feat_dim=net_cfg.get("node_feat_dim", 2),
-            f1_hidden=net_cfg.get("f1_hidden", 4),
-            f2_hidden=net_cfg.get("f2_hidden", 6),
-            num_layers=net_cfg.get("num_layers", 1),
+        raise ValueError(
+            f"Unknown network type: '{net_type}'. "
+            f"Register it in utils/model_io._get_class_registry."
         )
-    elif "hidden_sizes" in net_cfg:
-        kwargs = dict(
-            input_dim=net_cfg["input_dim"],
-            hidden_sizes=net_cfg["hidden_sizes"],
-            output_dim=net_cfg["output_dim"],
+    if not hasattr(cls, "from_config_dict"):
+        raise NotImplementedError(
+            f"{cls.__name__} must implement from_config_dict(cls, cfg) for evaluation loading."
         )
-        if "dueling" in net_cfg:
-            kwargs["dueling"] = net_cfg["dueling"]
-        return cls(**kwargs)
-    else:
-        kwargs = dict(
-            input_dim=net_cfg["input_dim"],
-            hidden_size=net_cfg["hidden_size"],
-            output_dim=net_cfg["output_dim"],
-            num_layers=net_cfg.get("num_layers", 1),
-            rnn_type=net_cfg.get("rnn_type", "gru"),
-        )
-        if "dueling" in net_cfg:
-            kwargs["dueling"] = net_cfg["dueling"]
-        if net_cfg.get("fc_hidden"):
-            kwargs["fc_hidden"] = net_cfg["fc_hidden"]
-        return cls(**kwargs)
+    return cls.from_config_dict(net_cfg)
 
 
 # =========================================================================
@@ -191,17 +168,15 @@ def load_model(
     actor = None
     actor_config = config.get('actor', {})
     if actor_config:
-        if actor_class is None:
-            actor_type = actor_config.get('type', 'ActorMLP')
-            actor_class = registry.get(actor_type)
-            if actor_class is None:
-                raise ValueError(f"Unknown actor type: {actor_type}")
-
-        actor = actor_class(
-            input_dim=actor_config['input_dim'],
-            hidden_sizes=actor_config['hidden_sizes'],
-            output_dim=actor_config['output_dim'],
-        )
+        if actor_class is not None:
+            # 调用方显式传入类时，仍走旧路径（向后兼容）
+            actor = actor_class(
+                input_dim=actor_config['input_dim'],
+                hidden_sizes=actor_config['hidden_sizes'],
+                output_dim=actor_config['output_dim'],
+            )
+        else:
+            actor = _build_network_from_config(actor_config, registry)
 
         policy_path = model_dir / 'policy.pt'
         if policy_path.exists():
@@ -223,17 +198,14 @@ def load_model(
     critic_config = config.get('critic', {})
     critic_path = model_dir / 'critic.pt'
     if critic_config and critic_path.exists():
-        if critic_class is None:
-            critic_type = critic_config.get('type', 'CriticMLP')
-            critic_class = registry.get(critic_type)
-            if critic_class is None:
-                raise ValueError(f"Unknown critic type: {critic_type}")
-
-        critic = critic_class(
-            input_dim=critic_config['input_dim'],
-            hidden_sizes=critic_config['hidden_sizes'],
-            output_dim=critic_config.get('output_dim', 1),
-        )
+        if critic_class is not None:
+            critic = critic_class(
+                input_dim=critic_config['input_dim'],
+                hidden_sizes=critic_config['hidden_sizes'],
+                output_dim=critic_config.get('output_dim', 1),
+            )
+        else:
+            critic = _build_network_from_config(critic_config, registry)
 
         state_dict = torch.load(critic_path, map_location=device, weights_only=True)
         critic.load_state_dict(state_dict)

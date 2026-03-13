@@ -110,6 +110,12 @@ class MPNNActor(nn.Module):
         self.h_dim = config.hidden_dim
         self.agent_num = config.agent_num
         self.role_ifm = config.role_imformation or "agent-index"
+        # 保存 config 字段供 get_config_dict 序列化
+        self._graph_path = config.graph_path
+        self._gnn_layers = config.gnn_layers
+        self._actor_mlp_layers = config.actor_mlp_layers
+        self._gnn_mlp_layers = config.gnn_mlp_layers
+        self._mlp_activation = config.mlp_activation
 
         graph = Graph(config.graph_path)
         self.static_node_num = len(graph.nodes)
@@ -228,3 +234,33 @@ class MPNNActor(nn.Module):
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         actor_input = self._compute_joint_embedding(obs)
         return self.actor_head(actor_input)
+
+    def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+        return {
+            "type": type(self).__name__,
+            "input_dim": input_dim,
+            "output_dim": output_dim,
+            "graph_path": self._graph_path,
+            "agent_num": self.agent_num,
+            "role_imformation": self.role_ifm,
+            "hidden_dim": self.h_dim,
+            "gnn_layers": self._gnn_layers,
+            "actor_mlp_layers": self._actor_mlp_layers,
+            "gnn_mlp_layers": self._gnn_mlp_layers,
+            "mlp_activation": self._mlp_activation,
+        }
+
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "MPNNActor":
+        from configs.network_configs import MPNNConfig
+        mpnn_config = MPNNConfig(
+            graph_path=cfg["graph_path"],
+            agent_num=cfg["agent_num"],
+            role_imformation=cfg.get("role_imformation", "agent-index"),
+            hidden_dim=cfg.get("hidden_dim", 64),
+            gnn_layers=cfg.get("gnn_layers", 2),
+            actor_mlp_layers=cfg.get("actor_mlp_layers", 1),
+            gnn_mlp_layers=cfg.get("gnn_mlp_layers", 2),
+            mlp_activation=cfg.get("mlp_activation", "silu"),
+        )
+        return cls(obs_dim=cfg["input_dim"], action_dim=cfg["output_dim"], config=mpnn_config)

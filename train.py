@@ -570,20 +570,12 @@ def train(config: ExperimentConfig):
     def _make_net_config_dict(net, input_dim, output_dim):
         if net is None:
             return None
-        d = {"type": type(net).__name__, "input_dim": input_dim, "output_dim": output_dim}
-        if hasattr(net, "num_nodes") and hasattr(net, "f1") and hasattr(net, "f2"):
-            d["num_nodes"] = net.num_nodes
-            d["node_feat_dim"] = net.node_feat_dim
-            d["f1_hidden"] = net.f1.fc1.out_features
-            d["f2_hidden"] = net.f2.fc1.out_features
-            d["num_layers"] = net.num_layers
-        elif hasattr(net, "hidden_sizes"):
-            d["hidden_sizes"] = net.hidden_sizes
-        elif hasattr(net, "hidden_size"):
-            d["hidden_size"] = net.hidden_size
-            d["num_layers"] = net.num_layers
-            d["rnn_type"] = net.rnn_type
-        return d
+        if hasattr(net, "get_config_dict"):
+            return net.get_config_dict(input_dim, output_dim)
+        raise NotImplementedError(
+            f"{type(net).__name__} must implement get_config_dict(input_dim, output_dim) "
+            f"and from_config_dict(cls, cfg) to support checkpoint saving/loading."
+        )
 
     actor_config_dict = _make_net_config_dict(actor_net, dims["obs_dim"], dims["action_dim"])
     critic_config_dict = _make_net_config_dict(critic_net, dims["critic_input_dim"], 1)

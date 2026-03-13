@@ -52,6 +52,22 @@ class ActorMLP(nn.Module):
     def forward(self, x):
         return self.network(x)
 
+    def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+        return {
+            "type": type(self).__name__,
+            "input_dim": input_dim,
+            "output_dim": output_dim,
+            "hidden_sizes": self.hidden_sizes,
+        }
+
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "ActorMLP":
+        return cls(
+            input_dim=cfg["input_dim"],
+            hidden_sizes=cfg["hidden_sizes"],
+            output_dim=cfg["output_dim"],
+        )
+
 
 class CriticMLP(nn.Module):
     """
@@ -83,6 +99,22 @@ class CriticMLP(nn.Module):
 
     def forward(self, x):
         return self.network(x)
+
+    def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+        return {
+            "type": type(self).__name__,
+            "input_dim": input_dim,
+            "output_dim": output_dim,
+            "hidden_sizes": self.hidden_sizes,
+        }
+
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "CriticMLP":
+        return cls(
+            input_dim=cfg["input_dim"],
+            hidden_sizes=cfg["hidden_sizes"],
+            output_dim=cfg.get("output_dim", 1),
+        )
 
 
 class QMLP(nn.Module):
@@ -120,3 +152,21 @@ class QMLP(nn.Module):
             a = self.a_stream(features)                          # (batch, output_dim)
             return v + a - a.mean(dim=-1, keepdim=True)          # (batch, output_dim)
         return self.q_head(features)
+
+    def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+        return {
+            "type": type(self).__name__,
+            "input_dim": input_dim,
+            "output_dim": output_dim,
+            "hidden_sizes": self.hidden_sizes,
+            "dueling": self.dueling,
+        }
+
+    @classmethod
+    def from_config_dict(cls, cfg: dict) -> "QMLP":
+        return cls(
+            input_dim=cfg["input_dim"],
+            hidden_sizes=cfg["hidden_sizes"],
+            output_dim=cfg["output_dim"],
+            dueling=cfg.get("dueling", False),
+        )
