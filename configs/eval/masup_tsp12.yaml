@@ -16,3 +16,12 @@ env:
     T: 20.0
     role_imformation: decision
     truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  max_steps: 300
+  save_plot: evaluators/results/TSP12/mapppo_masup/best_eval.png
+  show_plot: False
+  animation: True
+  event_driven: true
+  max_frames: 500

@@ -123,12 +123,22 @@ def sweep_train():
 def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: int = 5):
     """用 wandb API 找出最优 N 个 trial，批量评估。
 
+    每个 trial 的图像和视频保存到各自独立的路径，在 eval yaml 指定的路径基础上加序号后缀，
+    避免互相覆盖：
+        save_plot:  evaluators/results/auto_eval.png
+          → trial 1: evaluators/results/auto_eval_1.png
+          → trial 2: evaluators/results/auto_eval_2.png
+        animation:  evaluators/results/auto_eval_1/，evaluators/results/auto_eval_2/，...
+
     Args:
         sweep_id: WandB sweep ID。
         project: WandB project 名称。
         eval_config_path: 评估 YAML 路径。
         top_n: 取最优 N 个 trial。
     """
+    from pathlib import Path as _Path
+    import yaml as _yaml
+
     api = wandb.Api()
     sweep = api.sweep(f"{project}/{sweep_id}")
     metric_name = sweep.config.get("metric", {}).get("name", "env/wi")
@@ -147,6 +157,12 @@ def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: in
     )
     best = runs_sorted[:top_n]
 
+    # 读取 eval yaml 中的 save_plot 作为路径基准
+    with open(eval_config_path) as f:
+        _raw = _yaml.safe_load(f)
+    base_save_plot = (_raw.get("eval") or {}).get("save_plot", None)
+    record_animation = (_raw.get("eval") or {}).get("animation", False)
+
     print(f"\n[Eval] Evaluating top-{top_n} runs by {metric_name} ({goal})")
     from evaluators.test import run_eval_from_config
     for i, run in enumerate(best):
@@ -155,9 +171,22 @@ def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: in
             print(f"  [Skip] Run {run.id}: no save_dir in summary")
             continue
         metric_val = run.summary.get(metric_name, "?")
-        print(f"\n  [{i+1}/{top_n}] Run {run.id} | {metric_name}={metric_val} | {model_dir}")
+        rank = i + 1
+        print(f"\n  [{rank}/{top_n}] Run {run.id} | {metric_name}={metric_val} | {model_dir}")
+
+        # 为当前 trial 生成独立的保存路径
+        extra = {}
+        if base_save_plot:
+            p = _Path(base_save_plot)
+            # e.g. auto_eval.png → auto_eval_1.png
+            extra["save_plot"] = str(p.with_stem(f"{p.stem}_{rank}"))
+        if record_animation:
+            # 动画目录独立到与图像同目录下的 run_{rank}/ 子目录
+            base_dir = str(_Path(base_save_plot).parent) if base_save_plot else "evaluators/results"
+            extra["save_animation_dir"] = str(_Path(base_dir) / f"run_{rank}")
+
         try:
-            run_eval_from_config(model_dir, eval_config_path)
+            run_eval_from_config(model_dir, eval_config_path, extra_params=extra)
         except Exception as e:
             print(f"  [Error] Run {run.id} eval failed: {e}")
             import traceback

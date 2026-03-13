@@ -72,6 +72,7 @@ def test_trained_policy(
     record_animation: bool = False,
     event_driven: bool = True,
     max_frames: int = None,
+    save_animation_dir: str = None,
 ):
     """
     评估训练好的策略，自动适配算法/网络/环境类型。
@@ -86,6 +87,7 @@ def test_trained_policy(
         record_animation: 是否录制最后一个 episode 的动画
         event_driven: True=事件驱动动画，False=固定步长动画
         max_frames: 动画最大帧数限制
+        save_animation_dir: 动画保存目录；None 时回退到 save_plot 的父目录
     """
     # ---- 1. 加载环境配置 & 创建环境 ----
     env_type, env_cfg = load_eval_config(env_config_path)
@@ -188,7 +190,8 @@ def test_trained_policy(
         print(f"{metric_name}: {np.mean(values):.4f} ± {np.std(values):.4f}")
 
     # ---- 6. 可视化 ----
-    save_dir = str(Path(save_plot).parent) if save_plot else 'evaluators/results'
+    # 动画目录：优先用显式传入的 save_animation_dir，回退到 save_plot 的父目录
+    anim_dir = save_animation_dir or (str(Path(save_plot).parent) if save_plot else 'evaluators/results')
 
     if metrics_history:
         print(f"\n=== Generating aggregated visualization ===")
@@ -216,7 +219,7 @@ def test_trained_policy(
                 time_intervals=anim_time_intervals,
                 algorithm_name=algorithm_name,
                 map_name=graph_name,
-                save_dir=save_dir,
+                save_dir=anim_dir,
                 max_frames=max_frames,
             )
         else:
@@ -227,7 +230,7 @@ def test_trained_policy(
                 total_frames=len(anim_positions_history),
                 algorithm_name=algorithm_name,
                 map_name=graph_name,
-                save_dir=save_dir,
+                save_dir=anim_dir,
                 max_frames=max_frames,
             )
 
@@ -247,6 +250,7 @@ def test_qtable_policy(
     record_animation: bool = False,
     event_driven: bool = True,
     max_frames: int = None,
+    save_animation_dir: str = None,
 ):
     """评估训练好的 Q-table 策略。
 
@@ -262,6 +266,7 @@ def test_qtable_policy(
         record_animation: 是否录制最后一个 episode 的动画
         event_driven: True=事件驱动动画，False=固定步长动画
         max_frames: 动画最大帧数限制
+        save_animation_dir: 动画保存目录；None 时回退到 save_plot 的父目录
     """
     from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
     from configs.algo_configs import QTableParams
@@ -389,7 +394,8 @@ def test_qtable_policy(
         print(f"{metric_name}: {np.mean(values):.4f} ± {np.std(values):.4f}")
 
     # ---- 6. 可视化 ----
-    save_dir = str(Path(save_plot).parent) if save_plot else 'evaluators/results'
+    # 动画目录：优先用显式传入的 save_animation_dir，回退到 save_plot 的父目录
+    anim_dir = save_animation_dir or (str(Path(save_plot).parent) if save_plot else 'evaluators/results')
     if metrics_history:
         print(f"\n=== Generating aggregated visualization ===")
         aggregated = aggregate_episode_metrics(metrics_history)
@@ -415,7 +421,7 @@ def test_qtable_policy(
                 time_intervals=anim_time_intervals,
                 algorithm_name=algorithm_name,
                 map_name=graph_name,
-                save_dir=save_dir,
+                save_dir=anim_dir,
                 max_frames=max_frames,
             )
         else:
@@ -426,7 +432,7 @@ def test_qtable_policy(
                 total_frames=len(anim_positions_history),
                 algorithm_name=algorithm_name,
                 map_name=graph_name,
-                save_dir=save_dir,
+                save_dir=anim_dir,
                 max_frames=max_frames,
             )
 
@@ -437,7 +443,7 @@ def test_qtable_policy(
 #                     自动化评估入口（供 train.py / sweep.py 调用）
 # =============================================================================
 
-def run_eval_from_config(model_dir: str, eval_config_path: str):
+def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: dict = None):
     """从 eval yaml 读取所有评估参数，自动调用对应评估函数。
 
     eval yaml 需包含 env_type、env 段（环境参数），以及可选的 eval 段：
@@ -450,12 +456,22 @@ def run_eval_from_config(model_dir: str, eval_config_path: str):
           event_driven: true
           max_frames: null
 
+    Args:
+        model_dir: 模型目录。
+        eval_config_path: eval YAML 路径。
+        extra_params: 可选的覆盖字段，会合并到 yaml 的 eval 段之上（用于 sweep 批量评估时
+                      为每个 trial 生成独立的 save_plot / save_animation_dir 等）。
+
     若未提供 eval 段，则使用各评估函数的默认参数。
     """
     with open(eval_config_path) as f:
         raw = yaml.safe_load(f)
     algo_name = raw.get("algo_name", None)
     eval_params = raw.get("eval", {})
+
+    # extra_params 覆盖 yaml 中的 eval 字段
+    if extra_params:
+        eval_params.update(extra_params)
 
     # animation 字段在 CLI 中叫 record_animation，统一映射
     if "animation" in eval_params:
