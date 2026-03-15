@@ -105,8 +105,8 @@ class MPNNActor(nn.Module):
         super().__init__()
         from utils.graph_utils import Graph
 
-        self.obs_dim = obs_dim
-        self.action_dim = action_dim
+        self.input_dim = obs_dim
+        self.output_dim = action_dim
         self.h_dim = config.hidden_dim
         self.agent_num = config.agent_num
         self.role_ifm = config.role_imformation or "agent-index"
@@ -238,8 +238,8 @@ class MPNNActor(nn.Module):
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
         return {
             "type": type(self).__name__,
-            "input_dim": input_dim,
-            "output_dim": output_dim,
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
             "graph_path": self._graph_path,
             "agent_num": self.agent_num,
             "role_imformation": self.role_ifm,

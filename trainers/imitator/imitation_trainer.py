@@ -1,7 +1,9 @@
 import sys
 import os
 import time
+import argparse
 from pathlib import Path
+from dataclasses import fields
 # 添加项目根目录到 Python 路径 (支持从任意目录运行)
 _project_root = Path(__file__).resolve().parent.parent.parent
 if str(_project_root) not in sys.path:
@@ -14,81 +16,129 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 import h5py
 
-def layer_init(layer:nn.Linear, std=np.sqrt(2), bias_const=0.0):
+from networks.mlp import ActorMLP, CriticMLP
+from configs.registry import (
+    create_actor, ENV_REGISTRY, _import_class, _env_config_to_dicts, load_eval_config
+)
+from configs.network_configs import MLPConfig, MPNNConfig
+
+
+def _filter_dataclass_kwargs(cls, raw: dict) -> dict:
+    """只保留 cls 的 dataclass 字段，忽略 YAML 中的多余 key"""
+    valid = {f.name for f in fields(cls)}
+    return {k: v for k, v in raw.items() if k in valid}
+
+
+def _infer_dims_from_env(env_type: str, env_config_path: str) -> dict:
+    """创建临时环境，自动推断 obs_dim / action_dim / critic_state_dim。"""
+    env_type_actual, env_cfg = load_eval_config(env_config_path)
+    if env_type == "masup":
+        env_type = env_type_actual
+    env_config_dict, custom_config = _env_config_to_dicts(env_cfg)
+
+    entry = ENV_REGISTRY[env_type]
+    env_cls = _import_class(entry["module"], entry["class_name"])
+    env = env_cls(env_config_dict, **custom_config)
+    env.reset()
+
+    agent = env.possible_agents[0]
+    obs_dim = env.observation_space(agent).shape[0]
+    action_dim = env.action_space(agent).n
+    state_dim = len(env.state())
+    num_agents = len(env.possible_agents)
+    critic_state_dim = state_dim + num_agents
+
+    env.close() if hasattr(env, "close") else None
+
+    print(f"[ImiTrainer] 自动推断维度 (env_type={env_type}):")
+    print(f"  obs_dim={obs_dim}, action_dim={action_dim}, critic_state_dim={critic_state_dim}")
+    return {
+        "obs_dim": obs_dim,
+        "action_dim": action_dim,
+        "critic_state_dim": critic_state_dim,
+    }
+
+
+def load_imitator_config(yaml_path: str | Path) -> tuple:
     """
-    辅助函数：对线性层进行正交初始化
-    Args:
-        layer: nn.Linear 层
-        std: 正交初始化的增益系数 (gain)
-        bias_const: 偏置项的常数值
+    从 YAML 加载模仿学习配置，返回 (actor, critic, actor_type, train_kwargs)。
+
+    当 YAML 中提供 env_config 时，obs_dim / action_dim / critic_state_dim 会从
+    环境接口自动推断，YAML 中手动填写的值将被忽略。
+    未提供 env_config 时退回读取 YAML 中的显式值。
+
+    YAML 必填字段:
+        actor_type: mlp | mpnn
+        env_config: configs/eval/xxx.yaml   # 推荐：自动推断维度
+        env_type: masup_gnn                 # 与 env_config 配套（默认读 env_config 中的 env_type）
+
+    YAML 网络结构字段:
+        actor: { hidden: [...] }            # mlp 时使用
+        mpnn_actor: { graph_path, ... }     # mpnn 时使用
+        critic_hidden_sizes: [...]
     """
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
+    with open(yaml_path) as f:
+        raw = yaml.safe_load(f)
 
-class ActorMLP(nn.Module):
-    def __init__(self, input_dim, hidden_sizes, output_dim):
-        """
-        Actor network with configurable hidden layers.
-        Output layer gain = 0.01 for stable policy initialization.
-        """
-        super().__init__()
-        # Store config for checkpoint saving
-        self.input_dim = input_dim
-        self.hidden_sizes = list(hidden_sizes)
-        self.output_dim = output_dim
-        
-        layers = []
-        current_dim = input_dim
+    actor_type = raw.get("actor_type", "mlp")
 
-        # Build hidden layers
-        for h_dim in hidden_sizes:
-            layers.append(layer_init(nn.Linear(current_dim, h_dim), std=np.sqrt(2)))
-            layers.append(nn.Tanh())
-            current_dim = h_dim
+    # 优先从环境自动推断维度，避免手动配置错误
+    env_config_path = raw.get("env_config")
+    if env_config_path is not None:
+        env_type = raw.get("env_type", "masup")
+        dims = _infer_dims_from_env(env_type, env_config_path)
+        obs_dim = dims["obs_dim"]
+        action_dim = dims["action_dim"]
+        critic_state_dim = dims["critic_state_dim"]
+    else:
+        obs_dim = int(raw["obs_dim"])
+        action_dim = int(raw["action_dim"])
+        critic_state_dim = int(raw["critic_state_dim"])
 
-        # Output layer with small std for stable init
-        layers.append(layer_init(nn.Linear(current_dim, output_dim), std=0.01))
-        
-        self.network = nn.Sequential(*layers)
+    # 构建 Actor 配置并创建网络
+    if actor_type == "mlp":
+        actor_raw = raw.get("actor", {})
+        if not actor_raw and "actor_hidden_sizes" in raw:
+            actor_raw = {"hidden": raw["actor_hidden_sizes"]}
+        actor_raw = actor_raw or {"hidden": [512, 256, 128]}
+        actor_config = MLPConfig(**_filter_dataclass_kwargs(MLPConfig, actor_raw))
+    elif actor_type == "mpnn":
+        actor_raw = raw.get("mpnn_actor", raw.get("actor", {}))
+        actor_config = MPNNConfig(**_filter_dataclass_kwargs(MPNNConfig, actor_raw))
+    else:
+        raise ValueError(f"Unknown actor_type: {actor_type}")
 
-    def forward(self, x):
-        return self.network(x)
+    actor = create_actor(actor_type, actor_config, obs_dim, action_dim, device="cpu")
 
-class CriticMLP(nn.Module):
-    def __init__(self, input_dim, hidden_sizes, output_dim=1):
-        """
-        Critic network (Value Function).
-        Output layer gain = 1.0.
-        """
-        super().__init__()
-        # Store config for checkpoint saving
-        self.input_dim = input_dim
-        self.hidden_sizes = list(hidden_sizes)
-        self.output_dim = output_dim
-        
-        layers = []
-        current_dim = input_dim
+    # 构建 Critic
+    critic_hidden = raw.get("critic_hidden_sizes", raw.get("critic", {}).get("hidden", [512, 256, 128]))
+    critic = CriticMLP(critic_state_dim, critic_hidden, 1)
 
-        # Build hidden layers
-        for h_dim in hidden_sizes:
-            layers.append(layer_init(nn.Linear(current_dim, h_dim), std=np.sqrt(2)))
-            layers.append(nn.Tanh())
-            current_dim = h_dim
+    # 训练相关参数
+    train_kwargs = {
+        "actor_lr": raw.get("actor_lr", 3e-4),
+        "critic_lr": raw.get("critic_lr", 3e-4),
+        "data_path": raw.get("data_path", "dataset/samples.h5"),
+        "batch_size": raw.get("batch_size", 1024),
+        "iteration": raw.get("iteration", 100),
+        "actor_patience": raw.get("actor_patience", 5),
+        "actor_min_delta": raw.get("actor_min_delta", 1e-5),
+        "use_value_norm": raw.get("use_value_norm", True),
+        "exp_name": raw.get("exp_name", "imi_train"),
+        "track": raw.get("track", False),
+        "wandb_project": raw.get("wandb_project", "MAP-imitation"),
+        "save_dir": raw.get("save_dir", "models"),
+        "save_model": raw.get("save_model", True),
+    }
+    return actor, critic, actor_type, train_kwargs
 
-        # Output layer with std=1.0
-        layers.append(layer_init(nn.Linear(current_dim, output_dim), std=1.0))
-        
-        self.network = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.network(x)
 
 class imi_trainer:
-    def __init__(self, actor:nn.Module, critic:nn.Module, **kwargs):
+    def __init__(self, actor:nn.Module, critic:nn.Module, actor_type: str = "mlp", **kwargs):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.actor = actor.to(self.device)
         self.critic = critic.to(self.device)
+        self.actor_type = actor_type
         
         # 使用两个独立的优化器（Actor和Critic是两个独立的监督学习任务）
         self.actor_optimizer = torch.optim.Adam(
@@ -467,12 +517,12 @@ class imi_trainer:
         actor_dir = self.save_dir / f"{self.run_name}_actor_best"
         actor_dir.mkdir(parents=True, exist_ok=True)
         
-        # 通过 get_config_dict 协议序列化网络参数
         actor_cfg = self.actor.get_config_dict(self.actor.input_dim, self.actor.output_dim)
 
         config = {
             'actor': actor_cfg,
             'extra': {
+                'actor_type': self.actor_type,
                 'actor_loss': actor_loss,
                 'actor_accuracy': actor_acc,
                 'stopped_iteration': stopped_iter,
@@ -499,7 +549,6 @@ class imi_trainer:
         ckpt_dir = self.save_dir / f"{self.run_name}_final"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         
-        # 通过 get_config_dict 协议序列化网络参数（所有网络类必须实现此协议）
         actor_cfg = self.actor.get_config_dict(self.actor.input_dim, self.actor.output_dim)
         critic_cfg = self.critic.get_config_dict(self.critic.input_dim, self.critic.output_dim)
 
@@ -507,6 +556,7 @@ class imi_trainer:
             'actor': actor_cfg,
             'critic': critic_cfg,
             'extra': {
+                'actor_type': self.actor_type,
                 'final_actor_loss': final_actor_loss,
                 'final_critic_loss': final_critic_loss,
                 'final_accuracy': final_acc,
@@ -529,56 +579,22 @@ class imi_trainer:
         print(f"[ImiTrainer] Saved final checkpoint to {ckpt_dir}")
 
 if __name__ == "__main__":
-    # 切换工作目录到项目根目录 (确保配置文件路径正确)
     os.chdir(_project_root)
 
-    role_inf = "decision"
-    
-    # # 观测和动作维度均暂时硬编码TSP12 + 3agent
-    # if role_inf == "agent-idx":
-    #     obs_dim = 27
-    #     critic_states_dim = 26
-    # elif role_inf == "decision":
-    #     obs_dim = 26
-    #     critic_states_dim = 26
+    parser = argparse.ArgumentParser(description="Imitation learning trainer (Actor-Critic from heuristic data)")
+    parser.add_argument("--config", type=str, default="configs/imitator/masup_gnn_tsp12.yaml",
+                        help="YAML 配置文件路径，支持 mlp / mpnn 等网络类型")
+    parser.add_argument("--data_path", type=str, default=None,
+                        help="覆盖 config 中的 data_path")
+    args = parser.parse_args()
 
-    # action_dim = 7
+    actor, critic, actor_type, train_kwargs = load_imitator_config(args.config)
+    if args.data_path is not None:
+        train_kwargs["data_path"] = args.data_path
 
-    # Grid 图 + 8 agents
-    if role_inf == "agent-idx":
-        obs_dim = 78
-        critic_states_dim = 84
-    elif role_inf == "decision":
-        obs_dim = 79
-        critic_states_dim = 84
-
-    action_dim = 9
-
-    actor_hidden_dim = [512, 256, 128]
-    critic_hidden_dim = [512, 256, 128]
-
-    actor = ActorMLP(obs_dim, actor_hidden_dim, action_dim)
-    critic = CriticMLP(critic_states_dim, critic_hidden_dim, 1)
-
-    config = {
-        "actor_lr": 3e-4,
-        "critic_lr": 3e-4,
-        "data_path": "dataset/grid/samples_pure_0.01reward_random.h5",
-        "batch_size": 1024,
-        "iteration": 100,  # 总训练轮数
-        # Actor 早停配置
-        "actor_patience": 5,  # 连续多少个epoch没有改善就早停
-        "actor_min_delta": 1e-5,  # 最小改善量
-        # Value Normalization 配置
-        "use_value_norm": True,  # 是否启用 Value Normalization
-        # Logging 配置
-        "exp_name": "imi_train",
-        "track": True,  # 设为 True 启用 wandb
-        "wandb_project": "MAP-imitation",
-        # 模型保存配置
-        "save_dir": "models/grid-pure-norm-random-512",  # 模型保存目录
-        "save_model": True,  # 是否保存模型
-    }
-
-    trainer = imi_trainer(actor, critic, **config)
-    trainer.train(config["data_path"], config["batch_size"], config["iteration"])
+    trainer = imi_trainer(actor, critic, actor_type=actor_type, **train_kwargs)
+    trainer.train(
+        train_kwargs["data_path"],
+        train_kwargs["batch_size"],
+        train_kwargs["iteration"],
+    )

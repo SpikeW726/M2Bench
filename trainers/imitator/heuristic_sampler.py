@@ -31,7 +31,7 @@ import h5py
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
 from policies.heuritic.er import ERPolicy
 from envs.mdps.base_envs import EventDrivenEnv
-from envs.mdps.masup import MASUPEnv
+from configs.registry import ENV_REGISTRY, _import_class
 
 
 @dataclass
@@ -49,21 +49,27 @@ class EpisodeData:
 
 
 def _worker_collect_episodes(
-    args: Tuple[int, int, float, Dict, Dict, Dict]
+    args: Tuple
 ) -> List[Dict[str, np.ndarray]]:
     """
     Worker 进程：采集指定数量的 episodes (旧版本，保留向后兼容)
     
     Args:
-        args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config)
+        args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config[, env_type])
     
     Returns:
         List of episode data dicts (已转换为 numpy arrays)
     """
-    num_episodes, worker_id, eps, env_config, custom_config, policy_config = args
-    
+    if len(args) == 7:
+        num_episodes, worker_id, eps, env_config, custom_config, policy_config, env_type = args
+    else:
+        num_episodes, worker_id, eps, env_config, custom_config, policy_config = args
+        env_type = "masup"
+
     # 在 worker 进程中创建独立的环境和策略实例
-    env = MASUPEnv(env_config, **custom_config)
+    entry = ENV_REGISTRY[env_type]
+    env_cls = _import_class(entry["module"], entry["class_name"])
+    env = env_cls(env_config, **custom_config)
     num_agents = env_config.get("num_agents", 3)
     policy = ERPolicy(num_agents, policy_config)
     
@@ -90,17 +96,24 @@ def _worker_collect_to_file(args: Tuple) -> str:
     Worker 进程：采集 episodes 并直接写入临时文件（内存友好版本）
     
     Args:
-        args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config, 
-               temp_dir, chunk_size, gamma)
+        args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config,
+               temp_dir, chunk_size, gamma[, env_type])
     
     Returns:
         临时文件路径列表（逗号分隔）
     """
-    (num_episodes, worker_id, eps, env_config, custom_config, policy_config, 
-     temp_dir, chunk_size, gamma) = args
-    
+    if len(args) == 10:
+        (num_episodes, worker_id, eps, env_config, custom_config, policy_config,
+         temp_dir, chunk_size, gamma, env_type) = args
+    else:
+        (num_episodes, worker_id, eps, env_config, custom_config, policy_config,
+         temp_dir, chunk_size, gamma) = args
+        env_type = "masup"
+
     # 在 worker 进程中创建独立的环境和策略实例
-    env = MASUPEnv(env_config, **custom_config)
+    entry = ENV_REGISTRY[env_type]
+    env_cls = _import_class(entry["module"], entry["class_name"])
+    env = env_cls(env_config, **custom_config)
     num_agents = env_config.get("num_agents", 3)
     policy = ERPolicy(num_agents, policy_config)
     
@@ -194,7 +207,7 @@ def _compute_returns_static(rewards: np.ndarray, gamma: float) -> np.ndarray:
 
 
 def _collect_single_episode(
-    env: MASUPEnv,
+    env: EventDrivenEnv,
     policy: HeuriticBasePolicy,
     num_agents: int,
     obs_dim: int,
@@ -277,14 +290,16 @@ def _collect_single_episode(
 
 class HeuristicSampler:
     """
-    使用启发式策略在 MASUPEnv 中采集 Actor-Critic 监督学习样本
+    使用启发式策略采集 Actor-Critic 监督学习样本
     支持 epsilon-greedy 探索增加数据多样性
     支持多进程并行采样 (num_workers > 1)
+    支持任意实现了 state()/get_heuristic_obs()/convert_heuristic_action() 的 EventDrivenEnv
     """
     def __init__(
         self, 
         policy: HeuriticBasePolicy, 
-        env: MASUPEnv,
+        env: EventDrivenEnv,
+        env_type: str = "masup",
         env_config: Optional[Dict] = None,
         custom_config: Optional[Dict] = None,
         policy_config: Optional[Dict] = None,
@@ -292,14 +307,16 @@ class HeuristicSampler:
         """
         Args:
             policy: 启发式策略实例
-            env: MASUPEnv 环境实例
+            env: EventDrivenEnv 环境实例（支持 masup / masup_gnn 等）
+            env_type: ENV_REGISTRY 中的环境类型标识，默认 "masup"
             env_config: 环境配置 (并行采样时用于创建 worker 环境)
             custom_config: 环境自定义配置 (并行采样时使用)
             policy_config: 策略配置 (并行采样时用于创建 worker 策略)
         """
         self.policy = policy
         self.env = env
-        
+        self.env_type = env_type
+
         # 保存配置用于并行采样
         self._env_config = env_config
         self._custom_config = custom_config or {}
@@ -647,6 +664,7 @@ class HeuristicSampler:
                     str(temp_dir),
                     chunk_size,
                     gamma,
+                    self.env_type,
                 ))
         
         print(f"[HeuristicSampler] Starting parallel sampling with {num_workers} workers...")
@@ -928,6 +946,8 @@ if __name__ == "__main__":
                         help="策略配置 YAML")
     parser.add_argument("--env_config", type=str, default="configs/eval/masup_tsp12.yaml",
                         help="环境配置 YAML (experiment YAML 或独立 eval YAML)")
+    parser.add_argument("--env_type", type=str, default="masup",
+                        help="环境类型 (masup / masup_gnn 等，需在 ENV_REGISTRY 中注册)")
     args = parser.parse_args()
 
     # 加载策略配置
@@ -940,12 +960,27 @@ if __name__ == "__main__":
 
     num_agents = env_config.get("num_agents", 3)
     policy = ERPolicy(num_agents, policy_config)
-    env = MASUPEnv(env_config, **custom_config)
+
+    # 通过 ENV_REGISTRY 动态创建环境，支持 masup / masup_gnn 等
+    _entry = ENV_REGISTRY[args.env_type]
+    _env_cls = _import_class(_entry["module"], _entry["class_name"])
+    env = _env_cls(env_config, **custom_config)
+
+    # 从环境接口自动读取维度，并打印确认
+    _agent0 = env.possible_agents[0]
+    env.reset()
+    _obs_dim = env.observation_space(_agent0).shape[0]
+    _act_dim = env.action_space(_agent0).n
+    _state_dim = len(env.state())
+    _critic_state_dim = _state_dim + env.world.num_agents
+    print(f"[HeuristicSampler] 维度确认 (env_type={args.env_type}):")
+    print(f"  obs_dim={_obs_dim}, action_dim={_act_dim}, critic_state_dim={_critic_state_dim}")
 
     # 创建采样器（传入 dict 配置以支持并行采样中 worker 进程创建独立环境）
     sampler = HeuristicSampler(
         policy=policy,
         env=env,
+        env_type=args.env_type,
         env_config=env_config,
         custom_config=custom_config,
         policy_config=policy_config,

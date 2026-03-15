@@ -208,12 +208,12 @@ class MASUPGraphEnv(MASUPEnv):
                 identity = [0.0] * self.agent_num
                 identity[i] = 1.0
             elif self.role_ifm == "position":
-                identity = self.world.agents[i].position
+                identity = [float(self.world.agents[i].position)]
             elif self.role_ifm == "decision":
                 decision_idx = int(self._decision_index_map.get(i, 0)) if hasattr(self, '_decision_index_map') else 0
                 one_hot = [0.0] * self.agent_num
                 one_hot[decision_idx] = 1.0
-                identity = self.world.agents[i].position + one_hot
+                identity = [float(self.world.agents[i].position)] + one_hot
 
             single_obs = np.concatenate([
                 node_feats,

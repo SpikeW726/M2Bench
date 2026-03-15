@@ -1,0 +1,101 @@
+# MAPPO + MPNN Actor + MASUPGraphEnv (masup_gnn)
+# 以模仿学习预训练权重为初始化的 sweep base config
+#
+# 用法（单机）:
+#   python sweep.py \
+#     --base-config configs/experiments/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
+#     --sweep-config configs/sweep/mappo_mpnn_masupgnn.yaml \
+#     --count 40
+#
+# 用法（多终端并行）:
+#   # 终端 1：仅创建，获取 sweep ID
+#   python sweep.py \
+#     --base-config configs/experiments/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
+#     --sweep-config configs/sweep/mappo_mpnn_masupgnn.yaml \
+#     --create-only
+#   # 终端 2/3/4：各 tmux 窗口加入同一 sweep
+#   python sweep.py \
+#     --base-config configs/experiments/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
+#     --sweep-id <ID> --count 15
+#
+# Step 预算：num_envs(16) × num_steps(2048) × max_iterations(1526) = 50,135,040 ≈ 50M
+
+# ---- 分发字段 ----
+algo_name: mappo
+env_type: masup_gnn
+actor_type: mpnn
+critic_type: mlp
+
+# ---- 实验元信息 ----
+exp_name: mappo-mpnn-masupgnn-sweep
+graph_name: TSP12
+track_wandb: true
+wandb_project: MAP-RL
+
+# 预训练权重初始化（来自模仿学习）
+# actor 结构须与预训练模型完全一致：input_dim=220, hidden_dim=128, gnn_layers=3
+actor_path: models/masup-gnn-imitation/imi_masup_gnn_tsp12__1773573425_final/policy.pt
+critic_path: models/masup-gnn-imitation/imi_masup_gnn_tsp12__1773573425_final/critic.pt
+
+# ---- 环境 ----
+env:
+  graph_path: graphs/simple_TSP_12.json
+  enable_wait: true
+  deltaT: 0.333
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 300
+  custom_configs:
+    T: 20.0
+    role_imformation: decision   # 必须与预训练 actor 一致（decision → input_dim=220）
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+    node_feat_dim: 2
+    edge_feat_dim: 1
+    global_feat_dim: 2
+
+# ---- 算法 (MAPPOParams) ----
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-5
+  critic_lr: 1.0e-4
+  gamma: 0.999
+  gae_lambda: 1.0
+  clip_range: 0.1          # 微调阶段适当收紧
+  vf_coef: 1.0
+  ent_coef: 0.01
+  clip_vloss: true
+  use_lr_scheduler: true
+  actor_lr_start_factor: 1.0
+  actor_lr_end_factor: 0.1
+  actor_lr_decay_ratio: 0.8
+  critic_lr_start_factor: 1.0
+  critic_lr_end_factor: 0.1
+  critic_lr_decay_ratio: 0.8
+
+# ---- 训练 (OnPolicyTrainerConfig) ----
+training:
+  num_envs: 16
+  use_subproc: true
+  num_steps: 2048          # 固定，保证 50M step 预算
+  max_iterations: 1526     # 16 × 2048 × 1526 ≈ 50M steps
+  save_interval: 760
+  minibatch_size: 4096
+  update_epochs: 5
+
+# ---- 网络 ----
+# 结构须与预训练模型 config.yaml 完全对齐
+actor:
+  graph_path: graphs/simple_TSP_12.json
+  agent_num: 3
+  role_imformation: decision
+  hidden_dim: 128
+  gnn_layers: 3
+  actor_mlp_layers: 2
+  gnn_mlp_layers: 2
+  mlp_activation: relu
+
+critic:
+  hidden: [512, 256, 128]

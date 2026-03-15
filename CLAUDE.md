@@ -358,7 +358,11 @@ evaluators/test.py
 
 ```python
 def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
-    """返回可重建该网络的完整配置 dict，必须包含 type、input_dim、output_dim。"""
+    """返回可重建该网络的完整配置 dict，必须包含 type、input_dim、output_dim。
+    
+    推荐直接返回 self.input_dim / self.output_dim，而非使用传入的参数，
+    这样无论调用方是否传入正确值，序列化结果始终与实例一致。
+    """
 
 @classmethod
 def from_config_dict(cls, cfg: dict) -> nn.Module:
@@ -366,6 +370,102 @@ def from_config_dict(cls, cfg: dict) -> nn.Module:
 ```
 
 同时必须在 `utils/model_io._get_class_registry` 中注册（类名 → 类对象映射）。
+
+### 新增网络类规范（必须遵守）
+
+新增任何 Actor / Critic / Q-network 类时，必须满足以下全部要求：
+
+#### 1. 统一实例属性命名
+
+所有网络类**必须**使用 `self.input_dim` 和 `self.output_dim` 存储输入输出维度，禁止使用其他命名（如 `self.obs_dim`、`self.action_dim`）：
+
+```python
+class MyActorNet(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int, ...):
+        super().__init__()
+        self.input_dim = input_dim   # 必须，统一命名
+        self.output_dim = output_dim # 必须，统一命名
+        ...
+```
+
+这是因为 `imitation_trainer._save_actor` / `_save_checkpoint`、`train.py` 中的 `_make_net_config_dict` 均通过 `net.input_dim` / `net.output_dim` 读取维度。若命名不一致，checkpoint 保存时会抛出 `AttributeError`。
+
+#### 2. 实现 `get_config_dict`
+
+返回包含所有重建所需字段的 dict，`input_dim`/`output_dim` 从 `self` 读取：
+
+```python
+def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
+    return {
+        "type": type(self).__name__,
+        "input_dim": self.input_dim,    # 从 self 读取，忽略传入的参数
+        "output_dim": self.output_dim,  # 从 self 读取，忽略传入的参数
+        # ... 其他重建所需的超参数 ...
+    }
+```
+
+#### 3. 实现 `from_config_dict`
+
+从 `get_config_dict` 产出的 dict 完整重建实例：
+
+```python
+@classmethod
+def from_config_dict(cls, cfg: dict) -> "MyActorNet":
+    return cls(
+        input_dim=cfg["input_dim"],
+        output_dim=cfg["output_dim"],
+        # ... 其他超参数从 cfg 读取 ...
+    )
+```
+
+#### 4. 在 `ACTOR_REGISTRY` / `CRITIC_REGISTRY` / `Q_NETWORK_REGISTRY` 中注册
+
+```python
+# configs/registry.py
+ACTOR_REGISTRY["my_net"] = {
+    "module": "networks.my_module",
+    "class_name": "MyActorNet",
+    "config_class": MyNetConfig,   # 对应的 NetworkConfig 子类
+}
+```
+
+#### 5. 在 `_get_class_registry` 中注册（供评估加载使用）
+
+```python
+# utils/model_io.py  _get_class_registry()
+from networks.my_module import MyActorNet
+registry["MyActorNet"] = MyActorNet
+```
+
+#### 6. 添加 Config Dataclass（如需 YAML 配置）
+
+```python
+# configs/network_configs.py
+@dataclass(kw_only=True)
+class MyNetConfig(NetworkConfig):
+    my_param: int = 128
+```
+
+#### 7. 在 `create_actor` / `create_critic` 工厂函数中添加分支
+
+```python
+# configs/registry.py  create_actor()
+elif isinstance(actor_config, MyNetConfig):
+    return cls(input_dim=obs_dim, output_dim=action_dim,
+               my_param=actor_config.my_param).to(device)
+```
+
+#### 完整 Checklist
+
+新增网络类时逐项确认：
+
+- [ ] `__init__` 中使用 `self.input_dim` / `self.output_dim`
+- [ ] 实现 `get_config_dict`，内部引用 `self.input_dim` / `self.output_dim`
+- [ ] 实现 `from_config_dict`（classmethod）
+- [ ] 在 `ACTOR_REGISTRY` / `CRITIC_REGISTRY` / `Q_NETWORK_REGISTRY` 中注册
+- [ ] 在 `utils/model_io._get_class_registry` 中注册
+- [ ] （可选）在 `configs/network_configs.py` 中添加 Config Dataclass
+- [ ] （可选）在 `create_actor` / `create_critic` 工厂函数中添加分支
 
 ### 各网络类实现位置
 

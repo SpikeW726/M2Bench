@@ -1,0 +1,67 @@
+# masup-gnn TSP12 模仿学习入口参数
+#
+# 采样阶段（heuristic_sampler.py）用法:
+#   python trainers/imitator/heuristic_sampler.py \
+#     --env_type masup_gnn \
+#     --env_config configs/eval/masup_tsp12.yaml \
+#     --save_path dataset/masup_gnn/tsp12_samples.h5 \
+#     --num_episodes 50000 --num_workers 8 --gamma 0.999
+#
+# 模仿训练阶段（imitation_trainer.py）用法:
+#   python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_gnn_tsp12.yaml
+#   python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_gnn_tsp12.yaml --data_path dataset/masup_gnn/tsp12_samples.h5
+#
+# 维度说明:
+#   actor_type: mpnn
+#   obs_dim: 220          # MASUPGraphEnv.obs_size (TSP12 + 3 agents, role=decision)
+#   action_dim: 7        # 同 masup TSP12 (0=wait + 5 neighbors + no-op)
+#   critic_state_dim: 26  # MASUPEnv.state_dim + num_agents = 23 + 3（state() 继承不变）
+#
+# 说明:
+#   - obs_dim 由 MASUPGraphEnv 的图结构决定：
+#       total_node * node_feat_dim(2)
+#     + total_max_edges * 2   (src + dst index)
+#     + total_max_edges       (edge attr)
+#     + total_max_edges       (edge mask)
+#     + global_feat_dim(2)
+#     + identity_len(4, decision=1+num_agents)
+#     = 15*2 + 46*2 + 46 + 46 + 2 + 4 = 220
+#   - critic_state_dim 与 masup 完全相同，因为 MASUPGraphEnv 继承 state()
+
+# ----- 环境配置（用于自动推断 obs_dim / action_dim / critic_state_dim）-----
+env_type: masup_gnn
+env_config: configs/eval/masup_tsp12.yaml
+# obs_dim / action_dim / critic_state_dim 由环境接口自动推断，无需手动填写
+
+# ----- 网络结构参数 -----
+actor_type: mpnn
+
+# MPNNActor 专用配置（对应 networks/gnn.py MPNNActorConfig）
+mpnn_actor:
+  graph_path: graphs/simple_TSP_12.json
+  hidden_dim: 128
+  agent_num: 3
+  gnn_layers: 3
+  actor_mlp_layers: 2
+  gnn_mlp_layers: 2
+  mlp_activation: relu
+  role_imformation: decision  # decision / agent-index / position
+
+# CriticMLP 配置
+critic_hidden_sizes: [512, 256, 128]
+
+# ----- 训练超参 -----
+actor_lr: 3.0e-4
+critic_lr: 3.0e-4
+batch_size: 1024
+iteration: 10
+actor_patience: 5
+actor_min_delta: 1.0e-5
+use_value_norm: true
+
+# ----- 数据 & 日志 -----
+data_path: dataset/masup_gnn/tsp12_samples.h5
+save_dir: models/masup-gnn-imitation
+exp_name: imi_masup_gnn_tsp12
+track: false
+wandb_project: MAP-imitation

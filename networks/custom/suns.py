@@ -25,11 +25,11 @@ class SUNBase(nn.Module):
     def __init__(self, obs_dim, num_nodes, node_feat_dim=2,
                  f1_hidden=4, f2_hidden=6, num_layers=1):
         super().__init__()
-        self.obs_dim = obs_dim
+        self.input_dim = obs_dim
         self.num_nodes = num_nodes
         self.node_feat_dim = node_feat_dim
         self.num_layers = num_layers
-        assert obs_dim == num_nodes * node_feat_dim + num_nodes ** 2
+        assert self.input_dim == num_nodes * node_feat_dim + num_nodes ** 2
 
         self.f1 = SUN_mlp(node_feat_dim, f1_hidden)
         self.f2 = SUN_mlp(node_feat_dim + 1, f2_hidden)  # +1 for edge weight
@@ -82,6 +82,7 @@ class SUNActor(SUNBase):
                  f1_hidden=4, f2_hidden=6, num_layers=1):
         super().__init__(obs_dim, num_nodes, node_feat_dim,
                          f1_hidden, f2_hidden, num_layers)
+        self.output_dim = num_nodes
 
     def forward(self, obs):
         node_feat, weight_mat = self._parse_obs(obs)
@@ -90,8 +91,8 @@ class SUNActor(SUNBase):
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
         return {
             "type": type(self).__name__,
-            "input_dim": input_dim,
-            "output_dim": output_dim,
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
             "num_nodes": self.num_nodes,
             "node_feat_dim": self.node_feat_dim,
             "f1_hidden": self.f1.fc1.out_features,
@@ -118,6 +119,7 @@ class SUNCritic(SUNBase):
                  f1_hidden=4, f2_hidden=6, num_layers=1):
         super().__init__(obs_dim, num_nodes, node_feat_dim,
                          f1_hidden, f2_hidden, num_layers)
+        self.output_dim = 1
 
     def forward(self, obs):
         node_feat, weight_mat = self._parse_obs(obs)
@@ -127,8 +129,8 @@ class SUNCritic(SUNBase):
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
         return {
             "type": type(self).__name__,
-            "input_dim": input_dim,
-            "output_dim": output_dim,
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
             "num_nodes": self.num_nodes,
             "node_feat_dim": self.node_feat_dim,
             "f1_hidden": self.f1.fc1.out_features,
