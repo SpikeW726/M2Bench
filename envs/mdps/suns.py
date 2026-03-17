@@ -13,7 +13,6 @@ class SUNSEnv(EventDrivenEnv):
 
         # 确定的物理特征
         self.episode_len = config['episode_len']
-        self.init_pos = config.get('init_positions', [])
         self.spl_mat = self.world.graph.get_shotest_path_len_mat()
 
         # 预计算权重矩阵 (N, N)：无边=0，有边=权重

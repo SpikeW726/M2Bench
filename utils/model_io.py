@@ -219,6 +219,15 @@ def load_model(
 #                     Load for Evaluation (通用)
 # =========================================================================
 
+def _propagate_device_to_policies(module: nn.Module, device: torch.device) -> None:
+    """递归将 device 同步到所有 RLBasePolicy 子类，确保评估时 mask/obs 与网络同设备。"""
+    from policies.rl.rl_base import RLBasePolicy
+    if isinstance(module, RLBasePolicy):
+        module.device = device
+    for child in module.children():
+        _propagate_device_to_policies(child, device)
+
+
 def load_policy_for_eval(
     model_dir: str | Path,
     agent_ids: List[str],
@@ -294,6 +303,10 @@ def load_policy_for_eval(
 
     multi_policy.load_state_dict(state_dict)
     multi_policy.to(device)
+    dev = torch.device(device)
+    multi_policy.device = dev
+    # 递归同步内层 policy 的 device，避免 RLBasePolicy.__init__ 中 hardcode cuda 导致 mask/obs 设备不一致
+    _propagate_device_to_policies(multi_policy, dev)
     multi_policy.set_training_mode(False)
 
     print(f"[ModelIO] Loaded {policy_type}-based policy "

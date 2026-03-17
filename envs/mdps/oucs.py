@@ -12,7 +12,6 @@ class OUCSEnv(FixedStepEnv):
 
         # 确定的物理特征
         self.episode_len = config['episode_len']
-        self.init_pos = config.get('init_positions', [])
         self.max_visit = config['episode_len']
 
         # Episode 截止模式开关

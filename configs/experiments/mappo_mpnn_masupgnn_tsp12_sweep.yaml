@@ -5,6 +5,7 @@
 #   python sweep.py \
 #     --base-config configs/experiments/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
 #     --sweep-config configs/sweep/mappo_mpnn_masupgnn.yaml \
+#     --eval-config configs/eval/masup_gnn_tsp12.yaml \
 #     --count 40
 #
 # 用法（多终端并行）:
@@ -13,10 +14,11 @@
 #     --base-config configs/experiments/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
 #     --sweep-config configs/sweep/mappo_mpnn_masupgnn.yaml \
 #     --create-only
-#   # 终端 2/3/4：各 tmux 窗口加入同一 sweep
+#   # 终端 2/3/4：各 tmux 窗口加入同一 sweep（最后一个终端附带 --eval-config 自动评估）
 #   python sweep.py \
 #     --base-config configs/experiments/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
-#     --sweep-id <ID> --count 15
+#     --sweep-id <ID> --count 15 \
+#     --eval-config configs/eval/masup_gnn_tsp12.yaml --top-n 5
 #
 # Step 预算：num_envs(16) × num_steps(2048) × max_iterations(1526) = 50,135,040 ≈ 50M
 
@@ -77,7 +79,7 @@ algo:
 
 # ---- 训练 (OnPolicyTrainerConfig) ----
 training:
-  num_envs: 16
+  num_envs: 12
   use_subproc: true
   num_steps: 2048          # 固定，保证 50M step 预算
   max_iterations: 1526     # 16 × 2048 × 1526 ≈ 50M steps

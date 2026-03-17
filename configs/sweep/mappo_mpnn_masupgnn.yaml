@@ -4,6 +4,7 @@
 #   python sweep.py \
 #     --base-config configs/experiments/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
 #     --sweep-config configs/sweep/mappo_mpnn_masupgnn.yaml \
+#     --eval-config configs/eval/masup_gnn_tsp12.yaml \
 #     --count 40
 #
 # Step 预算说明（固定，不可被 sweep 覆盖）:
@@ -55,17 +56,17 @@ parameters:
 
   # ---- OnPolicyTrainerConfig ----
   minibatch_size:
-    values: [2048, 4096, 8192]   # 总数据量 16×2048=32768，minibatch 不超过总量
+    values: [1024, 2048, 4096]   # 总数据量 16×2048=32768，minibatch 不超过总量
 
   update_epochs:
     values: [3, 5, 10]
 
   # 以下两个固定，确保所有 trial step 预算一致（约 50M）
   num_steps:
-    value: 2048
+    values: [1024, 2048, 4096]
 
   max_iterations:
-    value: 1526
+    value: 1200
 
   save_interval:
-    value: 760
+    value: 600

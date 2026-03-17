@@ -11,3 +11,12 @@ env:
   episode_len: 300
   custom_configs:
     truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  max_steps: 300
+  save_plot: evaluators/results/TSP12/a2c_suns/best_eval.png
+  show_plot: False
+  animation: True
+  event_driven: False
+  max_frames: 500

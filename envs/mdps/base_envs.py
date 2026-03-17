@@ -11,6 +11,7 @@ class BaseEnv(ParallelEnv):
         self.config = config
         self.world = PatrolWorld(config)
         self.enable_wait = config.get("enable_wait", False)
+        self.init_pos: list = config.get("init_positions", [])
         
         # PettingZoo标准属性
         self.metadata = {"render_modes": [], "name": self.__class__.__name__}
@@ -153,7 +154,12 @@ class FixedStepEnv(BaseEnv):
 
     def reset(self, seed: Optional[int] = None):
         """重置环境，返回 (obs, infos)"""
-        self.world.reset()
+        if seed is not None:
+            import random
+            random.seed(seed)
+            np.random.seed(seed)
+        initial = self.init_pos if len(self.init_pos) == self.world.num_agents else None
+        self.world.reset(initial_positions=initial)
         self.agents = self.possible_agents[:]
         
         obs = self._build_obs(result=None)
@@ -199,7 +205,12 @@ class EventDrivenEnv(BaseEnv):
 
     def reset(self, seed: Optional[int] = None):
         """重置环境，返回 (obs, infos)"""
-        self.world.reset()
+        if seed is not None:
+            import random
+            random.seed(seed)
+            np.random.seed(seed)
+        initial = self.init_pos if len(self.init_pos) == self.world.num_agents else None
+        self.world.reset(initial_positions=initial)
         self.agents = self.possible_agents[:]
         
         obs = self._build_obs(result=None)

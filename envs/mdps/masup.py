@@ -20,7 +20,6 @@ class MASUPEnv(EventDrivenEnv):
         self.episode_len = config['episode_len']
         self.T_time = kwargs.get("T", 0.0)
         self.role_ifm = kwargs.get('role_imformation', "agent-index")
-        self.init_pos = config.get('init_positions', [])
 
         # reward trick
         self.contribution_scale = float(kwargs.get('contribution_scale', 0.0))
@@ -145,7 +144,7 @@ class MASUPEnv(EventDrivenEnv):
             node_to_deciders.setdefault(node, []).append(aid)
         for node, aids in node_to_deciders.items():
             random.shuffle(aids)
-            for idx, aid in enumerate(aids, start=1):
+            for idx, aid in enumerate(aids, start=0):
                 self._decision_index_map[aid] = idx
 
         # 4. 计算截断条件

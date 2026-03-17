@@ -91,7 +91,7 @@ class EpisodeMetricsTracker:
     def reset(self):
         """重置历史记录"""
         self.history: List[IdlenessMetrics] = []
-        self._igi_sum: float = 0.0  # 用于计算 AGI
+        self._igi_time_weighted_sum: float = 0.0  # 时间加权累积，用于计算 AGI
     
     def record(self, node_idleness: Dict[int, float], step: int, time: float):
         """
@@ -112,9 +112,12 @@ class EpisodeMetricsTracker:
         igi = sum(idleness_values) / n_nodes
         iwi = max(idleness_values)
         
-        # 更新累积指标
-        self._igi_sum += igi
-        agi = self._igi_sum / time if time > 0 else 0.0
+        # 时间加权累积：乘以本次 tick 的实际时间间隔
+        # 保证固定步长（dt=1.0）和事件驱动（dt 可变）下 AGI 均为正确的时间加权平均
+        prev_time = self.history[-1].time if self.history else 0.0
+        dt = time - prev_time
+        self._igi_time_weighted_sum += igi * dt
+        agi = self._igi_time_weighted_sum / time if time > 0 else 0.0
         wi = max(iwi, self.history[-1].wi if self.history else 0.0)
         
         metrics = IdlenessMetrics(

@@ -109,13 +109,15 @@ class _BaseRNN(nn.Module):
         """默认 head: fc_out。子类可 override（如 Dueling）。"""
         return self.fc_out(rnn_out)
 
-    def forward(self, obs: torch.Tensor, hidden_state: torch.Tensor):
+    def forward(self, obs: torch.Tensor, hidden_state: torch.Tensor = None):
         """
         单步 forward。
         obs: (batch, input_dim)
-        hidden_state: (recurrent_N, batch, hidden_size)
+        hidden_state: (recurrent_N, batch, hidden_size) 或 None（自动零初始化）
         Returns: output (batch, output_dim), new_hidden
         """
+        if hidden_state is None:
+            hidden_state = self.get_initial_hidden(obs.shape[0], obs.device)
         x = self.fc_in(obs).unsqueeze(0)               # (1, batch, H)
         rnn_out, new_hidden = self._rnn_forward(x, hidden_state)
         output = self._head(rnn_out.squeeze(0))         # (batch, output_dim)

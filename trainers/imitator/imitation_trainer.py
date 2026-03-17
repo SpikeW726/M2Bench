@@ -17,6 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 import h5py
 
 from networks.mlp import ActorMLP, CriticMLP
+from utils.model_io import _convert_to_native_types as _ensure_native_types
 from configs.registry import (
     create_actor, ENV_REGISTRY, _import_class, _env_config_to_dicts, load_eval_config
 )
@@ -518,7 +519,6 @@ class imi_trainer:
         actor_dir.mkdir(parents=True, exist_ok=True)
         
         actor_cfg = self.actor.get_config_dict(self.actor.input_dim, self.actor.output_dim)
-
         config = {
             'actor': actor_cfg,
             'extra': {
@@ -528,13 +528,13 @@ class imi_trainer:
                 'stopped_iteration': stopped_iter,
                 'run_name': self.run_name,
             },
-            # Value Normalization 统计量（转换为 Python 原生类型以兼容 yaml.safe_load）
             'value_normalization': {
                 'use_value_norm': self.use_value_norm,
                 'ret_mean': float(self.ret_mean),
                 'ret_std': float(self.ret_std),
             } if self.use_value_norm else None,
         }
+        config = _ensure_native_types(config)
         with open(actor_dir / 'config.yaml', 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
 
@@ -563,13 +563,13 @@ class imi_trainer:
                 'total_iterations': total_iterations,
                 'run_name': self.run_name,
             },
-            # Value Normalization 统计量（转换为 Python 原生类型以兼容 yaml.safe_load）
             'value_normalization': {
                 'use_value_norm': self.use_value_norm,
                 'ret_mean': float(self.ret_mean),
                 'ret_std': float(self.ret_std),
             } if self.use_value_norm else None,
         }
+        config = _ensure_native_types(config)
         with open(ckpt_dir / 'config.yaml', 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
 

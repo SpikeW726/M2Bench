@@ -134,7 +134,7 @@ class ActorPolicy(RLBasePolicy):
 
         action_mask = kwargs.get("action_mask", None)
         if action_mask is not None:
-            mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=self.device)
+            mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
             logits = logits.masked_fill(~mask_t, float("-inf"))
 
         dist = torch.distributions.Categorical(logits=logits)
@@ -182,7 +182,7 @@ class ActorPolicy(RLBasePolicy):
             logits = self.actor(obs)
             action_mask = kwargs.get("action_mask", None)
             if action_mask is not None:
-                mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=self.device)
+                mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
                 logits = logits.masked_fill(~mask_t, float("-inf"))
             dist = torch.distributions.Categorical(logits=logits)
         else:
@@ -232,7 +232,7 @@ class ActorPolicy(RLBasePolicy):
 
         if self.is_discrete:
             if action_mask is not None:
-                mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=self.device)
+                mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits_seq.device)
                 # chunk_split padding 产生全零 mask → 全 -inf，设第一个 action 为 valid
                 all_masked = ~mask_t.any(dim=-1)
                 if all_masked.any():
@@ -315,7 +315,7 @@ class ValuePolicy(RLBasePolicy):
 
         action_mask = kwargs.get("action_mask", None)
         if action_mask is not None:
-            mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=self.device)
+            mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=q_values.device)
             q_values_masked = q_values.masked_fill(~mask_t, float("-inf"))
         else:
             mask_t = None
@@ -358,7 +358,7 @@ class ValuePolicy(RLBasePolicy):
         else:
             q = self.q_network(obs)
         if action_mask is not None:
-            mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=self.device)
+            mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=q.device)
             q = q.masked_fill(~mask_t, float("-inf"))
         return q
 

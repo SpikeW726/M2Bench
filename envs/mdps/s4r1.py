@@ -12,7 +12,6 @@ class S4R1Env(FixedStepEnv):
 
         # 确定的物理特征
         self.episode_len = config['episode_len']
-        self.init_pos = config.get('init_positions', [])
 
         # Episode 截止模式开关
         # truncate_by_time=True (默认): 使用总时间 all_timer >= episode_len 截止

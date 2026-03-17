@@ -141,6 +141,7 @@ def test_trained_policy(
     for ep in range(num_episodes):
         obs, infos = env.reset()
         step_count = 0
+        hidden_state = None  # episode 开始时重置 RNN hidden state
 
         is_last = (ep == num_episodes - 1)
         record = record_animation and is_last
@@ -159,14 +160,17 @@ def test_trained_policy(
             }
 
             with torch.no_grad():
-                outputs = multi_policy.forward(obs_tensor, action_mask=action_masks)
+                outputs = multi_policy.forward(obs_tensor, state_dict=hidden_state, action_mask=action_masks)
             actions = {aid: out['act'].cpu().numpy() for aid, out in outputs.items()}
+            # 保留 RNN hidden state 供下一步使用
+            if multi_policy.is_recurrent:
+                hidden_state = {aid: out['state'] for aid, out in outputs.items() if out.get('state') is not None}
 
             obs, _, _, _, infos = env.step(actions)
             step_count += 1
 
             if record:
-                anim_time_intervals.append(env.last_time_interval)
+                anim_time_intervals.append(getattr(env, 'last_time_interval', 1.0))
                 anim_positions_history.append(env.world.snapshot_agent_positions())
 
         # Episode 结束: 收集指标
@@ -372,7 +376,7 @@ def test_qtable_policy(
                 obs, _, terminated, truncated, infos = env.step(action)
 
             if record:
-                anim_time_intervals.append(env.last_time_interval)
+                anim_time_intervals.append(getattr(env, 'last_time_interval', 1.0))
                 anim_positions_history.append(env.world.snapshot_agent_positions())
 
         final_metrics = env.world.current_metrics
@@ -506,10 +510,10 @@ if __name__ == '__main__':
     parser.add_argument('--env_config', type=str,
                         default='configs/eval/masup_tsp12.yaml',
                         help='eval YAML (含 env_type + 环境参数)')
-    parser.add_argument('--num_episodes', type=int, default=5,
-                        help='评估 episode 数量')
-    parser.add_argument('--max_steps', type=int, default=1000,
-                        help='每个 episode 的固定步数')
+    parser.add_argument('--num_episodes', type=int, default=None,
+                        help='评估 episode 数量（未指定时从 env_config 的 eval 段读取）')
+    parser.add_argument('--max_steps', type=int, default=None,
+                        help='每个 episode 的固定步数（未指定时从 env_config 的 eval 段读取）')
     parser.add_argument('--save_plot', type=str, default='evaluators/results/eval.png',
                         help='图表保存路径')
     parser.add_argument('--no_show', action='store_true',
@@ -523,16 +527,20 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # 读取 algo_name 字段（默认 None，表示 RL 神经网络路径）
+    # 读取 yaml：algo_name + eval 段。CLI 显式传入覆盖 yaml，未传入则用 yaml
     with open(args.env_config) as _f:
         _raw = yaml.safe_load(_f)
     _algo_name = _raw.get("algo_name", None)
+    _eval = _raw.get("eval", {})
+
+    num_episodes = args.num_episodes if args.num_episodes is not None else _eval.get("num_episodes", 5)
+    max_steps = args.max_steps if args.max_steps is not None else _eval.get("max_steps", 1000)
 
     if _algo_name == "qtable":
         test_qtable_policy(
             model_dir=args.model,
             env_config_path=args.env_config,
-            num_episodes=args.num_episodes,
+            num_episodes=num_episodes,
             save_plot=args.save_plot,
             show_plot=not args.no_show,
             record_animation=args.animation,
@@ -543,8 +551,8 @@ if __name__ == '__main__':
         test_trained_policy(
             model_dir=args.model,
             env_config_path=args.env_config,
-            num_episodes=args.num_episodes,
-            max_steps=args.max_steps,
+            num_episodes=num_episodes,
+            max_steps=max_steps,
             save_plot=args.save_plot,
             show_plot=not args.no_show,
             record_animation=args.animation,

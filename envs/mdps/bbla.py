@@ -29,7 +29,6 @@ class BBLAEnv(FixedStepEnv):
 
         # 确定的物理特征
         self.episode_len = config['episode_len']
-        self.init_pos = config.get('init_positions', [])
 
     def observation_space(self, agent):
         """
