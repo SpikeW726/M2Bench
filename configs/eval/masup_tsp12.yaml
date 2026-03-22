@@ -19,7 +19,6 @@ env:
 
 eval:
   num_episodes: 10
-  max_steps: 300
   save_plot: evaluators/results/TSP12/mapppo_masup/best_eval.png
   show_plot: False
   animation: True

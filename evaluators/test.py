@@ -66,7 +66,7 @@ def test_trained_policy(
     model_dir: str,
     env_config_path: str,
     num_episodes: int = 5,
-    max_steps: int = 1000,
+    episode_time: float = None,
     save_plot: str = None,
     show_plot: bool = True,
     record_animation: bool = False,
@@ -81,7 +81,9 @@ def test_trained_policy(
         model_dir: 模型目录 (含 config.yaml + policy.pt)
         env_config_path: eval YAML 路径 (含 env_type + env 参数)
         num_episodes: 评估 episode 数量
-        max_steps: 每个 episode 的固定步数
+        episode_time: 每个 episode 的仿真时间上限（秒）；
+                      None 时从 env 配置的 episode_len 读取，依靠环境自身的
+                      truncated/terminated 信号结束 episode
         save_plot: 图表保存路径
         show_plot: 是否显示图表
         record_animation: 是否录制最后一个 episode 的动画
@@ -99,6 +101,9 @@ def test_trained_policy(
     graph_path = cfg_dict.get("graph_path", "unknown")
     graph_name = Path(graph_path).stem
     num_agents = cfg_dict.get("num_agents", len(env.possible_agents))
+
+    # episode 时间上限：优先用显式传入的 episode_time，否则读 env 配置的 episode_len
+    eff_episode_time = episode_time if episode_time is not None else cfg_dict.get("episode_len", None)
 
     print(f"Graph: {graph_path} ({graph_name})")
     print(f"Num agents: {num_agents}")
@@ -129,7 +134,8 @@ def test_trained_policy(
     )
 
     # ---- 4. 评估循环 ----
-    print(f"\n=== Running {num_episodes} episodes (fixed {max_steps} steps each) ===")
+    time_desc = f"{eff_episode_time:.0f}s" if eff_episode_time is not None else "env-truncated"
+    print(f"\n=== Running {num_episodes} episodes (episode_time={time_desc}) ===")
 
     episode_metrics = []
     metrics_history = []
@@ -149,7 +155,11 @@ def test_trained_policy(
             anim_positions_history = [env.world.snapshot_agent_positions()]
             anim_time_intervals = []
 
-        while step_count < max_steps:
+        # 以仿真时间为截止条件；如果未配置则依靠环境的 truncated/terminated 信号
+        while env.agents:
+            if eff_episode_time is not None and env.world.current_time >= eff_episode_time:
+                break
+
             action_masks = {
                 aid: torch.as_tensor(info['action_mask'], dtype=torch.bool, device=multi_policy.device)
                 for aid, info in infos.items()
@@ -188,7 +198,7 @@ def test_trained_policy(
               f"steps={step_count}")
 
     # ---- 5. 汇总统计 ----
-    print(f"\n=== Summary Statistics ({num_episodes} episodes, {max_steps} steps) ===")
+    print(f"\n=== Summary Statistics ({num_episodes} episodes, episode_time={time_desc}) ===")
     for metric_name in ['IGI', 'AGI', 'IWI', 'WI']:
         values = [getattr(m, metric_name.lower()) for m in episode_metrics]
         print(f"{metric_name}: {np.mean(values):.4f} ± {np.std(values):.4f}")
@@ -205,7 +215,7 @@ def test_trained_policy(
 
         plot_aggregated_metrics(
             aggregated,
-            title=f'{algo_name.upper()} Evaluation ({num_episodes} episodes, {max_steps} steps)',
+            title=f'{algo_name.upper()} Evaluation ({num_episodes} episodes, {time_desc})',
             subtitle=subtitle,
             save_path=save_plot,
             show=show_plot,
@@ -453,7 +463,7 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
     eval yaml 需包含 env_type、env 段（环境参数），以及可选的 eval 段：
         eval:
           num_episodes: 10
-          max_steps: 1000
+          episode_time: null   # null 时从 env.episode_len 读取，依靠环境自身截断
           save_plot: evaluators/results/auto_eval.png
           show_plot: false
           animation: false
@@ -512,8 +522,8 @@ if __name__ == '__main__':
                         help='eval YAML (含 env_type + 环境参数)')
     parser.add_argument('--num_episodes', type=int, default=None,
                         help='评估 episode 数量（未指定时从 env_config 的 eval 段读取）')
-    parser.add_argument('--max_steps', type=int, default=None,
-                        help='每个 episode 的固定步数（未指定时从 env_config 的 eval 段读取）')
+    parser.add_argument('--episode_time', type=float, default=None,
+                        help='每个 episode 的仿真时间上限（秒）；未指定时从 env 段的 episode_len 读取')
     parser.add_argument('--save_plot', type=str, default='evaluators/results/eval.png',
                         help='图表保存路径')
     parser.add_argument('--no_show', action='store_true',
@@ -534,7 +544,7 @@ if __name__ == '__main__':
     _eval = _raw.get("eval", {})
 
     num_episodes = args.num_episodes if args.num_episodes is not None else _eval.get("num_episodes", 5)
-    max_steps = args.max_steps if args.max_steps is not None else _eval.get("max_steps", 1000)
+    episode_time = args.episode_time if args.episode_time is not None else _eval.get("episode_time", None)
 
     if _algo_name == "qtable":
         test_qtable_policy(
@@ -552,7 +562,7 @@ if __name__ == '__main__':
             model_dir=args.model,
             env_config_path=args.env_config,
             num_episodes=num_episodes,
-            max_steps=max_steps,
+            episode_time=episode_time,
             save_plot=args.save_plot,
             show_plot=not args.no_show,
             record_animation=args.animation,

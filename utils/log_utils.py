@@ -238,57 +238,54 @@ class EpisodeMetricsTracker:
 
 def aggregate_episode_metrics(
     metrics_history: List[Dict[str, List[float]]],
-    metric_keys: Optional[List[str]] = None
+    metric_keys: Optional[List[str]] = None,
+    n_interp: int = 1000,
 ) -> Dict[str, Any]:
     """
-    聚合多个 episode 的 metrics 历史数据
-    
+    聚合多个 episode 的 metrics 历史数据。
+
+    以真实仿真时间（'time' 字段）为 x 轴，将各 episode 插值到统一时间网格后计算
+    均值与标准差，解决 event-driven 环境各 episode 步数/时刻不对齐的问题。
+
     Args:
-        metrics_history: 多个 episode 的 metrics 历史列表
-            每个元素是 Dict[str, List[float]]，格式如 {'step': [...], 'igi': [...], ...}
-        metric_keys: 需要聚合的指标键列表，如果为 None 则自动从第一个 episode 推断
-            (排除 'step' 和 'time')
-    
+        metrics_history: 多个 episode 的 metrics 历史列表，
+            每个元素格式为 {'step': [...], 'time': [...], 'igi': [...], ...}
+        metric_keys: 需要聚合的指标键；None 时自动排除 'step' / 'time'。
+        n_interp: 统一时间网格的点数（默认 1000）。
+
     Returns:
         聚合后的数据字典，包含：
-        - {metric}_mean: 每个指标的均值序列
-        - {metric}_std: 每个指标的标准差序列
-        - step_x: 统一的 x 轴（step）序列
+        - time_x: 统一的时间网格（float 列表，长度 n_interp）
+        - {metric}_mean: 每个指标在时间网格上的均值
+        - {metric}_std: 每个指标在时间网格上的标准差
     """
     if not metrics_history:
         return {}
-    
-    # 自动推断需要聚合的指标（排除 'step' 和 'time'）
+
     if metric_keys is None:
         first_ep = metrics_history[0]
         metric_keys = [k for k in first_ep.keys() if k not in ['step', 'time']]
-    
-    # 找到最大长度用于 padding
-    max_len = max(len(m['step']) for m in metrics_history)
-    
-    # Padding 所有序列到相同长度
-    padded_metrics = {k: [] for k in metrics_history[0].keys()}
-    for metrics in metrics_history:
-        ep_len = len(metrics['step'])
-        for key, values in metrics.items():
-            if key == 'step':
-                # step 使用 0 到 ep_len-1
-                padded = list(range(ep_len))
-            else:
-                # 其他指标用最后一个值 padding
-                padded = list(values) + [values[-1]] * (max_len - ep_len)
-            padded_metrics[key].append(padded)
-    
-    # 计算均值和标准差
+
+    # 统一时间网格：0 到所有 episode 最大结束时间
+    max_time = max(m['time'][-1] for m in metrics_history if m['time'])
+    time_grid = np.linspace(0.0, max_time, n_interp)
+
+    # 将每个 episode 的各指标插值到统一时间网格
     aggregated = {}
+    interp_arrays = {key: [] for key in metric_keys}
+    for ep_metrics in metrics_history:
+        t = np.array(ep_metrics['time'], dtype=float)
+        for key in metric_keys:
+            vals = np.array(ep_metrics[key], dtype=float)
+            # np.interp 在 t 范围外自动用端点值填充（左填首值，右填末值）
+            interp_arrays[key].append(np.interp(time_grid, t, vals))
+
     for key in metric_keys:
-        arr = np.array(padded_metrics[key])
+        arr = np.array(interp_arrays[key])  # shape: (n_episodes, n_interp)
         aggregated[f'{key}_mean'] = np.mean(arr, axis=0)
         aggregated[f'{key}_std'] = np.std(arr, axis=0)
-    
-    # 统一的 x 轴
-    aggregated['step_x'] = list(range(max_len))
-    
+
+    aggregated['time_x'] = time_grid.tolist()
     return aggregated
 
 
@@ -345,8 +342,9 @@ def plot_aggregated_metrics(
     else:
         fig.suptitle(title, fontsize=14)
     
-    x_data = aggregated_data['step_x']
-    
+    x_data = aggregated_data.get('time_x', aggregated_data.get('step_x'))
+    x_label = 'Simulation Time (s)' if 'time_x' in aggregated_data else 'Step'
+
     for ax, (metric_key, metric_title, metric_label) in zip(axes, metric_configs):
         mean_key = f'{metric_key}_mean'
         std_key = f'{metric_key}_std'
@@ -360,7 +358,7 @@ def plot_aggregated_metrics(
         
         ax.plot(x_data, mean, linewidth=2, label='Mean')
         ax.fill_between(x_data, mean - std, mean + std, alpha=0.3, label='±1 Std')
-        ax.set_xlabel('Step')
+        ax.set_xlabel(x_label)
         ax.set_ylabel(metric_label)
         ax.set_title(metric_title)
         ax.legend()
