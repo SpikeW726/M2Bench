@@ -36,8 +36,8 @@ class BaseTrainer(ABC):
         self.algorithm = algorithm
         self.collector = collector
 
-        # 从 config 解包
-        self.max_iteration = config.max_iterations
+        # 从 config 解包（RL 使用 effective_max_iterations 支持 total_steps 预算）
+        self.max_iteration = config.effective_max_iterations
         self.step_per_iteration = config.step_per_iteration
         self.save_interval = config.save_interval
         self.verbose = config.verbose

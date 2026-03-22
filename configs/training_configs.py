@@ -1,6 +1,9 @@
 """训练器参数 dataclass。"""
 
+import math
 from dataclasses import dataclass
+from typing import Optional
+
 from sensai.util.string import ToStringMixin
 
 
@@ -10,7 +13,8 @@ class TrainerConfig(ToStringMixin):
     num_envs: int = 16
     use_subproc: bool = True           # SubprocVectorEnv vs DummyVectorEnv
     num_steps: int = 1024              # 每个 env 每轮采集的步数
-    max_iterations: int = 500          # 训练总轮数
+    max_iterations: int = 500          # 训练总轮数（total_steps 为 None 时使用）
+    total_steps: Optional[int] = None    # 环境交互步数预算（RL：ceil 推导 max_iterations；Q-table：累计步数达预算即停）
     save_interval: int = 100           # 每隔多少轮保存 checkpoint
     verbose: bool = True
 
@@ -18,6 +22,23 @@ class TrainerConfig(ToStringMixin):
     def step_per_iteration(self) -> int:
         """每轮迭代的环境总步数 (num_envs * num_steps)"""
         return self.num_envs * self.num_steps
+
+    @property
+    def effective_max_iterations(self) -> int:
+        """RL 训练实际迭代轮数。
+
+        若设置 total_steps，则 max_iterations = ceil(total_steps / step_per_iteration)，
+        保证实际总步数 >= total_steps。
+        Q-table：由 QTableTrainer 读取 total_steps 作为累计 env 步数预算；未设 total_steps 时用 max_iterations 控制 episode 数。
+        """
+        if self.total_steps is not None:
+            spi = self.step_per_iteration
+            if spi <= 0:
+                raise ValueError(
+                    "step_per_iteration (num_envs * num_steps) must be positive when total_steps is set"
+                )
+            return max(1, math.ceil(self.total_steps / spi))
+        return self.max_iterations
 
 
 @dataclass(kw_only=True)

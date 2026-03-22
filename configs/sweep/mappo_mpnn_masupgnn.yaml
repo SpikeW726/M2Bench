@@ -7,8 +7,7 @@
 #     --eval-config configs/eval/masup_gnn_tsp12.yaml \
 #     --count 40
 #
-# Step 预算说明（固定，不可被 sweep 覆盖）:
-#   num_envs=16  ×  num_steps=2048  ×  max_iterations=1526  ≈  50M steps/trial
+# Step 预算：base config 中 total_steps=50M；sweep 调 num_steps 时 max_iterations 自动 ceil，各 trial 总步数 ≥ 50M
 
 method: bayes
 
@@ -61,12 +60,11 @@ parameters:
   update_epochs:
     values: [3, 5, 10]
 
-  # 以下两个固定，确保所有 trial step 预算一致（约 50M）
   num_steps:
     values: [1024, 2048, 4096]
 
-  max_iterations:
-    value: 1200
+  total_steps:
+    value: 50000000
 
   save_interval:
     value: 600

@@ -24,10 +24,15 @@ class QTableTrainer:
         3. 所有 env 结束后 decay epsilon
         4. 日志 & checkpoint
 
+    停止条件（二选一）：
+        - total_steps 非 None：累计环境步数（与 _run_episode 返回的 steps 一致）>= total_steps 后停止；
+          每 episode 仍完整跑完再判停，故实际总步数可能略超预算。
+        - total_steps 为 None：跑满 max_iterations 个 episode（与旧行为一致）。
+
     Args:
         algo: QTableAlgo 实例
         vec_env: 向量化环境（DummyVectorEnv 即可）
-        config: TrainerConfig（max_iterations 复用为 max_episodes）
+        config: TrainerConfig
         save_dir: 模型保存根目录
         logger: SimpleLogger 实例
         log_extra_fn: 获取环境指标的回调
@@ -46,6 +51,7 @@ class QTableTrainer:
         self.vec_env = vec_env
         self.num_envs = vec_env.num_envs
         self.agents = vec_env.agents
+        self._step_budget: Optional[int] = config.total_steps
         self.max_episodes = config.max_iterations
         self.save_interval = config.save_interval
         self.save_dir = Path(save_dir)
@@ -62,8 +68,10 @@ class QTableTrainer:
     def train(self) -> Dict[str, float]:
         start_time = time.time()
         episode_rewards: List[float] = []
+        ep = 0
 
-        for ep in range(1, self.max_episodes + 1):
+        while True:
+            ep += 1
             ep_result = self._run_episode()
             self.total_steps += ep_result["steps"]
             episode_rewards.append(ep_result["mean_reward"])
@@ -78,16 +86,27 @@ class QTableTrainer:
             if ep % self.save_interval == 0:
                 self._save_checkpoint(ep)
 
-        self._save_checkpoint(self.max_episodes)
+            if self._step_budget is not None:
+                if self.total_steps >= self._step_budget:
+                    break
+            elif ep >= self.max_episodes:
+                break
+
+        self._save_checkpoint(ep)
 
         total_time = time.time() - start_time
         if self.verbose:
-            print(f"\n[QTable] Training complete! Episodes: {self.max_episodes}, "
-                  f"Steps: {self.total_steps}, Time: {total_time:.1f}s, "
+            budget_msg = (
+                f"step_budget={self._step_budget}"
+                if self._step_budget is not None
+                else f"episodes={self.max_episodes}"
+            )
+            print(f"\n[QTable] Training complete! {budget_msg}, "
+                  f"ran_episodes={ep}, Steps: {self.total_steps}, Time: {total_time:.1f}s, "
                   f"Best reward: {self.best_reward:.2f}")
 
         return {
-            "total_episodes": self.max_episodes,
+            "total_episodes": ep,
             "total_steps": self.total_steps,
             "total_time": total_time,
             "best_reward": self.best_reward,
@@ -295,8 +314,13 @@ class QTableTrainer:
             self.logger.log(log_data, step=self.total_steps)
 
         if self.verbose and (ep % 50 == 0 or ep == 1):
+            ep_cap = (
+                f"{self._step_budget} steps"
+                if self._step_budget is not None
+                else f"{self.max_episodes} ep"
+            )
             print(
-                f"[Ep {ep}/{self.max_episodes}] "
+                f"[Ep {ep} | stop@{ep_cap}] "
                 f"reward={ep_result['mean_reward']:.2f}, "
                 f"eps={self.algo.get_epsilon():.4f}, "
                 f"steps={self.total_steps}, SPS={sps}"
@@ -338,6 +362,8 @@ class JointQTableTrainer:
         2. 逐步选动作 → env.step → Q-update
         3. 所有 env 结束后 decay epsilon
         4. 日志 & checkpoint
+
+    停止条件与 QTableTrainer 相同：total_steps 预算 或 max_iterations 个 episode。
     """
 
     POLICY_KEY = "agent_0"
@@ -354,6 +380,7 @@ class JointQTableTrainer:
         self.algo = algo
         self.vec_env = vec_env
         self.num_envs = vec_env.num_envs
+        self._step_budget: Optional[int] = config.total_steps
         self.max_episodes = config.max_iterations
         self.save_interval = config.save_interval
         self.save_dir = Path(save_dir)
@@ -367,8 +394,10 @@ class JointQTableTrainer:
     def train(self) -> Dict[str, float]:
         start_time = time.time()
         episode_rewards: List[float] = []
+        ep = 0
 
-        for ep in range(1, self.max_episodes + 1):
+        while True:
+            ep += 1
             ep_result = self._run_episode()
             self.total_steps += ep_result["steps"]
             episode_rewards.append(ep_result["mean_reward"])
@@ -383,16 +412,27 @@ class JointQTableTrainer:
             if ep % self.save_interval == 0:
                 self._save_checkpoint(ep)
 
-        self._save_checkpoint(self.max_episodes)
+            if self._step_budget is not None:
+                if self.total_steps >= self._step_budget:
+                    break
+            elif ep >= self.max_episodes:
+                break
+
+        self._save_checkpoint(ep)
 
         total_time = time.time() - start_time
         if self.verbose:
-            print(f"\n[JointQTable] Training complete! Episodes: {self.max_episodes}, "
-                  f"Steps: {self.total_steps}, Time: {total_time:.1f}s, "
+            budget_msg = (
+                f"step_budget={self._step_budget}"
+                if self._step_budget is not None
+                else f"episodes={self.max_episodes}"
+            )
+            print(f"\n[JointQTable] Training complete! {budget_msg}, "
+                  f"ran_episodes={ep}, Steps: {self.total_steps}, Time: {total_time:.1f}s, "
                   f"Best reward: {self.best_reward:.2f}")
 
         return {
-            "total_episodes": self.max_episodes,
+            "total_episodes": ep,
             "total_steps": self.total_steps,
             "total_time": total_time,
             "best_reward": self.best_reward,
@@ -482,8 +522,13 @@ class JointQTableTrainer:
             self.logger.log(log_data, step=self.total_steps)
 
         if self.verbose and (ep % 50 == 0 or ep == 1):
+            ep_cap = (
+                f"{self._step_budget} steps"
+                if self._step_budget is not None
+                else f"{self.max_episodes} ep"
+            )
             print(
-                f"[Ep {ep}/{self.max_episodes}] "
+                f"[Ep {ep} | stop@{ep_cap}] "
                 f"reward={ep_result['mean_reward']:.2f}, "
                 f"eps={self.algo.get_epsilon():.4f}, "
                 f"steps={self.total_steps}, SPS={sps}"

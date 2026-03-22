@@ -416,7 +416,14 @@ def _train_qtable(config: ExperimentConfig):
         )
 
     print(f"\n[Train] Starting Q-table training")
-    print(f"  Max episodes: {tc.max_iterations}")
+    if tc.total_steps is not None:
+        print(
+            f"  Stop when total_steps >= {tc.total_steps} "
+            f"(per-episode epsilon decay & Q-update unchanged)"
+        )
+        print(f"  max_iterations ({tc.max_iterations}) unused for stopping while total_steps is set")
+    else:
+        print(f"  Max episodes: {tc.max_iterations}")
     print(f"  Save dir: {config.save_dir}")
 
     trainer.train()
@@ -552,7 +559,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
         context_kwargs["q_network"] = q_net
 
     if isinstance(tc, OnPolicyTrainerConfig):
-        context_kwargs["total_iterations"] = tc.max_iterations
+        context_kwargs["total_iterations"] = tc.effective_max_iterations
         context_kwargs["optimizer_steps_per_iter"] = tc.compute_optimizer_steps_per_iter(
             num_agents=dims["num_agents"]
         )
@@ -560,7 +567,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
     if isinstance(tc, OffPolicyTrainerConfig):
         steps_per_collect = tc.num_envs * math.ceil(tc.collect_per_step / tc.num_envs)
         updates_per_iter = math.ceil(tc.step_per_iteration / steps_per_collect) * tc.update_per_step
-        context_kwargs["total_updates"] = tc.max_iterations * updates_per_iter
+        context_kwargs["total_updates"] = tc.effective_max_iterations * updates_per_iter
 
     if value_norm_config is not None:
         context_kwargs["value_norm_config"] = value_norm_config
@@ -654,7 +661,14 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
 
     # ---- 11. 训练 ----
     print(f"\n[Train] Starting {config.algo_name.upper()} training")
-    print(f"  Max iterations: {tc.max_iterations}")
+    if tc.total_steps is not None:
+        print(
+            f"  total_steps budget: {tc.total_steps} → "
+            f"max_iterations={tc.effective_max_iterations} "
+            f"(ceil({tc.total_steps} / {tc.step_per_iteration}))"
+        )
+    else:
+        print(f"  Max iterations: {tc.effective_max_iterations}")
     if isinstance(tc, OnPolicyTrainerConfig):
         batch_size = tc.step_per_iteration * dims["num_agents"]
         print(f"  Batch size: {batch_size}, Minibatch: {tc.minibatch_size}, "
@@ -678,7 +692,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
         q_config=q_config_dict,
         extra_info={
             **_eval_meta,
-            "iteration": tc.max_iterations,
+            "iteration": tc.effective_max_iterations,
             "value_normalization": _get_value_norm_config(),
         },
     )

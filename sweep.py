@@ -235,7 +235,7 @@ def create_sweep(args, project: str) -> str:
                 "update_epochs": {"values": [3, 5, 10]},
                 "num_steps": {"values": [1024, 2048, 4096]},
                 "gamma": {"value": 0.999},
-                "max_iterations": {"value": 500},
+                "total_steps": {"value": 50_000_000},
             },
         }
 

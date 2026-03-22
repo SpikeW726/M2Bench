@@ -45,7 +45,7 @@ training:
   num_envs: 12
   use_subproc: true
   num_steps: 2048
-  max_iterations: 1000
+  total_steps: 50000000
   save_interval: 200
   minibatch_size: 4096
   update_epochs: 5

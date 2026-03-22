@@ -45,7 +45,7 @@ training:
   num_envs: 12
   use_subproc: true
   num_steps: 64
-  max_iterations: 3000
+  total_steps: 50000000  # 50M env steps; max_iterations = ceil(total_steps / (num_envs * num_steps))
   save_interval: 500
   batch_size: 256
   warmup_steps: 10000

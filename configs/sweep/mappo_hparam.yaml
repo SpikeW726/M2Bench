@@ -46,8 +46,8 @@ parameters:
     values: [3, 5, 10]
   num_steps:
     values: [1024, 2048, 4096]
-  max_iterations:
-    value: 500
+  total_steps:
+    value: 50000000
   save_interval:
     value: 500
 
@@ -96,8 +96,8 @@ parameters:
 #     values: [5, 8, 10]
 #   num_steps:
 #     values: [2048, 4096, 6144]
-#   max_iterations:
-#     value: 800
+#   total_steps:
+#     value: 50000000
 #   save_interval:
 #     value: 500
 
