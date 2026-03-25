@@ -110,9 +110,33 @@ def sweep_train():
         print(f"[Sweep] Recorded save_dir={final_dir}")
 
     except Exception as e:
-        print(f"[Sweep] Error during training: {e}")
+        # wandb.agent 有时会吞掉链式信息；这里强制打印类型/repr/ cause，并写文件备查
         import traceback
-        traceback.print_exc()
+        import sys
+        from pathlib import Path
+
+        lines = [
+            f"[Sweep] Error during training: {type(e).__name__}: {e!r}",
+        ]
+        if e.__cause__ is not None:
+            lines.append(f"  __cause__: {type(e.__cause__).__name__}: {e.__cause__!r}")
+        if e.__context__ is not None and e.__context__ is not e.__cause__:
+            lines.append(f"  __context__: {type(e.__context__).__name__}: {e.__context__!r}")
+        msg = "\n".join(lines)
+        print(msg, file=sys.stderr)
+        traceback.print_exception(type(e), e, e.__traceback__, chain=True, file=sys.stderr)
+
+        log_path = Path("sweep_train_crash.log")
+        try:
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 60}\n")
+                f.write(msg + "\n")
+                traceback.print_exception(
+                    type(e), e, e.__traceback__, chain=True, file=f
+                )
+            print(f"[Sweep] Full traceback also appended to {log_path.resolve()}", file=sys.stderr)
+        except OSError:
+            pass
         raise
 
 

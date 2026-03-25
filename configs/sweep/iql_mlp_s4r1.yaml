@@ -16,9 +16,9 @@ metric:
   goal: minimize
 
 early_terminate:
-  type: median_stopping_rule
-  min_iter: 1010
-  min_samples_to_check: 6
+  type: hyperband
+  min_iter: 1000
+  eta: 3
 
 parameters:
   # ---- algo params (映射到 IQLParams / D3QNParams) ----
@@ -60,25 +60,25 @@ parameters:
 
   # ---- training params (映射到 OffPolicyTrainerConfig) ----
   batch_size:
-    values: [64, 128, 256]
+    values: [128, 256, 512]
 
   buffer_size:
-    values: [50000, 100000, 200000]
+    values: [20000, 50000, 100000]
 
   warmup_steps:
     values: [5000, 10000, 20000]
 
   update_per_step:
-    values: [1, 2, 4]
+    value: 1
 
   collect_per_step:
-    value: 12
+    value: 16
 
   num_steps:
     values: [32, 64, 128]
 
   total_steps:
-    value: 50000000
+    value: 10000000
 
   save_interval:
     value: 1000
