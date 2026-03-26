@@ -9,9 +9,9 @@ metric:
   goal: minimize
 
 early_terminate:
-  type: median_stopping_rule
-  min_iter: 800
-  min_samples_to_check: 8
+  type: hyperband
+  min_iter: 1000
+  eta: 3
 
 parameters:
   # ---- algo params (映射到 MAPPOParams) ----
@@ -47,14 +47,14 @@ parameters:
   num_steps:
     values: [1024, 2048, 4096]
   total_steps:
-    value: 50000000
+    value: 20000000
   save_interval:
-    value: 750
+    value: 1000
 
   custom_configs.idi_scale:
-    values: [0.01, 0.05, 0.1]
+    values: [0.0, 0.05, 0.1]
   custom_configs.contribution_scale:
-    values: [0.01, 0.05, 0.1]
+    values: [0.0, 0.05, 0.1]
 
 # method: bayes
 
