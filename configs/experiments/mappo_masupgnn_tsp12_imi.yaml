@@ -72,6 +72,9 @@ actor:
   gnn_layers: 2
   actor_mlp_layers: 1
   gnn_mlp_layers: 2
+  node_feat_dim: 2   # 须与 env.custom_configs.node_feat_dim 一致
+  edge_feat_dim: 1   # 须与 env.custom_configs.edge_feat_dim 一致
+  global_feat_dim: 2 # 须与 env.custom_configs.global_feat_dim 一致
 
 critic:
   hidden: [256, 256]

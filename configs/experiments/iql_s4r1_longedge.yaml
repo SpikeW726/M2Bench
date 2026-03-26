@@ -35,7 +35,7 @@ algo:
 
 # ---- 训练 ----
 training:
-  num_envs: 16
+  num_envs: 4
   use_subproc: true
   num_steps: 64
   total_steps: 10000000

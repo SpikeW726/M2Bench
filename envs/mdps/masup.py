@@ -220,7 +220,14 @@ class MASUPEnv(EventDrivenEnv):
             initial_positions = random.sample(list(self.world.graph.nodes), self.world.num_agents)
 
         # 在 world.reset 固化 last_episode_metrics 之前，保存上一局终值（与 last_episode_metrics 同步）
-        if self.world.metrics_tracker.history:
+        # 注意：world.reset 后 metrics_tracker 只有 1 条初始 record；
+        # len > 1 才说明本轮真正跑过 tick，是合法的完整 episode。
+        # 若只检查 history 非空，双重 reset（dims 推断 + collector.reset）时会把
+        # worst_idleness_fromT=0.0 误存为上一局终值，导致 WandB 出现低于理论下限的值。
+        if (
+            hasattr(self, "worst_idleness_fromT")
+            and len(self.world.metrics_tracker.history) > 1
+        ):
             self.last_episode_wi_fromT = float(self.worst_idleness_fromT)
         else:
             self.last_episode_wi_fromT = None

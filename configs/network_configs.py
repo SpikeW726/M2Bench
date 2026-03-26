@@ -9,7 +9,9 @@
     │   └── QMLPConfig (hidden, dueling)
     ├── RNNConfig (rnn_type, hidden_size, num_layers)
     │   └── QRNNConfig (rnn_type, hidden_size, num_layers, dueling)
-    └── SUNConfig (num_nodes, node_feat_dim, f1_hidden, f2_hidden)
+    ├── SUNConfig (num_nodes, node_feat_dim, f1_hidden, f2_hidden)
+    ├── MPNNConfig (graph_path, agent_num, hidden_dim, gnn_layers, ...)
+    └── SAGEConfig  (graph_path, agent_num, hidden_dim, gnn_layers, ...)
 """
 
 from dataclasses import dataclass, field
@@ -75,3 +77,36 @@ class MPNNConfig(NetworkConfig):
     actor_mlp_layers: int = 1
     gnn_mlp_layers: int = 2
     mlp_activation: str = "silu"
+    node_feat_dim: int = 2
+    edge_feat_dim: int = 1
+    global_feat_dim: int = 2
+
+
+@dataclass(kw_only=True)
+class SAGEConfig(NetworkConfig):
+    """GraphSAGE Actor 参数，用于 GraphSageActor。
+
+    与 MPNNConfig 的区别：
+    - 无 gnn_mlp_layers（每层仅单线性变换 W_k，无内部 MLP）
+    - mlp_activation 默认 relu（原论文默认非线性）
+    - global_feat_dim 仅用于观测解码，不进入网络
+
+    neighbor_scoring=True 时启用论文 MAGEC 的 Neighbor Scoring 机制：
+    - action_dim = max_degree + 1（最后维为专用 no-op 槽）
+    - 网络结构变为 neighbor_scorer (h→1) + selector (action_dim→action_dim)
+    - 不再使用 id_encoder 和 actor_head
+
+    use_jk=True 时启用 Jumping Knowledge（各 GNN 层输出均值聚合）。
+    """
+    graph_path: str
+    agent_num: int
+    role_imformation: str = "agent-index"
+    hidden_dim: int = 64
+    gnn_layers: int = 2        # Algorithm 1 中的 K
+    actor_mlp_layers: int = 1  # actor head / neighbor_scorer / selector MLP 深度
+    mlp_activation: str = "relu"
+    node_feat_dim: int = 2
+    edge_feat_dim: int = 1
+    global_feat_dim: int = 2   # 仅用于 obs 解码定位 identity，不送入网络
+    neighbor_scoring: bool = False  # 启用 MAGEC Neighbor Scoring 分支
+    use_jk: bool = False            # 启用 Jumping Knowledge（层输出均值聚合）

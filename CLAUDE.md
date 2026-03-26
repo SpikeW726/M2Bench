@@ -641,6 +641,85 @@ VDN/QMIX 的联合奖励使用 `r_tot = Σ r_i`（各 agent 奖励之和），
 - **QMIX**: `collect_state=True`，ReplayBuffer 开启 `has_state=True`，Mixer 超网络需要 state
 - **VDN**: `collect_state=False`，SumMixer 不使用 state，节省内存和采集开销
 
+## 图结构 Actor 观测协议（MPNNActor / GraphSageActor）
+
+`networks/gnn.py` 提供两个图结构 Actor，均不绑定具体环境实现：
+
+| Actor | YAML `actor_type` | 架构特点 |
+|-------|-------------------|---------|
+| `MPNNActor` | `mpnn` | 节点+边+全局三路更新；global_feat 进入网络 |
+| `GraphSageActor` | `sage` | 严格复现 Algorithm 1（SAGE + edge attr）；边静态不更新；global_feat **不**进入网络，仅用于定位 identity |
+
+两者共享完全相同的观测拼接协议；差异体现在 `actor:` 段的配置字段（见下方）。
+任何环境若想使用上述任意 Actor，必须遵守以下观测构造协议。
+
+### 观测向量拼接顺序（固定）
+
+```
+[node_feats]    num_nodes × node_feat_dim  个 float
+[edge_src]      max_edges                  个 float  （边源节点索引）
+[edge_dst]      max_edges                  个 float  （边目标节点索引）
+[edge_attr]     max_edges × edge_feat_dim  个 float
+[edge_mask]     max_edges                  个 float  （1=有效, 0=填充）
+[global_feat]   global_feat_dim            个 float
+[identity]      identity_dim               个 float  （见下方说明）
+```
+
+其中：
+- `num_nodes = 静态节点数 + agent_num`（每个 agent 对应一个虚拟节点）
+- `max_edges = 静态有向边数 + agent_num × 2`（每个 agent 的动态边上限）
+- 静态节点下标：`0 ~ 静态节点数-1`；虚拟 agent 节点下标：`静态节点数 + agent_idx`（0-based）
+- `edge_src` / `edge_dst` 填上述下标（float）；填充边索引任意，被 `edge_mask=0` 屏蔽
+
+### identity 与 role_imformation
+
+| role_imformation | identity 编码                                   | identity_dim    |
+|------------------|--------------------------------------------------|-----------------|
+| `agent-index`    | one-hot，第 `i` 位为 1                          | `agent_num`     |
+| `position`       | `[float(当前节点下标)]`                          | `1`             |
+| `decision`       | `[float(当前节点下标)] + one-hot(决策顺序索引)` | `1 + agent_num` |
+
+### YAML actor 段必填字段
+
+**MPNNActor（`actor_type: mpnn`）**
+
+```yaml
+actor_type: mpnn
+actor:
+  graph_path: graphs/xxx.json    # 用于推导 num_nodes / max_edges
+  agent_num: N
+  role_imformation: agent-index  # 须与环境 custom_configs.role_imformation 一致
+  node_feat_dim: 2               # 须与环境 _build_obs 实际维度严格一致
+  edge_feat_dim: 1
+  global_feat_dim: 2
+  hidden_dim: 64
+  gnn_layers: 2
+  actor_mlp_layers: 1
+  gnn_mlp_layers: 2              # MPNNActor 专有：MPNN 内部 MLP 层数
+  mlp_activation: silu
+```
+
+**GraphSageActor（`actor_type: sage`）**
+
+```yaml
+actor_type: sage
+actor:
+  graph_path: graphs/xxx.json
+  agent_num: N
+  role_imformation: agent-index
+  node_feat_dim: 2
+  edge_feat_dim: 1
+  global_feat_dim: 2             # 仅用于 obs 解码，不进入网络
+  hidden_dim: 64
+  gnn_layers: 2                  # Algorithm 1 中的 K（层数）
+  actor_mlp_layers: 1
+  mlp_activation: relu           # 默认 relu，对应原论文非线性 σ
+  # 无 gnn_mlp_layers：SAGE 每层仅单线性变换 W_k，无内部 MLP
+```
+
+> `node_feat_dim` / `edge_feat_dim` / `global_feat_dim` 与 `MASUPGraphEnv` 的 `custom_configs`
+> 同名字段含义相同，二者必须严格一致，否则观测解包会越界或产生静默错误。
+
 ## Common Development Tasks
 
 ### Adding a new RL algorithm
