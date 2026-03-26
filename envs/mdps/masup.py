@@ -21,6 +21,11 @@ class MASUPEnv(EventDrivenEnv):
         self.T_time = kwargs.get("T", 0.0)
         self.role_ifm = kwargs.get('role_imformation', "agent-index")
 
+        # 上一局 episode 结束时的 worst_idleness_fromT（供 get_episode_metrics / WandB）
+        self.last_episode_wi_fromT: Optional[float] = None
+        # 与 metrics_tracker 时间序列对齐的 worst_idleness_fromT 曲线（供评估作图）
+        self._wi_fromT_history: List[float] = []
+
         # reward trick
         self.contribution_scale = float(kwargs.get('contribution_scale', 0.0))
         self.idi_scale = float(kwargs.get('idi_scale', 0.0))
@@ -213,6 +218,12 @@ class MASUPEnv(EventDrivenEnv):
             initial_positions = self.init_pos
         else:
             initial_positions = random.sample(list(self.world.graph.nodes), self.world.num_agents)
+
+        # 在 world.reset 固化 last_episode_metrics 之前，保存上一局终值（与 last_episode_metrics 同步）
+        if self.world.metrics_tracker.history:
+            self.last_episode_wi_fromT = float(self.worst_idleness_fromT)
+        else:
+            self.last_episode_wi_fromT = None
         
         # 3. 重置物理世界
         self.world.reset(initial_positions=initial_positions)
@@ -227,6 +238,8 @@ class MASUPEnv(EventDrivenEnv):
         # worst_idleness: 考虑 T_time 的最大加权 idleness（与 world.worst_idleness 不同！）
         self.worst_idleness_fromT = 0.0
         self.last_time_interval = 0.0
+        # 与本轮 metrics_tracker 首行（reset 后初始时刻）对齐
+        self._wi_fromT_history = [float(self.worst_idleness_fromT)]
         
         # 动作统计
         self.wait_action_count = {i: 0 for i in range(self.world.num_agents)}
@@ -244,7 +257,16 @@ class MASUPEnv(EventDrivenEnv):
         m = self.world.last_episode_metrics
         if m is None:
             return None
-        return {"igi": m.igi, "agi": m.agi, "iwi": m.iwi, "wi": m.wi, "wait_ratio": m.wait_ratio}
+        out = {
+            "igi": m.igi,
+            "agi": m.agi,
+            "iwi": m.iwi,
+            "wi": m.wi,
+            "wait_ratio": m.wait_ratio,
+        }
+        if self.last_episode_wi_fromT is not None:
+            out["wi_fromT"] = self.last_episode_wi_fromT
+        return out
     
     def get_current_metrics(self) -> dict:
         """返回当前 episode 的实时指标"""
@@ -356,6 +378,7 @@ class MASUPEnv(EventDrivenEnv):
             current_iwi = self.world.current_metrics.iwi
             if current_iwi > self.worst_idleness_fromT:
                 self.worst_idleness_fromT = current_iwi
+        self._wi_fromT_history.append(float(self.worst_idleness_fromT))
     
     def _update_timers(self, dt: float):
         """更新 obs_timer"""

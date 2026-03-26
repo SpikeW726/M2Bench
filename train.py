@@ -63,6 +63,22 @@ class SimpleLogger:
 #                          辅助函数
 # =============================================================================
 
+def _wandb_env_metrics_from_finished(finished: list) -> Dict[str, float]:
+    """从各子环境 get_episode_metrics 返回值构造 WandB env/*；仅含 wi_fromT 的环境会多记 env/wi_fromT。"""
+    if not finished:
+        return {}
+    out: Dict[str, float] = {
+        "env/igi": float(np.mean([m["igi"] for m in finished])),
+        "env/agi": float(np.mean([m["agi"] for m in finished])),
+        "env/iwi": float(np.mean([m["iwi"] for m in finished])),
+        "env/wi": float(np.mean([m["wi"] for m in finished])),
+    }
+    wi_t = [m["wi_fromT"] for m in finished if m.get("wi_fromT") is not None]
+    if wi_t:
+        out["env/wi_fromT"] = float(np.mean(wi_t))
+    return out
+
+
 def _infer_dims(vec_env, algo_name: str) -> dict:
     """从向量化环境推断网络所需的各维度。
 
@@ -378,12 +394,7 @@ def _train_qtable(config: ExperimentConfig):
             metrics_list = vec_env.call_env_method("get_episode_metrics")
             finished = [m for m in metrics_list if m is not None]
             if finished:
-                return {
-                    "env/igi": np.mean([m["igi"] for m in finished]),
-                    "env/agi": np.mean([m["agi"] for m in finished]),
-                    "env/iwi": np.mean([m["iwi"] for m in finished]),
-                    "env/wi": np.mean([m["wi"] for m in finished]),
-                }
+                return _wandb_env_metrics_from_finished(finished)
         except Exception:
             pass
         return {}
@@ -638,12 +649,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
             metrics_list = vec_env.call_env_method("get_episode_metrics")
             finished = [m for m in metrics_list if m is not None]
             if finished:
-                return {
-                    "env/igi": np.mean([m["igi"] for m in finished]),
-                    "env/agi": np.mean([m["agi"] for m in finished]),
-                    "env/iwi": np.mean([m["iwi"] for m in finished]),
-                    "env/wi": np.mean([m["wi"] for m in finished]),
-                }
+                return _wandb_env_metrics_from_finished(finished)
         except Exception:
             pass
         return {}

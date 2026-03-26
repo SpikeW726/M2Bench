@@ -46,6 +46,40 @@ from utils.model_io import load_policy_for_eval, get_model_config
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
 
 
+# MASUP / MASUPGraphEnv：第四幅子图用 wi_fromT 替代全 episode 的 wi
+_MASUP_LIKE_ENV_TYPES = frozenset({"masup", "masup_gnn"})
+
+
+def _eval_metrics_history_for_plot(env, env_type: str) -> dict:
+    hist = env.world.metrics_tracker.get_history_dict()
+    if env_type not in _MASUP_LIKE_ENV_TYPES:
+        return hist
+    wfh = getattr(env, "_wi_fromT_history", None)
+    tlen = len(hist.get("time", []))
+    if wfh is not None and len(wfh) == tlen:
+        h = dict(hist)
+        h["wi_fromT"] = list(wfh)
+        return h
+    return hist
+
+
+def _eval_plot_metric_configs(env_type: str, sample_hist: dict):
+    base = [
+        ("igi", "Instantaneous Graph Idleness (IGI)", "IGI"),
+        ("agi", "Average Graph Idleness (AGI)", "AGI"),
+        ("iwi", "Instantaneous Worst Idleness (IWI)", "IWI"),
+    ]
+    if env_type in _MASUP_LIKE_ENV_TYPES and sample_hist and "wi_fromT" in sample_hist:
+        return base + [
+            (
+                "wi_fromT",
+                "Worst Idleness from T (max weighted IWI after T_time)",
+                "WI from T",
+            ),
+        ]
+    return base + [("wi", "Worst Idleness (WI)", "WI")]
+
+
 # =============================================================================
 #                          环境创建
 # =============================================================================
@@ -140,6 +174,7 @@ def test_trained_policy(
     episode_metrics = []
     metrics_history = []
     episode_times = []
+    wi_fromT_finals: list = []
 
     anim_positions_history = []
     anim_time_intervals = []
@@ -187,21 +222,33 @@ def test_trained_policy(
         final_metrics = env.world.current_metrics
         episode_metrics.append(final_metrics)
         episode_times.append(final_metrics.time)
-        metrics_history.append(env.world.metrics_tracker.get_history_dict())
+        metrics_history.append(_eval_metrics_history_for_plot(env, env_type))
+        if env_type in _MASUP_LIKE_ENV_TYPES:
+            wi_fromT_finals.append(float(getattr(env, "worst_idleness_fromT", 0.0)))
 
-        print(f"Episode {ep + 1}/{num_episodes}: "
-              f"IGI={final_metrics.igi:.4f}, "
-              f"AGI={final_metrics.agi:.4f}, "
-              f"IWI={final_metrics.iwi:.4f}, "
-              f"WI={final_metrics.wi:.4f}, "
-              f"time={final_metrics.time:.2f}s, "
-              f"steps={step_count}")
+        ep_line = (
+            f"Episode {ep + 1}/{num_episodes}: "
+            f"IGI={final_metrics.igi:.4f}, "
+            f"AGI={final_metrics.agi:.4f}, "
+            f"IWI={final_metrics.iwi:.4f}, "
+            f"WI={final_metrics.wi:.4f}, "
+            f"time={final_metrics.time:.2f}s, "
+            f"steps={step_count}"
+        )
+        if env_type in _MASUP_LIKE_ENV_TYPES:
+            ep_line += f", WI@T={getattr(env, 'worst_idleness_fromT', 0.0):.4f}"
+        print(ep_line)
 
     # ---- 5. 汇总统计 ----
     print(f"\n=== Summary Statistics ({num_episodes} episodes, episode_time={time_desc}) ===")
     for metric_name in ['IGI', 'AGI', 'IWI', 'WI']:
         values = [getattr(m, metric_name.lower()) for m in episode_metrics]
         print(f"{metric_name}: {np.mean(values):.4f} ± {np.std(values):.4f}")
+    if env_type in _MASUP_LIKE_ENV_TYPES and wi_fromT_finals:
+        print(
+            f"WI@T: {np.mean(wi_fromT_finals):.4f} ± {np.std(wi_fromT_finals):.4f} "
+            f"(worst_idleness_fromT at episode end)"
+        )
 
     # ---- 6. 可视化 ----
     # 动画目录：优先用显式传入的 save_animation_dir，回退到 save_plot 的父目录
@@ -212,9 +259,12 @@ def test_trained_policy(
         aggregated = aggregate_episode_metrics(metrics_history)
         avg_time = np.mean(episode_times)
         subtitle = f"Graph: {graph_name} | Agents: {num_agents} | Avg Time: {avg_time:.2f}s"
-
+        _mcfg = _eval_plot_metric_configs(
+            env_type, metrics_history[0] if metrics_history else {}
+        )
         plot_aggregated_metrics(
             aggregated,
+            metric_configs=_mcfg,
             title=f'{algo_name.upper()} Evaluation ({num_episodes} episodes, {time_desc})',
             subtitle=subtitle,
             save_path=save_plot,
@@ -334,6 +384,7 @@ def test_qtable_policy(
     episode_metrics = []
     metrics_history = []
     episode_times = []
+    wi_fromT_finals: list = []
     anim_positions_history = []
     anim_time_intervals = []
 
@@ -392,20 +443,32 @@ def test_qtable_policy(
         final_metrics = env.world.current_metrics
         episode_metrics.append(final_metrics)
         episode_times.append(final_metrics.time)
-        metrics_history.append(env.world.metrics_tracker.get_history_dict())
+        metrics_history.append(_eval_metrics_history_for_plot(env, env_type))
+        if env_type in _MASUP_LIKE_ENV_TYPES:
+            wi_fromT_finals.append(float(getattr(env, "worst_idleness_fromT", 0.0)))
 
-        print(f"Episode {ep + 1}/{num_episodes}: "
-              f"IGI={final_metrics.igi:.4f}, "
-              f"AGI={final_metrics.agi:.4f}, "
-              f"IWI={final_metrics.iwi:.4f}, "
-              f"WI={final_metrics.wi:.4f}, "
-              f"time={final_metrics.time:.2f}s")
+        ep_line = (
+            f"Episode {ep + 1}/{num_episodes}: "
+            f"IGI={final_metrics.igi:.4f}, "
+            f"AGI={final_metrics.agi:.4f}, "
+            f"IWI={final_metrics.iwi:.4f}, "
+            f"WI={final_metrics.wi:.4f}, "
+            f"time={final_metrics.time:.2f}s"
+        )
+        if env_type in _MASUP_LIKE_ENV_TYPES:
+            ep_line += f", WI@T={getattr(env, 'worst_idleness_fromT', 0.0):.4f}"
+        print(ep_line)
 
     # ---- 5. 汇总统计 ----
     print(f"\n=== Summary Statistics ({num_episodes} episodes) ===")
     for metric_name in ['IGI', 'AGI', 'IWI', 'WI']:
         values = [getattr(m, metric_name.lower()) for m in episode_metrics]
         print(f"{metric_name}: {np.mean(values):.4f} ± {np.std(values):.4f}")
+    if env_type in _MASUP_LIKE_ENV_TYPES and wi_fromT_finals:
+        print(
+            f"WI@T: {np.mean(wi_fromT_finals):.4f} ± {np.std(wi_fromT_finals):.4f} "
+            f"(worst_idleness_fromT at episode end)"
+        )
 
     # ---- 6. 可视化 ----
     # 动画目录：优先用显式传入的 save_animation_dir，回退到 save_plot 的父目录
@@ -415,8 +478,12 @@ def test_qtable_policy(
         aggregated = aggregate_episode_metrics(metrics_history)
         avg_time = np.mean(episode_times)
         subtitle = f"Graph: {graph_name} | Agents: {num_agents} | Avg Time: {avg_time:.2f}s"
+        _mcfg_q = _eval_plot_metric_configs(
+            env_type, metrics_history[0] if metrics_history else {}
+        )
         plot_aggregated_metrics(
             aggregated,
+            metric_configs=_mcfg_q,
             title=f'Q-table Evaluation ({num_episodes} episodes)',
             subtitle=subtitle,
             save_path=save_plot,
