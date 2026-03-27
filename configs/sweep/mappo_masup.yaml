@@ -5,7 +5,7 @@
 method: random
 
 metric:
-  name: env/wi
+  name: env/wi_fromT
   goal: minimize
 
 early_terminate:

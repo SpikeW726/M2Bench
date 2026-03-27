@@ -135,7 +135,23 @@ class ActorPolicy(RLBasePolicy):
         action_mask = kwargs.get("action_mask", None)
         if action_mask is not None:
             mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
+            # 检测 mask 全 False（无合法动作）
+            if not mask_t.any(dim=-1).all():
+                bad = (~mask_t.any(dim=-1)).nonzero(as_tuple=False).squeeze(-1).tolist()
+                raise RuntimeError(
+                    f"action_mask 全 False（无合法动作）: batch indices={bad}, "
+                    f"mask shape={mask_t.shape}"
+                )
             logits = logits.masked_fill(~mask_t, float("-inf"))
+
+        # 检测 logits 含 NaN（通常由梯度爆炸导致网络参数损坏）
+        if torch.isnan(logits).any():
+            nan_frac = torch.isnan(logits).float().mean().item()
+            raise RuntimeError(
+                f"logits 含 NaN（梯度爆炸/网络参数损坏）: "
+                f"obs shape={obs.shape}, logits shape={logits.shape}, "
+                f"NaN 比例={nan_frac:.3f}"
+            )
 
         dist = torch.distributions.Categorical(logits=logits)
         act = (
@@ -286,6 +302,35 @@ class ValuePolicy(RLBasePolicy):
     def is_recurrent(self) -> bool:
         return getattr(self.q_network, "is_recurrent", False)
 
+    def _validate_q_action_mask(
+        self,
+        q: torch.Tensor,
+        mask_t: torch.Tensor,
+        where: str,
+    ) -> None:
+        """IQL/D3QN 等：在 masked_fill 前锁定 shape / 全 False / NaN 根因。q 可为 (B,A) 或 (S,B,A) 等。"""
+        if torch.isnan(q).any():
+            nan_frac = torch.isnan(q).float().mean().item()
+            raise RuntimeError(
+                f"[{where}] Q 输出含 NaN: q.shape={tuple(q.shape)}, NaN 比例={nan_frac:.3f}"
+            )
+        try:
+            mask_bc = torch.broadcast_to(mask_t, q.shape)
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"[{where}] action_mask 与 Q 形状无法对齐（broadcast 失败）: "
+                f"q.shape={tuple(q.shape)}, mask.shape={tuple(mask_t.shape)}"
+            ) from e
+        valid = mask_bc.any(dim=-1)
+        if not valid.all():
+            bad_idx = (~valid).nonzero(as_tuple=False)
+            sample = bad_idx[:16].tolist()
+            raise RuntimeError(
+                f"[{where}] action_mask 全 False（无合法动作）: "
+                f"q.shape={tuple(q.shape)}, mask.shape={tuple(mask_t.shape)}, "
+                f"前若干位置(与 q 除最后一维对齐)={sample}"
+            )
+
     # -----------------------------------------------------------------
     #  forward (epsilon-greedy)
     # -----------------------------------------------------------------
@@ -316,6 +361,7 @@ class ValuePolicy(RLBasePolicy):
         action_mask = kwargs.get("action_mask", None)
         if action_mask is not None:
             mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=q_values.device)
+            self._validate_q_action_mask(q_values, mask_t, "ValuePolicy.forward")
             q_values_masked = q_values.masked_fill(~mask_t, float("-inf"))
         else:
             mask_t = None
@@ -359,7 +405,14 @@ class ValuePolicy(RLBasePolicy):
             q = self.q_network(obs)
         if action_mask is not None:
             mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=q.device)
+            self._validate_q_action_mask(q, mask_t, "ValuePolicy.compute_q_values")
             q = q.masked_fill(~mask_t, float("-inf"))
+        elif torch.isnan(q).any():
+            nan_frac = torch.isnan(q).float().mean().item()
+            raise RuntimeError(
+                f"[ValuePolicy.compute_q_values] Q 输出含 NaN（无 mask）: "
+                f"q.shape={tuple(q.shape)}, NaN 比例={nan_frac:.3f}"
+            )
         return q
 
     # -----------------------------------------------------------------

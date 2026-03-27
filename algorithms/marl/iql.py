@@ -214,7 +214,14 @@ class IQLAlgo(BaseAlgorithm):
                 next_am = getattr(batch, 'next_action_mask', None)
                 if next_am is not None:
                     next_am_train = next_am[:, bi:].transpose(0, 1)
-                    mask_t = next_am_train.bool() if next_am_train.dtype != torch.bool else next_am_train
+                    mask_t = (
+                        next_am_train.bool()
+                        if next_am_train.dtype != torch.bool
+                        else next_am_train
+                    ).to(device=next_q_online.device)
+                    agent_policy._validate_q_action_mask(
+                        next_q_online, mask_t, "IQL.sequence.DDQN.online_next_q"
+                    )
                     next_q_online = next_q_online.masked_fill(~mask_t, float("-inf"))
                 next_actions = next_q_online.argmax(dim=-1, keepdim=True)
                 next_q_target_full, _ = target_policy.q_network.forward_sequence(next_obs_seq, h0_target)
@@ -225,7 +232,14 @@ class IQLAlgo(BaseAlgorithm):
                 next_am = getattr(batch, 'next_action_mask', None)
                 if next_am is not None:
                     next_am_train = next_am[:, bi:].transpose(0, 1)
-                    mask_t = next_am_train.bool() if next_am_train.dtype != torch.bool else next_am_train
+                    mask_t = (
+                        next_am_train.bool()
+                        if next_am_train.dtype != torch.bool
+                        else next_am_train
+                    ).to(device=next_q_target.device)
+                    agent_policy._validate_q_action_mask(
+                        next_q_target, mask_t, "IQL.sequence.target_next_q"
+                    )
                     next_q_target = next_q_target.masked_fill(~mask_t, float("-inf"))
                 q_next = next_q_target.max(dim=-1)[0]
 
