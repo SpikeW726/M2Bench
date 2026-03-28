@@ -1,0 +1,33 @@
+# Q-table + BBLA 环境 (LongEdge) — 3 agents
+# 用法: python train.py configs/experiments/bbla/qtable_bbla_longedge.yaml
+
+algo_name: qtable
+env_type: bbla
+
+exp_name: qtable-bbla-longedge
+graph_name: long_edge
+track_wandb: true
+wandb_project: MAP-RL
+
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: false
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.1
+  gamma: 0.9
+  epsilon_start: 0.1
+  epsilon_end: 0.1
+  epsilon_decay: 0.9995
+  sync_update: true
+
+training:
+  num_envs: 16
+  use_subproc: True
+  total_steps: 10000000
+  save_interval: 500

@@ -1,4 +1,7 @@
+import csv
 import os
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional
@@ -289,6 +292,64 @@ def aggregate_episode_metrics(
     return aggregated
 
 
+def save_eval_plot_curves_csv(
+    aggregated_data: Dict[str, Any],
+    csv_path: str,
+    plot_metric_keys: Optional[List[str]] = None,
+) -> Optional[str]:
+    """
+    导出与 plot_aggregated_metrics 子图一致的插值时间序列（mean/std），便于多 run 叠加绘图。
+    Columns: time (or step), then pairs of {metric}_mean, {metric}_std for each plotted metric.
+    """
+    if not aggregated_data:
+        return None
+    x_key = "time_x" if "time_x" in aggregated_data else (
+        "step_x" if "step_x" in aggregated_data else None
+    )
+    if x_key is None:
+        return None
+    x_col = "time" if x_key == "time_x" else "step"
+    x_vals = aggregated_data[x_key]
+    n = len(x_vals)
+    if n == 0:
+        return None
+
+    if plot_metric_keys is None:
+        plot_metric_keys = [
+            k[:-5]
+            for k in aggregated_data
+            if k.endswith("_mean") and not k.startswith(x_col)
+        ]
+        plot_metric_keys = sorted(set(plot_metric_keys))
+
+    triples: List[tuple] = []
+    for b in plot_metric_keys:
+        mk, sk = f"{b}_mean", f"{b}_std"
+        if mk in aggregated_data and sk in aggregated_data:
+            triples.append((b, mk, sk))
+
+    if not triples:
+        return None
+
+    cols = [x_col] + [c for _, mk, sk in triples for c in (mk, sk)]
+    out = Path(csv_path)
+    if out.parent:
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(out, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for i in range(n):
+            row = [float(x_vals[i])]
+            for _, mk, sk in triples:
+                row.append(float(aggregated_data[mk][i]))
+                row.append(float(aggregated_data[sk][i]))
+            w.writerow(row)
+
+    print(f"Plot data CSV saved to: {out}")
+    return str(out)
+
+
 def plot_aggregated_metrics(
     aggregated_data: Dict[str, Any],
     metric_configs: Optional[List[tuple]] = None,
@@ -314,7 +375,7 @@ def plot_aggregated_metrics(
     if not aggregated_data:
         print("No data to plot")
         return
-    
+
     # 默认配置：idleness metrics
     if metric_configs is None:
         metric_configs = [
@@ -323,6 +384,8 @@ def plot_aggregated_metrics(
             ('iwi', 'Instantaneous Worst Idleness (IWI)', 'IWI'),
             ('wi', 'Worst Idleness (WI)', 'WI')
         ]
+
+    plot_metric_keys = [t[0] for t in metric_configs]
     
     # 创建子图
     n_metrics = len(metric_configs)
@@ -390,6 +453,8 @@ def plot_aggregated_metrics(
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Plot saved to: {save_path}")
+        csv_path = str(Path(save_path).with_name(f"{Path(save_path).stem}_plot_data.csv"))
+        save_eval_plot_curves_csv(aggregated_data, csv_path, plot_metric_keys=plot_metric_keys)
     
     if show:
         plt.show()

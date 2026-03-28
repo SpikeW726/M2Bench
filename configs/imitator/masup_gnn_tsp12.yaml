@@ -3,7 +3,7 @@
 # 采样阶段（heuristic_sampler.py）用法:
 #   python trainers/imitator/heuristic_sampler.py \
 #     --env_type masup_gnn \
-#     --env_config configs/eval/masup_tsp12.yaml \
+#     --env_config configs/eval/masup/masup_tsp12.yaml \
 #     --save_path dataset/masup_gnn/tsp12_samples.h5 \
 #     --num_episodes 50000 --num_workers 8 --gamma 0.999
 #
@@ -30,7 +30,7 @@
 
 # ----- 环境配置（用于自动推断 obs_dim / action_dim / critic_state_dim）-----
 env_type: masup_gnn
-env_config: configs/eval/masup_tsp12.yaml
+env_config: configs/eval/masup/masup_tsp12.yaml
 # obs_dim / action_dim / critic_state_dim 由环境接口自动推断，无需手动填写
 
 # ----- 网络结构参数 -----

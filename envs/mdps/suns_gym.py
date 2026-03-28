@@ -37,6 +37,12 @@ class SUNSGymEnv(JointEventDrivenEnv):
             for j, w in self.world.graph.adj_list[i]:
                 self.weight_mat[self._node_to_idx[i], self._node_to_idx[j]] = w
         self._weight_mat_flat = self.weight_mat.flatten()
+        # phi 向量 + 节点特征 buffer (加速 _build_obs)
+        self._phi_vec = np.array(
+            [float(self.world.graph.phi.get(n, 1.0)) for n in ordered_nodes],
+            dtype=np.float32,
+        )
+        self._node_feat_buf = np.empty(2 * N, dtype=np.float32)
 
         self.truncate_by_time = kwargs.get("truncate_by_time", True)
         if self.truncate_by_time:
@@ -81,21 +87,16 @@ class SUNSGymEnv(JointEventDrivenEnv):
 
     def _build_obs(self, result: Optional[TickResult]) -> np.ndarray:
         """构建观测：[node_features_flat(2N), weight_mat_flat(N²)]"""
-        ordered_nodes = self._ordered_nodes
-        weighted_idleness = [
-            self.world.graph.phi[n] * self.world.node_idleness[n]
-            for n in ordered_nodes
-        ]
+        idle_vals = np.array(
+            [float(self.world.node_idleness[n]) for n in self._ordered_nodes],
+            dtype=np.float32,
+        )
+        weighted = self._phi_vec * idle_vals
         pos_idx = self._node_to_idx[self.world.agents[0].position]
-        node_feat_flat = []
-        for i, _n in enumerate(ordered_nodes):
-            node_feat_flat.append(weighted_idleness[i])
-            node_feat_flat.append(self.spl_mat[pos_idx, i])
-
-        return np.concatenate([
-            np.asarray(node_feat_flat, dtype=np.float32),
-            self._weight_mat_flat,
-        ])
+        buf = self._node_feat_buf
+        buf[0::2] = weighted
+        buf[1::2] = self.spl_mat[pos_idx]
+        return np.concatenate((buf, self._weight_mat_flat))
 
     def _build_info(self, result: Optional[TickResult]) -> dict:
         info = {"action_mask": np.ones(self.world.num_nodes, dtype=bool)}

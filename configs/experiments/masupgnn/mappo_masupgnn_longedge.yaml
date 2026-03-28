@@ -1,0 +1,80 @@
+# MAPPO + MPNN Actor + MASUPGraphEnv (LongEdge) — 从零训练
+# 用法: python train.py configs/experiments/masupgnn/mappo_masupgnn_longedge.yaml
+
+# ---- 分发字段 ----
+algo_name: mappo
+env_type: masup_gnn
+actor_type: mpnn
+critic_type: mlp
+
+# ---- 实验元信息 ----
+exp_name: mappo-masupgnn-longedge
+graph_name: long_edge
+track_wandb: true
+wandb_project: MAP-RL
+
+# ---- 环境 ----
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: true
+  deltaT: 0.5
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 100
+  custom_configs:
+    T: 5.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+    node_feat_dim: 2
+    edge_feat_dim: 1
+    global_feat_dim: 2
+
+# ---- 算法 ----
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-5
+  critic_lr: 3.0e-4
+  gamma: 0.999
+  gae_lambda: 1.0
+  clip_range: 0.2
+  vf_coef: 1.0
+  ent_coef: 0.1
+  clip_vloss: true
+  use_lr_scheduler: true
+  actor_lr_start_factor: 1.0
+  actor_lr_end_factor: 0.1
+  actor_lr_decay_ratio: 0.8
+  critic_lr_start_factor: 1.0
+  critic_lr_end_factor: 0.1
+  critic_lr_decay_ratio: 0.8
+
+# ---- 训练 ----
+training:
+  num_envs: 12
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 10000000
+  save_interval: 400
+  minibatch_size: 2048
+  update_epochs: 5
+
+# ---- 网络 ----
+# long_edge.json: 4 节点
+actor:
+  graph_path: graphs/long_edge.json
+  agent_num: 3
+  role_imformation: decision
+  hidden_dim: 64
+  gnn_layers: 2
+  actor_mlp_layers: 1
+  gnn_mlp_layers: 2
+  mlp_activation: relu
+  node_feat_dim: 2
+  edge_feat_dim: 1
+  global_feat_dim: 2
+
+critic:
+  hidden: [256, 256]

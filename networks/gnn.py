@@ -193,6 +193,25 @@ class MPNNActor(nn.Module):
         nn.init.orthogonal_(self.actor_head[-1].weight, gain=0.01)
         nn.init.constant_(self.actor_head[-1].bias, 0)
 
+        # _compute_joint_embedding: 按 (batch_size, device) 缓存与 obs 无关的索引张量
+        self._mpnn_spatial_cache_key = None
+
+    def _ensure_mpnn_spatial_cache(self, batch_size: int, device: torch.device) -> None:
+        """预计算 offsets / batch_idx / edge_batch 铺平向量，固定 B 与 device 时避免逐步 arange+repeat。"""
+        key = (batch_size, str(device))
+        if self._mpnn_spatial_cache_key == key:
+            return
+        self._mpnn_spatial_cache_key = key
+        ar = torch.arange(batch_size, device=device)
+        self._mpnn_arange_b = ar
+        self._mpnn_offsets = (ar * self.num_nodes).unsqueeze(1)
+        self._mpnn_batch_idx = (
+            ar.unsqueeze(1).repeat(1, self.num_nodes).reshape(-1).long()
+        )
+        self._mpnn_edge_batch_flat = (
+            ar.unsqueeze(1).repeat(1, self.max_edges).reshape(-1).long()
+        )
+
     def _build_mlp(
         self,
         input_dim: int,
@@ -215,6 +234,7 @@ class MPNNActor(nn.Module):
             obs_tensor = obs_tensor.unsqueeze(0)
         batch_size = obs_tensor.shape[0]
         device = obs_tensor.device
+        self._ensure_mpnn_spatial_cache(batch_size, device)
 
         curr = 0
         x_raw = obs_tensor[:, curr : curr + self.num_nodes * self._node_feat_dim].reshape(-1, self._node_feat_dim)
@@ -230,7 +250,7 @@ class MPNNActor(nn.Module):
         curr += self._global_feat_dim
         identity = obs_tensor[:, curr : curr + self.identity_dim]
 
-        offsets = (torch.arange(batch_size, device=device) * self.num_nodes).unsqueeze(1)
+        offsets = self._mpnn_offsets
         edge_index = torch.stack(
             [
                 (e_src + offsets).reshape(-1)[masks].long(),
@@ -239,20 +259,8 @@ class MPNNActor(nn.Module):
             dim=0,
         )
         edge_attr = e_attr_raw[masks]
-        edge_batch = (
-            torch.arange(batch_size, device=device)
-            .unsqueeze(1)
-            .repeat(1, self.max_edges)
-            .reshape(-1)[masks]
-            .long()
-        )
-        batch_idx = (
-            torch.arange(batch_size, device=device)
-            .unsqueeze(1)
-            .repeat(1, self.num_nodes)
-            .reshape(-1)
-            .long()
-        )
+        edge_batch = self._mpnn_edge_batch_flat[masks]
+        batch_idx = self._mpnn_batch_idx
 
         x = F.silu(self.node_init(x_raw))
         e = F.silu(self.edge_init(edge_attr))
@@ -268,7 +276,7 @@ class MPNNActor(nn.Module):
         else:
             agent_idx = torch.argmax(identity, dim=1)
         self_node_idx = self.static_node_num + agent_idx
-        self_embed = h_reshaped[torch.arange(batch_size, device=device), self_node_idx, :]
+        self_embed = h_reshaped[self._mpnn_arange_b, self_node_idx, :]
 
         id_embed = F.silu(self.id_encoder(identity))
 
@@ -587,25 +595,32 @@ class GraphSageActor(nn.Module):
         """
         h_reshaped = h.reshape(batch_size, self.num_nodes, -1)   # (B, N, h)
         agent_idx = torch.argmax(identity, dim=1)                 # (B,)
+        virt_idx = (self.static_node_num + agent_idx).float().unsqueeze(1)  # (B,1)
 
         # neighbor_scores shape = (B, action_dim)，最后一维(no-op)固定为0
-        neighbor_scores = torch.zeros(batch_size, self._action_dim, device=device)
+        neighbor_scores = torch.zeros(
+            batch_size, self._action_dim, device=device, dtype=h.dtype
+        )
 
-        for b in range(batch_size):
-            virt_idx = float(self.static_node_num + agent_idx[b].item())
-            # 找虚拟节点发出的、有效的、neighborIndex>=0 的边
-            is_from_virt = (e_src_2d[b] == virt_idx)              # (E,)
-            nbr_idx_vals = e_attr_2d[b, :, 1]                     # (E,) neighborIndex float
-            is_valid = is_from_virt & e_mask_2d[b] & (nbr_idx_vals >= 0.0)
-            if not is_valid.any():
-                continue
-            dst_nodes = e_dst_2d[b][is_valid].long()              # 目标节点局部索引
-            nbr_indices = nbr_idx_vals[is_valid].long()           # neighborIndex 值
-            nbr_indices = nbr_indices.clamp(0, self._max_degree - 1)
+        is_from_virt = e_src_2d == virt_idx                       # (B, E)
+        nbr_idx_vals = e_attr_2d[:, :, 1]
+        is_valid = is_from_virt & e_mask_2d & (nbr_idx_vals >= 0.0)
+        if not is_valid.any():
+            return self.selector(neighbor_scores)
 
-            nbr_embeds = h_reshaped[b, dst_nodes, :]              # (K, h)
-            scores = self.neighbor_scorer(nbr_embeds).squeeze(-1) # (K,)
-            neighbor_scores[b, nbr_indices] = scores
+        pair_idx = torch.nonzero(is_valid, as_tuple=False)        # (K, 2) [b, e]
+        b_idx = pair_idx[:, 0]
+        e_idx = pair_idx[:, 1]
+        dst_nodes = e_dst_2d[b_idx, e_idx].long()
+        nbr_indices = nbr_idx_vals[b_idx, e_idx].long().clamp(
+            0, self._max_degree - 1
+        )
+        nbr_embeds = h_reshaped[b_idx, dst_nodes, :]              # (K, h)
+        scores = self.neighbor_scorer(nbr_embeds).squeeze(-1)     # (K,)
+
+        # 扁平索引写入；假设同一 (b, neighborIndex) 至多一条有效边（MAGEC 构图约定）
+        lin = b_idx * self._action_dim + nbr_indices
+        neighbor_scores.view(-1).index_copy_(0, lin, scores)
 
         return self.selector(neighbor_scores)                      # (B, action_dim)
 

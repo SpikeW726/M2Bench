@@ -56,6 +56,16 @@ class MASUPEnv(EventDrivenEnv):
         elif self.role_ifm == "decision":
             self.obs_size = 3*self.world.num_agents + self.world.num_nodes + 4 + self.world.num_agents
 
+        # ---- _build_obs 加速: 固定节点顺序 + phi 向量 + identity 行预计算 ----
+        # 沿用 self.world.graph.nodes 的插入顺序（与原实现一致，保证 obs 语义不变）
+        self._obs_node_order: List = list(self.world.graph.nodes)
+        self._phi_arr = np.array(
+            [float(self.world.graph.phi[n]) for n in self._obs_node_order],
+            dtype=np.float32,
+        )
+        if self.role_ifm == "agent-index":
+            self._identity_rows = np.eye(self.world.num_agents, dtype=np.float32)
+
 
     def observation_space(self, agent):
         """
@@ -411,52 +421,66 @@ class MASUPEnv(EventDrivenEnv):
         return {agent: is_truncated for agent in self.agents}
 
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, np.ndarray]:
-        """构建所有智能体的观测"""
-        obs = {}
-        weighted_idleness = [self.world.graph.phi[node] * self.world.node_idleness[node] for node in self.world.graph.nodes]
-        agent_positions = [
-            val
-            for aid in range(self.world.num_agents)
-            for val in [
-                self.world.agents[aid].last_position,
-                self.world.agents[aid].target_node,
-                self.world.agents[aid].action_remaining
-            ]
-        ]
+        """构建所有智能体的观测（公共前缀只算一次，与原先 list 拼接顺序一致）。"""
+        idle_vals = np.array(
+            [float(self.world.node_idleness[n]) for n in self._obs_node_order],
+            dtype=np.float32,
+        )
+        weighted = self._phi_arr * idle_vals
 
-        for agent_id in range(self.world.num_agents):
-            agent_status = self.world.agents[agent_id]
-            ready_flag = 1.0 if agent_status.state == AgentState.READY else 0.0
-            agent_id_one_hot = [1.0 if idx == agent_id else 0.0 for idx in range(self.world.num_agents)]
+        Na = self.world.num_agents
+        pos_list = []
+        for aid in range(Na):
+            ag = self.world.agents[aid]
+            pos_list.extend(
+                [
+                    float(ag.last_position),
+                    float(ag.target_node),
+                    float(ag.action_remaining),
+                ]
+            )
+        pos_flat = np.array(pos_list, dtype=np.float32)
+        shared = np.concatenate((pos_flat, weighted))
 
-            if self.role_ifm == "agent-index":
-                single_obs = (
-                    agent_positions
-                    + weighted_idleness
-                    + [ready_flag, self.worst_idleness_fromT, self.obs_timer]
-                    + agent_id_one_hot
+        worst = float(self.worst_idleness_fromT)
+        timer = float(self.obs_timer)
+        obs: Dict[str, np.ndarray] = {}
+
+        if self.role_ifm == "agent-index":
+            for agent_id in range(Na):
+                ag = self.world.agents[agent_id]
+                ready_flag = 1.0 if ag.state == AgentState.READY else 0.0
+                mid = np.array([ready_flag, worst, timer], dtype=np.float32)
+                obs[f"agent_{agent_id}"] = np.concatenate(
+                    (shared, mid, self._identity_rows[agent_id])
                 )
-            elif self.role_ifm == "position":
-                single_obs = (
-                    agent_positions
-                    + weighted_idleness
-                    + [ready_flag, self.worst_idleness_fromT, self.obs_timer, agent_status.position]
+        elif self.role_ifm == "position":
+            for agent_id in range(Na):
+                ag = self.world.agents[agent_id]
+                ready_flag = 1.0 if ag.state == AgentState.READY else 0.0
+                tail = np.array(
+                    [ready_flag, worst, timer, float(ag.position)],
+                    dtype=np.float32,
                 )
-            elif self.role_ifm == "decision":
-                N = self.world.num_agents
-                decision_idx = int(self._decision_index_map.get(agent_id, 0)) if hasattr(self, '_decision_index_map') else 0
-                one_hot = [0.0] * N
+                obs[f"agent_{agent_id}"] = np.concatenate((shared, tail))
+        elif self.role_ifm == "decision":
+            N = Na
+            for agent_id in range(Na):
+                ag = self.world.agents[agent_id]
+                ready_flag = 1.0 if ag.state == AgentState.READY else 0.0
+                decision_idx = (
+                    int(self._decision_index_map.get(agent_id, 0))
+                    if hasattr(self, "_decision_index_map")
+                    else 0
+                )
+                one_hot = np.zeros(N, dtype=np.float32)
                 one_hot[decision_idx] = 1.0
-                single_obs = (
-                    agent_positions
-                    + weighted_idleness
-                    + [ready_flag, self.worst_idleness_fromT, self.obs_timer, agent_status.position]
-                    + one_hot
+                mid = np.array(
+                    [ready_flag, worst, timer, float(ag.position)],
+                    dtype=np.float32,
                 )
+                obs[f"agent_{agent_id}"] = np.concatenate((shared, mid, one_hot))
 
-            single_obs = np.asarray(single_obs, dtype=np.float32)
-            obs[f"agent_{agent_id}"] = single_obs
-        
         return obs
 
     def _build_info(self, result: Optional[TickResult]) -> Dict[str, Dict]:

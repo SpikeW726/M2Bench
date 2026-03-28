@@ -1,0 +1,46 @@
+# Q-table 超参数搜索 — BBLA（与 gbla/exgbla/nep 下同名文件搜索空间一致，按实验目录选用）
+# 用法:
+#   python sweep.py --base-config configs/experiments/bbla/qtable_bbla_tsp12.yaml \
+#                   --sweep-config configs/sweep/bbla/qtable_hparam.yaml --count 40
+#
+# 并行:
+#   python sweep.py --base-config configs/experiments/bbla/qtable_bbla_tsp12.yaml \
+#                   --sweep-config configs/sweep/bbla/qtable_hparam.yaml --create-only
+#   python sweep.py --base-config configs/experiments/bbla/qtable_bbla_tsp12.yaml \
+#                   --sweep-id <ID> --count 15
+
+method: bayes
+
+metric:
+  name: env/wi
+  goal: minimize
+
+parameters:
+  # ---- algo params (映射到 QTableParams) ----
+  lr:
+    min: 0.01
+    max: 0.9
+    distribution: log_uniform_values
+
+  gamma:
+    values: [0.9, 0.99, 0.999]
+
+  epsilon_start:
+    values: [0.5, 0.8, 1.0]
+
+  epsilon_end:
+    min: 0.01
+    max: 0.1
+    distribution: uniform
+
+  epsilon_decay:
+    min: 0.9990
+    max: 0.99999
+    distribution: uniform
+
+  # ---- training params (映射到 TrainerConfig) ----
+  total_steps:
+    value: 10000000
+
+  save_interval:
+    value: 1000

@@ -1,0 +1,17 @@
+# ExGBLA Q-table 评估配置 (LongEdge)
+# 用法:
+#   python evaluators/test.py \
+#     --env_config configs/eval/exgbla/ex_gbla_longedge.yaml \
+#     --model models/qtable-ex_gbla-longedge/iter_500
+
+algo_name: qtable
+env_type: ex_gbla
+
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: false
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 300
+  custom_configs:
+    truncate_by_time: true

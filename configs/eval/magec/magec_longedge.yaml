@@ -1,0 +1,23 @@
+# MAGECEnv LongEdge 评估配置
+# 用法:
+#   python evaluators/test.py --env_config configs/eval/magec/magec_longedge.yaml --model models/xxx/final
+
+env_type: magec
+
+env:
+  graph_path: graphs/long_edge.json
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+    alpha: 1.0
+    beta: 0.5
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/long_edge/magec/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: false
+  max_frames: 200

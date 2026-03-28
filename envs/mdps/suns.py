@@ -19,11 +19,19 @@ class SUNSEnv(EventDrivenEnv):
         N = self.world.num_nodes
         ordered_nodes = sorted(self.world.graph.nodes)
         self._node_to_idx = {node: idx for idx, node in enumerate(ordered_nodes)}
+        self._ordered_nodes = ordered_nodes          # 缓存以避免每步重排序
         self.weight_mat = np.zeros((N, N), dtype=np.float32)
         for i in self.world.graph.nodes:
             for j, w in self.world.graph.adj_list[i]:
                 self.weight_mat[self._node_to_idx[i], self._node_to_idx[j]] = w
         self._weight_mat_flat = self.weight_mat.flatten()
+        # phi 向量（按 _ordered_nodes 顺序）
+        self._phi_vec = np.array(
+            [float(self.world.graph.phi.get(n, 1.0)) for n in ordered_nodes],
+            dtype=np.float32,
+        )
+        # 每步复用的节点特征 buffer (2N,)
+        self._node_feat_buf = np.empty(2 * N, dtype=np.float32)
 
         # 需跟踪的信息
         self.agent_intentions: Dict[int, Optional[int]] = {}
@@ -108,27 +116,20 @@ class SUNSEnv(EventDrivenEnv):
     # ==================== SUNS 内部方法 ====================
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, np.ndarray]:
         """构建观测: [node_features_flat(2N), weight_mat_flat(N^2)]"""
-        obs = {}
-        ordered_nodes = sorted(self.world.graph.nodes)
-        weighted_idleness = [
-            self.world.graph.phi[n] * self.world.node_idleness[n]
-            for n in ordered_nodes
-        ]
+        idle_vals = np.array(
+            [float(self.world.node_idleness[n]) for n in self._ordered_nodes],
+            dtype=np.float32,
+        )
+        weighted = self._phi_vec * idle_vals   # (N,) 向量化，无 Python 循环
 
+        buf = self._node_feat_buf
+        obs: Dict[str, np.ndarray] = {}
         for agent_id in range(self.world.num_agents):
             pos_idx = self._node_to_idx[self.world.agents[agent_id].position]
-
-            # node_features: (INI_i, dist_agent_i) 交替排列 → 2N
-            node_feat_flat = []
-            for i, n in enumerate(ordered_nodes):
-                node_feat_flat.append(weighted_idleness[i])
-                node_feat_flat.append(self.spl_mat[pos_idx, i])
-
-            single_obs = np.concatenate([
-                np.asarray(node_feat_flat, dtype=np.float32),
-                self._weight_mat_flat,
-            ])
-            obs[f"agent_{agent_id}"] = single_obs
+            # node_features: 偶数位 = weighted_idle, 奇数位 = spl_dist  (交替)
+            buf[0::2] = weighted
+            buf[1::2] = self.spl_mat[pos_idx]     # (N,) 行向量，O(N) 而非 O(N) 个 append
+            obs[f"agent_{agent_id}"] = np.concatenate((buf, self._weight_mat_flat))
 
         return obs
     

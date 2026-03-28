@@ -944,7 +944,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers", type=int, default=1, help="并行 worker 数量 (>1 启用多进程)")
     parser.add_argument("--policy_config", type=str, default="configs/policies/ER.yaml",
                         help="策略配置 YAML")
-    parser.add_argument("--env_config", type=str, default="configs/eval/masup_tsp12.yaml",
+    parser.add_argument("--env_config", type=str, default="configs/eval/masup/masup_tsp12.yaml",
                         help="环境配置 YAML (experiment YAML 或独立 eval YAML)")
     parser.add_argument("--env_type", type=str, default="masup",
                         help="环境类型 (masup / masup_gnn 等，需在 ENV_REGISTRY 中注册)")

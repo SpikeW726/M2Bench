@@ -47,6 +47,34 @@ class MASUPGraphEnv(MASUPEnv):
             identity_len
         )
 
+        # ---- _build_obs 加速: 预计算静态结构 + 复用 buffer ----
+        self._sorted_nodes_gnn = sorted(self.world.graph.nodes)
+        self._node_to_idx_gnn = {n: i for i, n in enumerate(self._sorted_nodes_gnn)}
+        self._default_node_gnn = self._sorted_nodes_gnn[0] if self._sorted_nodes_gnn else 0
+        self._phi_vec_gnn = np.array(
+            [float(self.world.graph.phi.get(n, 1.0)) for n in self._sorted_nodes_gnn],
+            dtype=np.float32,
+        )
+        self._static_e_src_gnn = np.array(
+            [float(self._node_to_idx_gnn[u]) for u, v, w in self.static_edges],
+            dtype=np.float32,
+        )
+        self._static_e_dst_gnn = np.array(
+            [float(self._node_to_idx_gnn[v]) for u, v, w in self.static_edges],
+            dtype=np.float32,
+        )
+        self._static_e_w_gnn = np.array(
+            [float(w) for u, v, w in self.static_edges],
+            dtype=np.float32,
+        )
+        nm = self.total_max_edges
+        self._e_src_buf = np.zeros(nm, dtype=np.float32)
+        self._e_dst_buf = np.zeros(nm, dtype=np.float32)
+        self._e_w_buf = np.zeros(nm, dtype=np.float32)
+        self._e_mask_buf = np.zeros(nm, dtype=np.float32)
+        if self.role_ifm == "agent-index":
+            self._identity_rows_gnn = np.eye(self.agent_num, dtype=np.float32)
+
     def observation_space(self, agent):
         # node_num = self.total_node_num
         # --- 1. 节点特征空间 ---
@@ -86,144 +114,105 @@ class MASUPGraphEnv(MASUPEnv):
         return Box(low=low, high=high, dtype=np.float32)
 
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, np.ndarray]:
-        """构建当前时刻的动态图观测"""
-        obs = {}
-        # ======== 1. 构建节点特征 (Node Features) ========
-        # 静态节点 (0 ~ N-1)
-        # 特征: [Type=1, Idleness]
-        sorted_nodes = sorted(list(self.world.graph.nodes))
-        node_to_idx = {node: i for i, node in enumerate(sorted_nodes)}
-        default_node = sorted_nodes[0] if sorted_nodes else 0
-        
-        node_feats = []
-        for node in sorted_nodes:
-            phi_val = float(self.world.graph.phi.get(node, 1.0))
-            idle_val = float(self.world.node_idleness.get(node, 0.0))
-            node_feats.extend([1.0, phi_val * idle_val])
-        
-        # 虚拟节点 (N ~ N+K-1) 代表智能体
-        # 特征: [Type=0, 0]
-        # 虚拟节点索引从 self.static_node_num 开始
-        for _ in range(self.agent_num):
-            node_feats.extend([0.0, 0.0]) # 智能体节点 Idleness 设为 0
+        """构建当前时刻的动态图观测（公共前缀只算一次，仅 identity 按 agent 不同）。"""
+        node_to_idx = self._node_to_idx_gnn
+        default_node = self._default_node_gnn
 
-        # ======== 2. 构建边列表和权重 (Edges) ========
-        edge_indices_src = []
-        edge_indices_dst = []
-        edge_weights = []
-        
-        # A. 添加物理边 (Static Edges)
-        for u, v, w in self.static_edges:
-            u_idx = node_to_idx[u]
-            v_idx = node_to_idx[v]
-            edge_indices_src.append(float(u_idx))
-            edge_indices_dst.append(float(v_idx))
-            edge_weights.append(float(w))
+        # ======== 1. 节点特征 ========
+        # 静态节点: [Type=1, phi*idle]  虚拟节点: [Type=0, 0]
+        idle_vals = np.array(
+            [float(self.world.node_idleness.get(n, 0.0)) for n in self._sorted_nodes_gnn],
+            dtype=np.float32,
+        )
+        weighted = self._phi_vec_gnn * idle_vals             # (static_node_num,)
+        nf = np.empty(self.total_node_num * self.node_feat_dim, dtype=np.float32)
+        sn = self.static_node_num
+        nf[0 : sn * 2 : 2] = 1.0                            # type = 1
+        nf[1 : sn * 2 : 2] = weighted                       # phi * idle
+        nf[sn * 2 :] = 0.0                                  # 虚拟节点全 0
 
-        # B. 添加智能体动态边
+        # ======== 2. 边 ========
+        es = self._e_src_buf
+        ed = self._e_dst_buf
+        ew = self._e_w_buf
+        n_static = self.static_edge_num
+        es[:n_static] = self._static_e_src_gnn
+        ed[:n_static] = self._static_e_dst_gnn
+        ew[:n_static] = self._static_e_w_gnn
+
+        pos = n_static
+
         for i in range(self.agent_num):
-            virtual_node_idx = self.static_node_num + i
+            virtual_node_idx = float(self.static_node_num + i)
+            ag = self.world.agents[i]
 
-            last_node = self.world.agents[i].last_position
+            last_node = ag.last_position
             if last_node not in node_to_idx:
                 last_node = default_node
 
-            target_node = self.world.agents[i].target_node
+            target_node = ag.target_node
             if target_node not in node_to_idx:
-                target_node = self.world.agents[i].position
+                target_node = ag.position
 
-            time_left = float(self.world.agents[i].action_remaining)
+            time_left = float(ag.action_remaining)
 
-            if self.world.agents[i].state == AgentState.ON_EDGE:
-                # --- 情况 1: 正在边上移动 ---
-                # 边连接: LeaveNode (last_node) -> VirtualNode -> TargetNode
-                u_idx = node_to_idx[last_node]
-                v_idx = node_to_idx[target_node]
-
+            if ag.state == AgentState.ON_EDGE:
+                u_idx = float(node_to_idx[last_node])
+                v_idx = float(node_to_idx[target_node])
                 full_dist = self.world.graph.get_edge_length(last_node, target_node)
-                dist_to_go = time_left * self.world.agents[i].speed
+                dist_to_go = time_left * float(ag.speed)
                 dist_traveled = max(0.0, full_dist - dist_to_go)
 
-                # 边 1: LeaveNode -> VirtualNode (已走距离)
-                edge_indices_src.append(float(u_idx))
-                edge_indices_dst.append(float(virtual_node_idx))
-                edge_weights.append(float(dist_traveled))
-                
-                # 边 2: VirtualNode -> TargetNode (剩余距离)
-                edge_indices_src.append(float(virtual_node_idx))
-                edge_indices_dst.append(float(v_idx))
-                edge_weights.append(float(dist_to_go))
+                es[pos] = u_idx;  ed[pos] = virtual_node_idx;  ew[pos] = dist_traveled
+                pos += 1
+                es[pos] = virtual_node_idx;  ed[pos] = v_idx;  ew[pos] = dist_to_go
+                pos += 1
 
-            elif self.world.agents[i].state == AgentState.WAITING:
-                # --- 情况 2: 在节点上等待 (Waiting) ---
-                # 边连接: CurrentNode -> VirtualNode (已等待) 和 VirtualNode -> CurrentNode (剩余等待)
-                u_idx = node_to_idx[last_node]
+            elif ag.state == AgentState.WAITING:
+                u_idx = float(node_to_idx[last_node])
+                es[pos] = u_idx;          ed[pos] = virtual_node_idx;  ew[pos] = 0.0
+                pos += 1
+                es[pos] = virtual_node_idx;  ed[pos] = u_idx;          ew[pos] = time_left
+                pos += 1
 
-                # 暂时用 0.0 代表已等待时间，重点关注剩余时间
-                # 边 1: CurrentNode -> VirtualNode
-                edge_indices_src.append(float(u_idx))
-                edge_indices_dst.append(float(virtual_node_idx))
-                edge_weights.append(0.0) 
-                
-                # 边 2: VirtualNode -> CurrentNode
-                edge_indices_src.append(float(virtual_node_idx))
-                edge_indices_dst.append(float(u_idx))
-                edge_weights.append(float(time_left))
+            elif ag.state == AgentState.READY:
+                u_idx = float(node_to_idx[last_node])
+                es[pos] = u_idx;          ed[pos] = virtual_node_idx;  ew[pos] = 0.0
+                pos += 1
+                es[pos] = virtual_node_idx;  ed[pos] = u_idx;          ew[pos] = 0.0
+                pos += 1
 
-            elif self.world.agents[i].state == AgentState.READY:
-                # --- 情况 3: 就在节点上 (Finished) ---
-                # 建立双向连接: VirtualNode <-> CurrentNode (权重均为0)
-                u_idx = node_to_idx[last_node]
+        # ======== 3. 掩码 ========
+        current_edge_count = pos
+        mask = self._e_mask_buf
+        mask[:current_edge_count] = 1.0
+        mask[current_edge_count:] = 0.0
 
-                # 边 1: CurrentNode -> VirtualNode
-                edge_indices_src.append(float(u_idx))
-                edge_indices_dst.append(float(virtual_node_idx))
-                edge_weights.append(0.0)
-                
-                # 边 2: VirtualNode -> CurrentNode
-                edge_indices_src.append(float(virtual_node_idx))
-                edge_indices_dst.append(float(u_idx))
-                edge_weights.append(0.0)
+        # 填充边（pad_size > 0 时才需要）
+        if pos < self.total_max_edges:
+            es[pos:] = 0.0;  ed[pos:] = 0.0;  ew[pos:] = 0.0
 
-        # ======== 3. 填充与掩码 (Padding) 目前来看完全多余 ========
-        current_edge_count = len(edge_weights)
+        # ======== 4. 全局特征 ========
+        global_arr = np.array(
+            [float(self.world.worst_idleness), float(self.obs_timer)],
+            dtype=np.float32,
+        )
 
-        # 填充至 total_max_edges
-        pad_size = self.total_max_edges - current_edge_count
-        
-        # 有效掩码: 真实边为 1, 填充边为 0
-        edge_mask = [1.0] * current_edge_count + [0.0] * pad_size
+        # ======== 5. 公共前缀（一次拼接）========
+        prefix = np.concatenate((nf, es, ed, ew, mask, global_arr))
 
-        if pad_size > 0:
-            edge_indices_src.extend([0.0] * pad_size) # Pad with 0
-            edge_indices_dst.extend([0.0] * pad_size)
-            edge_weights.extend([0.0] * pad_size)
-
-        # ======== 4. 全局状态 ========
-        global_feat = [float(self.world.worst_idleness), float(self.obs_timer)]
-
-        for i in range(self.agent_num):   
-            # ======== 5. Agent Identity ========  
+        # ======== 6. 每 agent 仅拼接 identity ========
+        obs: Dict[str, np.ndarray] = {}
+        for i in range(self.agent_num):
             if self.role_ifm == "agent-index":
-                identity = [0.0] * self.agent_num
-                identity[i] = 1.0
+                obs[f"agent_{i}"] = np.concatenate((prefix, self._identity_rows_gnn[i]))
             elif self.role_ifm == "position":
-                identity = [float(self.world.agents[i].position)]
+                obs[f"agent_{i}"] = np.append(prefix, float(self.world.agents[i].position))
             elif self.role_ifm == "decision":
                 decision_idx = int(self._decision_index_map.get(i, 0)) if hasattr(self, '_decision_index_map') else 0
-                one_hot = [0.0] * self.agent_num
+                one_hot = np.zeros(self.agent_num, dtype=np.float32)
                 one_hot[decision_idx] = 1.0
-                identity = [float(self.world.agents[i].position)] + one_hot
-
-            single_obs = np.concatenate([
-                node_feats,
-                edge_indices_src,
-                edge_indices_dst,
-                edge_weights,
-                edge_mask,
-                global_feat,
-                identity
-            ]).astype(np.float32)
-            obs[f"agent_{i}"] = single_obs
-
+                obs[f"agent_{i}"] = np.concatenate(
+                    (prefix, [float(self.world.agents[i].position)], one_hot)
+                )
         return obs

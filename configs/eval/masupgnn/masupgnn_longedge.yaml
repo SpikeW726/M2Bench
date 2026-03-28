@@ -1,0 +1,28 @@
+# MASUPGraphEnv (masup_gnn) LongEdge 评估配置
+# 用法:
+#   python evaluators/test.py --env_config configs/eval/masupgnn/masupgnn_longedge.yaml --model models/xxx/final
+
+env_type: masup_gnn
+
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: true
+  deltaT: 0.5
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 100
+  custom_configs:
+    T: 5.0
+    role_imformation: decision
+    truncate_by_time: true
+    node_feat_dim: 2
+    edge_feat_dim: 1
+    global_feat_dim: 2
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/long_edge/masupgnn/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 200

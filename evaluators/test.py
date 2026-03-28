@@ -12,16 +12,16 @@
 用法示例:
   1) 基础评估
      python evaluators/test.py --model models/iql-s4r1-TSP12/2026-03-01_17-40-36/final \
-                               --env_config configs/eval/s4r1_tsp12.yaml
+                               --env_config configs/eval/s4r1/s4r1_tsp12.yaml
 
   2) 生成最后一个 episode 动画
      python evaluators/test.py --model models/mappo-masup-TSP12/2026-03-01_10-20-30/final \
-                               --env_config configs/eval/masup_tsp12.yaml \
+                               --env_config configs/eval/masup/masup_tsp12.yaml \
                                --animation --max_frames 500
 
-  3) 仅保存图，不弹窗
+  3) 仅保存图，不弹窗（同目录会额外写入与图一致的 *_plot_data.csv，供多 run 叠加曲线）
      python evaluators/test.py --model models/xxx/final \
-                               --env_config configs/eval/suns_tsp12.yaml \
+                               --env_config configs/eval/suns/suns_tsp12.yaml \
                                --save_plot evaluators/results/eval.png --no_show
 """
 import os
@@ -532,6 +532,7 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
           num_episodes: 10
           episode_time: null   # null 时从 env.episode_len 读取，依靠环境自身截断
           save_plot: evaluators/results/auto_eval.png
+          # 保存 PNG 时同目录自动写入 {stem}_plot_data.csv（与图曲线一致）
           show_plot: false
           animation: false
           event_driven: true
@@ -585,7 +586,7 @@ if __name__ == '__main__':
                         default='models/mappo/imi/final',
                         help='模型目录 (含 config.yaml + policy.pt)')
     parser.add_argument('--env_config', type=str,
-                        default='configs/eval/masup_tsp12.yaml',
+                        default='configs/eval/masup/masup_tsp12.yaml',
                         help='eval YAML (含 env_type + 环境参数)')
     parser.add_argument('--num_episodes', type=int, default=None,
                         help='评估 episode 数量（未指定时从 env_config 的 eval 段读取）')

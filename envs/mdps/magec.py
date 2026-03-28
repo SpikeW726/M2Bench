@@ -111,6 +111,42 @@ class MAGECEnv(EventDrivenEnv):
                 self._adj_matrix[vi, ni] = 1.0
         self._adj_flat = self._adj_matrix.flatten()
 
+        # ---- _build_obs 加速: 邻居索引查表 + 静态边张量 + 复用 buffer ----
+        self._neighbor_pos_of: Dict[Tuple[int, int], int] = {}
+        for v in self.sorted_nodes:
+            for k, (nbr, _) in enumerate(self.sorted_adj[v]):
+                self._neighbor_pos_of[(v, nbr)] = k
+
+        ml_static = max(self.max_edge_length, self.eps)
+        self._static_e_src = np.empty((self.static_edge_num,), dtype=np.float32)
+        self._static_e_dst = np.empty((self.static_edge_num,), dtype=np.float32)
+        self._static_e_attr = np.empty((self.static_edge_num, 2), dtype=np.float32)
+        for idx, (v, nbr, w_edge) in enumerate(self.static_edges):
+            k = float(self._neighbor_pos_of[(v, nbr)])
+            self._static_e_src[idx] = float(self.node_to_idx[v])
+            self._static_e_dst[idx] = float(self.node_to_idx[nbr])
+            self._static_e_attr[idx, 0] = w_edge / ml_static
+            self._static_e_attr[idx, 1] = k
+
+        self._phi_vec = np.array(
+            [float(graph.phi.get(v, 1.0)) for v in self.sorted_nodes],
+            dtype=np.float32,
+        )
+        self._static_deg = np.array(
+            [float(len(graph.adj_list[v])) for v in self.sorted_nodes],
+            dtype=np.float32,
+        )
+
+        nm = self.total_max_edges
+        tn = self.total_nodes
+        self._node_feats_buf = np.zeros((tn, 3), dtype=np.float32)
+        self._edge_src_buf = np.zeros((nm,), dtype=np.float32)
+        self._edge_dst_buf = np.zeros((nm,), dtype=np.float32)
+        self._edge_attr_buf = np.zeros((nm, 2), dtype=np.float32)
+        self._edge_mask_buf = np.zeros((nm,), dtype=np.float32)
+        self._global_buf = np.zeros(2, dtype=np.float32)
+        self._identity_rows = np.eye(self.agent_num, dtype=np.float32)
+
     # ------------------------------------------------------------------
     #  PettingZoo 接口
     # ------------------------------------------------------------------
@@ -145,158 +181,144 @@ class MAGECEnv(EventDrivenEnv):
 
     def _phi_weighted_idleness(self) -> np.ndarray:
         """返回每个静态节点的 phi * idleness，按 sorted_nodes 顺序。"""
-        phi  = self.world.graph.phi
         idle = self.world.node_idleness
-        return np.array(
-            [phi.get(v, 1) * idle.get(v, 0.0) for v in self.sorted_nodes],
+        idle_vals = np.array(
+            [float(idle.get(v, 0.0)) for v in self.sorted_nodes],
             dtype=np.float32,
         )
+        return self._phi_vec * idle_vals
 
     # ------------------------------------------------------------------
     #  观测构建
     # ------------------------------------------------------------------
 
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, np.ndarray]:
-        """构建所有 agent 的图结构观测。"""
-        w    = self.world
-        phi  = w.graph.phi
-        idle = w.node_idleness
+        """构建所有 agent 的图结构观测（公共前缀只算一次，仅 identity 按 agent 不同）。"""
+        w = self.world
+        ml = max(self.max_edge_length, self.eps)
 
-        # ---- 1. phi 加权 idleness → min-max 归一化 ----
         weighted = self._phi_weighted_idleness()
-        w_min, w_max = weighted.min(), weighted.max()
+        w_min = float(weighted.min())
+        w_max = float(weighted.max())
         denom = w_max - w_min + self.eps
 
-        # ---- 2. 节点特征（静态节点） ----
-        node_feats: List[float] = []
-        for i, v in enumerate(self.sorted_nodes):
-            idle_norm = float((weighted[i] - w_min) / denom)
-            degree    = float(len(w.graph.adj_list[v]))
-            node_feats += [self.NODE_TYPE_PATROL, idle_norm, degree]
-
-        # 虚拟 agent 节点（固定 idleness=0，degree 动态）
+        # ---- 节点特征 ----
+        nf = self._node_feats_buf
+        sn = self.static_node_num
+        idle_norm = (weighted - w_min) / denom
+        nf[:sn, 0] = self.NODE_TYPE_PATROL
+        nf[:sn, 1] = idle_norm
+        nf[:sn, 2] = self._static_deg
         for i in range(self.agent_num):
             ag = w.agents[i]
+            row = sn + i
             if ag.state == AgentState.READY:
-                virt_deg = 1 + len(self.sorted_adj.get(ag.position, []))
-            else:  # ON_EDGE
-                virt_deg = 2
-            node_feats += [self.NODE_TYPE_AGENT, 0.0, float(virt_deg)]
+                virt_deg = 1.0 + float(len(self.sorted_adj.get(ag.position, [])))
+            else:
+                virt_deg = 2.0
+            nf[row, 0] = self.NODE_TYPE_AGENT
+            nf[row, 1] = 0.0
+            nf[row, 2] = virt_deg
 
-        # ---- 3. 静态边 ----
-        e_src_list:  List[float] = []
-        e_dst_list:  List[float] = []
-        e_attr_list: List[List[float]] = []
+        # ---- 边: 静态段 + 动态段 ----
+        es = self._edge_src_buf
+        ed = self._edge_dst_buf
+        ea = self._edge_attr_buf
+        n_static = self.static_edge_num
+        es[:n_static] = self._static_e_src
+        ed[:n_static] = self._static_e_dst
+        ea[:n_static] = self._static_e_attr
 
-        for v, nbr, w_edge in self.static_edges:
-            v_idx   = float(self.node_to_idx[v])
-            nbr_idx = float(self.node_to_idx[nbr])
-            # neighborIndex: v 的邻居列表中 nbr 的位置
-            nbr_pos = self._get_neighbor_index(v, nbr)
-            e_src_list.append(v_idx)
-            e_dst_list.append(nbr_idx)
-            e_attr_list.append([w_edge / max(self.max_edge_length, self.eps),
-                                 float(nbr_pos)])
+        pos = n_static
+        real_edge_count = n_static
 
-        # ---- 4. 虚拟 agent 节点的动态边 ----
         for i in range(self.agent_num):
-            ag        = w.agents[i]
-            virt_idx  = float(self.static_node_num + i)
+            ag = w.agents[i]
+            virt_idx = float(self.static_node_num + i)
 
             if ag.state in (AgentState.READY, AgentState.WAITING):
                 cur_node = ag.position
-                cur_idx  = float(self.node_to_idx[cur_node])
+                cur_idx = float(self.node_to_idx[cur_node])
+                nbrs = self.sorted_adj.get(cur_node, [])
 
-                # 边1: virtual → current_node, weight=0, neighborIndex=-1
-                e_src_list.append(virt_idx)
-                e_dst_list.append(cur_idx)
-                e_attr_list.append([0.0, self.NEIGHBOR_IDX_NONE])
+                es[pos] = virt_idx
+                ed[pos] = cur_idx
+                ea[pos, 0] = 0.0
+                ea[pos, 1] = self.NEIGHBOR_IDX_NONE
+                pos += 1
+                real_edge_count += 1
 
-                # 边2+: virtual → sorted_adj[cur_node][k], neighborIndex=k
-                for k, (nbr, w_edge) in enumerate(self.sorted_adj.get(cur_node, [])):
-                    nbr_idx = float(self.node_to_idx[nbr])
-                    e_src_list.append(virt_idx)
-                    e_dst_list.append(nbr_idx)
-                    e_attr_list.append([w_edge / max(self.max_edge_length, self.eps),
-                                        float(k)])
+                for k, (nbr, w_edge) in enumerate(nbrs):
+                    es[pos] = virt_idx
+                    ed[pos] = float(self.node_to_idx[nbr])
+                    ea[pos, 0] = w_edge / ml
+                    ea[pos, 1] = float(k)
+                    pos += 1
+                    real_edge_count += 1
 
-                # 填充至 max_agent_edges（ON_EDGE 只用 2 条，READY 可能少于 max_deg+1）
-                used = 1 + len(self.sorted_adj.get(cur_node, []))
+                used = 1 + len(nbrs)
                 for _ in range(self.max_agent_edges - used):
-                    e_src_list.append(virt_idx)
-                    e_dst_list.append(virt_idx)
-                    e_attr_list.append([0.0, self.NEIGHBOR_IDX_NONE])
-
-            else:  # ON_EDGE
+                    es[pos] = virt_idx
+                    ed[pos] = virt_idx
+                    ea[pos, 0] = 0.0
+                    ea[pos, 1] = self.NEIGHBOR_IDX_NONE
+                    pos += 1
+            else:
                 src_node = ag.position
                 dst_node = ag.target_node
-                src_idx  = float(self.node_to_idx.get(src_node, 0))
-                dst_idx  = float(self.node_to_idx.get(dst_node, 0))
+                src_idx = float(self.node_to_idx.get(src_node, 0))
+                dst_idx = float(self.node_to_idx.get(dst_node, 0))
 
                 try:
-                    full_dist = w.graph.get_edge_length(src_node, dst_node)
+                    full_dist = float(w.graph.get_edge_length(src_node, dst_node))
                 except Exception:
-                    full_dist = self.max_edge_length
+                    full_dist = float(self.max_edge_length)
 
-                remaining_dist  = float(ag.action_remaining) * float(ag.speed)
-                dist_traveled   = max(0.0, full_dist - remaining_dist)
+                remaining_dist = float(ag.action_remaining) * float(ag.speed)
+                dist_traveled = max(0.0, full_dist - remaining_dist)
 
-                # 边1: virtual → source, weight=dist_traveled
-                e_src_list.append(virt_idx)
-                e_dst_list.append(src_idx)
-                e_attr_list.append([dist_traveled / max(self.max_edge_length, self.eps),
-                                    self.NEIGHBOR_IDX_NONE])
+                es[pos] = virt_idx
+                ed[pos] = src_idx
+                ea[pos, 0] = dist_traveled / ml
+                ea[pos, 1] = self.NEIGHBOR_IDX_NONE
+                pos += 1
 
-                # 边2: virtual → target, weight=remaining_dist
-                e_src_list.append(virt_idx)
-                e_dst_list.append(dst_idx)
-                e_attr_list.append([remaining_dist / max(self.max_edge_length, self.eps),
-                                    self.NEIGHBOR_IDX_NONE])
-
-                # 填充至 max_agent_edges
-                for _ in range(self.max_agent_edges - 2):
-                    e_src_list.append(virt_idx)
-                    e_dst_list.append(virt_idx)
-                    e_attr_list.append([0.0, self.NEIGHBOR_IDX_NONE])
-
-        # ---- 5. 边掩码（仅标记非填充边） ----
-        # 有效边 = 静态边 + 每个 agent 的真实边（1+deg 或 2）
-        real_edge_count = len(self.static_edges)
-        for i in range(self.agent_num):
-            ag = w.agents[i]
-            if ag.state in (AgentState.READY, AgentState.WAITING):
-                real_edge_count += 1 + len(self.sorted_adj.get(ag.position, []))
-            else:
+                es[pos] = virt_idx
+                ed[pos] = dst_idx
+                ea[pos, 0] = remaining_dist / ml
+                ea[pos, 1] = self.NEIGHBOR_IDX_NONE
+                pos += 1
                 real_edge_count += 2
 
-        edge_mask = ([1.0] * real_edge_count
-                     + [0.0] * (self.total_max_edges - real_edge_count))
+                for _ in range(self.max_agent_edges - 2):
+                    es[pos] = virt_idx
+                    ed[pos] = virt_idx
+                    ea[pos, 0] = 0.0
+                    ea[pos, 1] = self.NEIGHBOR_IDX_NONE
+                    pos += 1
 
-        # ---- 6. 全局特征 ----
-        avg_phi_idle   = float(weighted.mean())
+        # ---- 边掩码 ----
+        mask = self._edge_mask_buf
+        mask[:real_edge_count] = 1.0
+        mask[real_edge_count:] = 0.0
+
+        # ---- 全局特征 ----
+        avg_phi_idle = float(weighted.mean())
         worst_phi_idle = float(weighted.max())
-        norm_denom     = worst_phi_idle + self.eps
-        global_feat    = [avg_phi_idle / norm_denom, 1.0]  # avg归一, worst=1
+        norm_denom = worst_phi_idle + self.eps
+        gb = self._global_buf
+        gb[0] = avg_phi_idle / norm_denom
+        gb[1] = 1.0
 
-        # ---- 7. 组装各 agent 的观测 ----
-        e_attr_flat = [x for pair in e_attr_list for x in pair]
+        # ---- 公共前缀（与原先 list 拼接顺序一致）----
+        prefix = np.concatenate(
+            (nf.ravel(), es, ed, ea.reshape(-1), mask, gb),
+        )
 
         obs: Dict[str, np.ndarray] = {}
+        eye = self._identity_rows
         for i in range(self.agent_num):
-            identity = [0.0] * self.agent_num
-            identity[i] = 1.0
-
-            single_obs = np.array(
-                node_feats
-                + e_src_list
-                + e_dst_list
-                + e_attr_flat
-                + edge_mask
-                + global_feat
-                + identity,
-                dtype=np.float32,
-            )
-            obs[f"agent_{i}"] = single_obs
+            obs[f"agent_{i}"] = np.concatenate((prefix, eye[i]))
 
         return obs
 
@@ -397,10 +419,7 @@ class MAGECEnv(EventDrivenEnv):
 
     def _get_neighbor_index(self, v: int, nbr: int) -> int:
         """返回 nbr 在 sorted_adj[v] 中的位置（neighborIndex）。"""
-        for k, (n, _) in enumerate(self.sorted_adj.get(v, [])):
-            if n == nbr:
-                return k
-        return -1
+        return int(self._neighbor_pos_of.get((v, nbr), -1))
 
     def get_episode_metrics(self) -> Optional[dict]:
         m = self.world.last_episode_metrics

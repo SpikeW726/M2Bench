@@ -1,0 +1,55 @@
+# A2C + SUNSGymEnv (LongEdge) — 单智能体训练，multi-agent 评估用 configs/eval/suns/suns_longedge.yaml
+# 训练: python train.py configs/experiments/suns/a2c_suns_longedge.yaml
+
+# ---- 分发字段 ----
+algo_name: a2c
+env_type: suns_gym
+actor_type: sun
+critic_type: sun
+
+# ---- 实验元信息 ----
+exp_name: a2c-suns-longedge
+graph_name: long_edge
+track_wandb: true
+wandb_project: MAP-RL
+
+# ---- 环境 ----
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: false
+  num_agents: 1
+  init_positions: [0]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+
+# ---- 算法 ----
+algo:
+  lr: 7.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  vf_coef: 0.5
+  ent_coef: 0.01
+
+# ---- 训练 ----
+training:
+  num_envs: 12
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 10000000
+  save_interval: 200
+  minibatch_size: 2048
+  update_epochs: 1
+
+# ---- 网络 (SUN: f1 2→4→1, f2 3→6→1) ----
+# long_edge.json: 4 节点
+actor:
+  num_nodes: 4
+  node_feat_dim: 2
+  f1_hidden: 4
+  f2_hidden: 6
+critic:
+  num_nodes: 4
+  node_feat_dim: 2
+  f1_hidden: 4
+  f2_hidden: 6

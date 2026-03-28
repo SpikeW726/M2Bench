@@ -1,0 +1,60 @@
+# QMIX + MASUPEnv (LongEdge)
+# 用法: python train.py configs/experiments/masup/qmix_masup_longedge.yaml
+
+# ---- 分发字段 ----
+algo_name: qmix
+env_type: masup
+q_type: mlp
+
+# ---- 实验元信息 ----
+exp_name: qmix-longedge
+graph_name: long_edge
+track_wandb: true
+wandb_project: MAP-RL
+
+# ---- 环境 ----
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: true
+  deltaT: 0.5
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 100
+  custom_configs:
+    T: 5.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+# ---- 算法 ----
+algo:
+  lr: 1.0e-4
+  gamma: 0.99
+  tau: 1.0
+  target_update_freq: 200
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 0.995
+  use_double_dqn: true
+  shared_policy: true
+  mixer_embed_dim: 32
+
+# ---- 训练 ----
+training:
+  num_envs: 12
+  use_subproc: true
+  num_steps: 64
+  total_steps: 10000000
+  save_interval: 500
+  batch_size: 256
+  warmup_steps: 5000
+  buffer_size: 50000
+  collect_per_step: 12
+  update_per_step: 1
+
+# ---- Q-network ----
+q_network:
+  hidden: [256, 256]
+  dueling: false

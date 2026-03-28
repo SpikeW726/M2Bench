@@ -5,16 +5,16 @@ WandB Sweep 超参数搜索脚本。
 
 用法:
     # 创建 sweep（不运行）
-    python sweep.py --base-config configs/experiments/mappo_tsp12_imi.yaml \\
-                    --sweep-config configs/sweep/mappo_hparam.yaml --create-only
+    python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml \\
+                    --sweep-config configs/sweep/masup/mappo_masup.yaml --create-only
 
     # 加入已有 sweep 并行执行
-    python sweep.py --base-config configs/experiments/mappo_tsp12_imi.yaml \\
+    python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml \\
                     --sweep-id abc12345 --count 10
 
     # 创建并立即运行（默认模式）
-    python sweep.py --base-config configs/experiments/mappo_tsp12_imi.yaml \\
-                    --sweep-config configs/sweep/mappo_hparam.yaml --count 20
+    python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml \\
+                    --sweep-config configs/sweep/masup/mappo_masup.yaml --count 20
 """
 
 import argparse
@@ -280,12 +280,12 @@ def main():
 
     并行用法:
       # 终端 1: 创建 sweep 并获取 ID
-      python sweep.py --base-config configs/experiments/mappo_tsp12_imi.yaml \\
-                      --sweep-config configs/sweep/mappo_hparam.yaml --create-only
+      python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml \\
+                      --sweep-config configs/sweep/masup/mappo_masup.yaml --create-only
       # => 输出 Sweep ID: abc12345
 
       # 终端 2/3/4: 各 tmux 窗口并行加入同一个 sweep
-      python sweep.py --base-config configs/experiments/mappo_tsp12_imi.yaml \\
+      python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml \\
                       --sweep-id abc12345 --count 10
     """
     global _BASE_CONFIG_PATH

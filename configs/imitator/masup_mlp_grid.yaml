@@ -6,7 +6,7 @@
 
 # ----- 环境配置（用于自动推断 obs_dim / action_dim / critic_state_dim）-----
 env_type: masup
-env_config: configs/eval/masup_grid.yaml
+env_config: configs/eval/masup/masup_grid.yaml
 # obs_dim / action_dim / critic_state_dim 由环境接口自动推断，无需手动填写
 
 actor_type: mlp

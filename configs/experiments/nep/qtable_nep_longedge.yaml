@@ -1,0 +1,31 @@
+# Q-table + NEP 环境 (LongEdge) — 4 agents，复现 Hu & Zhao 2010
+# 用法: python train.py configs/experiments/nep/qtable_nep_longedge.yaml
+# long_edge.json: 4 节点，4 agent 各驻一节点
+
+algo_name: qtable
+env_type: nep
+
+exp_name: qtable-nep-longedge
+graph_name: long_edge
+track_wandb: true
+wandb_project: MAP-RL
+
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: false
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 5000
+
+algo:
+  lr: 0.9
+  gamma: 0.9
+  epsilon_start: 0.2
+  epsilon_end: 0.1
+  epsilon_decay: 0.9999
+
+training:
+  num_envs: 4
+  use_subproc: false
+  total_steps: 10000000
+  save_interval: 1000

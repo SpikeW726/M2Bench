@@ -1,0 +1,22 @@
+# SUNSEnv LongEdge 评估配置（多智能体 + intention 协调）
+# 用法:
+#   python evaluators/test.py --env_config configs/eval/suns/suns_longedge.yaml --model models/a2c-suns-longedge/final
+
+env_type: suns
+
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: false
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/long_edge/a2c_suns/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: false
+  max_frames: 200

@@ -186,7 +186,7 @@ def main():
                         choices=['ER', 'HPCC'],
                         help='策略名称 (default: ER)')
     parser.add_argument('--env_config', type=str,
-                        default='configs/eval/masup_grid.yaml',
+                        default='configs/eval/masup/masup_grid.yaml',
                         help='环境配置 YAML (experiment YAML 或独立 eval YAML)')
     parser.add_argument('--policy_config', type=str, default=None,
                         help='策略配置路径 (default: configs/policies/{POLICY}.yaml)')

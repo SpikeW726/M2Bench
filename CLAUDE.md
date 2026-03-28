@@ -54,11 +54,11 @@ YAML-based configuration with registry pattern factory methods. All components (
 
 ```bash
 # Unified training entry point (recommended)
-python train.py configs/experiments/mappo_tsp12_imi.yaml
-python train.py configs/experiments/mappo_tsp12_scratch.yaml
+python train.py configs/experiments/masup/mappo_masup_tsp12_imi.yaml
+python train.py configs/experiments/masup/mappo_masup_tsp12_scratch.yaml
 
 # With wandb sweep
-python sweep.py --base-config configs/experiments/mappo_tsp12_imi.yaml --sweep-config configs/sweep/mappo_hparam.yaml
+python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml --sweep-config configs/sweep/masup/mappo_masup.yaml
 ```
 
 ### Data Collection
