@@ -12,6 +12,6 @@ env:
   enable_wait: false
   num_agents: 3
   init_positions: [0, 1, 2]
-  episode_len: 300
+  episode_len: 100
   custom_configs:
     truncate_by_time: true

@@ -15,6 +15,29 @@ from algorithms.tabular.qtable import QTableAlgo
 from configs.training_configs import TrainerConfig
 
 
+def _save_qtable_final(
+    algo: QTableAlgo,
+    save_dir: Path,
+    episode: int,
+    total_steps: int,
+    verbose: bool,
+) -> None:
+    """写入 save_dir/final/，与 RL checkpoint 约定一致（sweep summary、自动评估）。"""
+    final_dir = Path(save_dir) / "final"
+    algo.save(str(final_dir))
+    meta = {
+        "algo_name": "qtable",
+        "episode": episode,
+        "total_steps": total_steps,
+        "epsilon": algo.get_epsilon(),
+        "qtable_sizes": {aid: len(pol.q_table) for aid, pol in algo.policies.items()},
+    }
+    with open(final_dir / "config.yaml", "w") as f:
+        yaml.dump(meta, f, default_flow_style=False)
+    if verbose:
+        print(f"[QTable] Saved final Q-tables to {final_dir}")
+
+
 class QTableTrainer:
     """Q-table 训练器，按 episode 迭代。
 
@@ -93,6 +116,9 @@ class QTableTrainer:
                 break
 
         self._save_checkpoint(ep)
+        _save_qtable_final(
+            self.algo, self.save_dir, ep, self.total_steps, self.verbose
+        )
 
         total_time = time.time() - start_time
         if self.verbose:
@@ -419,6 +445,9 @@ class JointQTableTrainer:
                 break
 
         self._save_checkpoint(ep)
+        _save_qtable_final(
+            self.algo, self.save_dir, ep, self.total_steps, self.verbose
+        )
 
         total_time = time.time() - start_time
         if self.verbose:
