@@ -154,7 +154,7 @@ class MASUPGraphEnv(MASUPEnv):
             if target_node not in node_to_idx:
                 target_node = ag.position
 
-            time_left = float(ag.action_remaining)
+            time_left = float(ag.nominal_action_remaining)  # 名义剩余时间
 
             if ag.state == AgentState.ON_EDGE:
                 u_idx = float(node_to_idx[last_node])

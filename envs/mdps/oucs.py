@@ -65,7 +65,7 @@ class OUCSEnv(FixedStepEnv):
             agent = self.world.agents[agent_id]
             last_pos = float(agent.last_position)
             target = float(agent.target_node)
-            time_left = float(agent.action_remaining)
+            time_left = float(agent.nominal_action_remaining)  # 名义剩余时间
             agent_metrics.extend([last_pos, target, time_left])
 
         idleness = [
@@ -93,7 +93,7 @@ class OUCSEnv(FixedStepEnv):
             if agent.state == AgentState.ON_EDGE:
                 all_positions[3*a]     = agent.position          # 出发节点
                 all_positions[3*a + 1] = agent.target_node       # 目标节点
-                all_positions[3*a + 2] = agent.action_remaining  # 剩余时间
+                all_positions[3*a + 2] = agent.nominal_action_remaining  # 名义剩余时间
             else:
                 all_positions[3*a]     = agent.position
                 all_positions[3*a + 1] = agent.position          # READY: 目标=当前位置
@@ -187,7 +187,7 @@ class OUCSEnv(FixedStepEnv):
             agent = self.world.agents[agent_id]
             last_pos = float(agent.last_position)
             target = float(agent.target_node)
-            time_left = float(agent.action_remaining)
+            time_left = float(agent.nominal_action_remaining)  # 名义剩余时间
             agent_metrics.extend([last_pos, target, time_left])
 
         idleness = [

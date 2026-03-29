@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set, Optional
 from enum import Enum
 
+import numpy as np
+
 from utils.graph_utils import Graph
 from utils.log_utils import EpisodeMetricsTracker, IdlenessMetrics
 
@@ -19,7 +21,9 @@ class AgentStatus:
     last_position: int = -1             # Last node
     state: AgentState = AgentState.READY
     target_node: int = -1            
-    action_remaining: float = 0.0       # Remaining time for last action
+    action_remaining: float = 0.0       # 实际剩余时间（物理到达判断用，含 jitter）
+    nominal_action_remaining: float = 0.0  # 名义剩余时间（obs 暴露给 actor，始终是理想预测）
+    planned_edge_duration: float = 0.0  # 本次 ON_EDGE 的实际计划总时长（动画进度分母）
     speed: float = 1.0
     
 
@@ -73,41 +77,71 @@ class PatrolWorld:
         self.current_time: float = 0.0
         self.worst_idleness: float = 0.0
         self.waitT = cfg.get("deltaT", 1.0)  # 一次等待动作的持续时间
-        
+
+        # ---- numpy 加速结构（优化 1+3）----
+        # 固定节点顺序：与 list(graph.nodes) 一致，masup._obs_node_order 复用
+        self._node_order: List[int] = list(self.graph.nodes)
+        self._node_idx: Dict[int, int] = {n: i for i, n in enumerate(self._node_order)}
+        # phi 向量（float64，与 _idleness_arr 同精度，乘积传给 metrics_tracker）
+        self._phi_arr: np.ndarray = np.array(
+            [float(self.graph.phi.get(n, 1.0)) for n in self._node_order],
+            dtype=np.float64,
+        )
+        # 节点空闲度数组（主存储，tick 后同步到 node_idleness dict）
+        self._idleness_arr: np.ndarray = np.zeros(self.num_nodes, dtype=np.float64)
+        # phi * idleness（缓冲区，每 tick 计算一次，传给 metrics_tracker 和 masup._build_obs）
+        self._weighted_arr: np.ndarray = np.zeros(self.num_nodes, dtype=np.float64)
+        # 节点占据计数（>=1 表示有智能体在此节点）
+        self._occupied_count: np.ndarray = np.zeros(self.num_nodes, dtype=np.int32)
+
         # Episode 指标追踪器
-        self.metrics_tracker = EpisodeMetricsTracker()
+        self.metrics_tracker = EpisodeMetricsTracker(
+            training_mode=cfg.get("training_mode", False)
+        )
         self.last_episode_metrics: Optional[IdlenessMetrics] = None  # 上一个 episode 终止时的指标
-        self.step_count: int = 0 
-     
-        # 记录哪些节点当前有智能体"占据"（恰好有智能体到达或有智能体在该节点等待）
+        self.step_count: int = 0
+
+        # 记录哪些节点当前有智能体"占据"（保留用于向后兼容）
         self._occupied_nodes: Set[int] = set()
 
         # 路由模式（全图动作空间）: 存储多跳路径剩余节点 & 中间累积奖励
         self._routes: Dict[int, List[int]] = {}
         self._acc_rewards: Dict[int, float] = {}
+
+        # 边上运动时间扰动（双轨设计）
+        self._jitter_enabled = bool(cfg.get("edge_time_jitter", False))
+        self._jitter_frac    = float(cfg.get("edge_time_jitter_frac", 0.1))
+        import random as _random_mod
+        _seed = cfg.get("edge_time_jitter_seed", None)
+        self._jitter_rng = _random_mod.Random(_seed)  # 独立实例，不干扰全局 random
     
     def reset(self, initial_positions: Optional[List[int]] = None) -> None:
         """重置物理世界"""
-        # 保存上一个 episode 的终止指标（reset 前 history 非空时）
-        if self.metrics_tracker.history:
+        # 保存上一个 episode 的终止指标（has_data 兼容 training_mode 下 history 为空的情况）
+        if self.metrics_tracker.has_data:
             self.last_episode_metrics = self.metrics_tracker.current
-        
+
         self.current_time = 0.0
         self.step_count = 0
         self.worst_idleness = 0.0
-        self.node_idleness = {n: 0.0 for n in self.graph.nodes}
-        
+
         # 重置指标追踪器
         self.metrics_tracker.reset()
-        
+
         # 初始化智能体位置
         if initial_positions is None:
             import random
             initial_positions = random.sample(list(self.graph.nodes), self.num_agents)
-        
+
         self._occupied_nodes.clear()
         self._routes.clear()
         self._acc_rewards.clear()
+
+        # 重置 numpy 加速结构
+        self._idleness_arr[:] = 0.0
+        self._weighted_arr[:] = 0.0
+        self._occupied_count[:] = 0
+
         for i in range(self.num_agents):
             pos = initial_positions[i]
             self.agents[i] = AgentStatus(
@@ -117,13 +151,13 @@ class PatrolWorld:
                 speed=self.speeds[i]
             )
             self._occupied_nodes.add(pos)
-        
-        # 记录初始状态的指标
-        weighted_idleness = {
-            node: float(self.graph.phi.get(node, 1.0)) * float(idle_val)
-            for node, idle_val in self.node_idleness.items()
-        }
-        self.metrics_tracker.record(weighted_idleness, self.step_count, self.current_time)
+            self._occupied_count[self._node_idx[pos]] += 1
+
+        # 重置 dict（所有节点空闲度归零，与 _idleness_arr 保持一致）
+        self.node_idleness = {n: 0.0 for n in self._node_order}
+
+        # 记录初始状态（空闲度全 0，_weighted_arr 已清零，直接传入）
+        self.metrics_tracker.record(self._weighted_arr, self.step_count, self.current_time)
 
     # Most important funciton
     def tick(self, dt: float) -> TickResult:
@@ -141,28 +175,29 @@ class PatrolWorld:
         raw_rewards = {a:0.0 for a in range(self.num_agents)}
         if dt < 0:
             return TickResult(dt=0.0, raw_rewards=raw_rewards)
-            
+
         result = TickResult(dt=dt, raw_rewards=raw_rewards)
-        
-        # 1. 更新节点空闲度
-        for node in self.graph.nodes:
-            if node not in self._occupied_nodes:
-                self.node_idleness[node] += dt
-        current_worst_idleness = max(self.node_idleness.values())
+
+        # 1. 向量化更新节点空闲度（非占据节点 += dt）
+        free_mask = self._occupied_count == 0
+        self._idleness_arr[free_mask] += dt
+
+        # 1.5 快照：到达清零前的 IGI（均值）和 worst_idleness（均未加权，保持原语义）
+        result.pre_arrival_igi = float(self._idleness_arr.mean())
+        current_worst_idleness = float(self._idleness_arr.max())
         self.worst_idleness = max(self.worst_idleness, current_worst_idleness)
-        
-        # 1.5 快照：到达清零前的 IGI（所有节点空闲度均值）
-        result.pre_arrival_igi = sum(self.node_idleness.values()) / len(self.node_idleness)
-        
+
         # 2. 更新智能体状态
         for agent_id, status in self.agents.items():
             if status.state in (AgentState.ON_EDGE, AgentState.WAITING):
-                status.action_remaining -= dt
-                
-                # 检查是否完成
+                status.action_remaining         -= dt
+                status.nominal_action_remaining -= dt  # 名义时间与实际时间同步递减
+
+                # 检查是否完成（以实际物理时间为准）
                 if status.action_remaining <= 1e-9:
-                    status.action_remaining = 0.0
-                    
+                    status.action_remaining         = 0.0
+                    status.nominal_action_remaining = 0.0  # 到达后两者均归零
+
                     if status.state == AgentState.ON_EDGE:
                         # 到达目标节点
                         arrived_node = status.target_node
@@ -170,13 +205,16 @@ class PatrolWorld:
                         status.position = arrived_node
                         status.state = AgentState.READY
                         status.target_node = -1
+                        status.planned_edge_duration = 0.0  # 清除动画分母缓存
 
-                        # 更新占据状态
+                        # 更新占据状态（numpy + set 保持同步）
+                        ai = self._node_idx[arrived_node]
                         self._occupied_nodes.add(arrived_node)
+                        self._occupied_count[ai] += 1
 
-                        # 清零到达节点的空闲度
-                        arrival_reward = self.node_idleness[arrived_node] * self.graph.phi[arrived_node]
-                        self.node_idleness[arrived_node] = 0.0
+                        # 清零到达节点的空闲度，计算 arrival_reward
+                        arrival_reward = float(self._idleness_arr[ai]) * float(self._phi_arr[ai])
+                        self._idleness_arr[ai] = 0.0
 
                         # 路由续航：中间节点累积奖励并自动跳下一跳
                         if agent_id in self._routes and self._routes[agent_id]:
@@ -192,25 +230,26 @@ class PatrolWorld:
                             acc = self._acc_rewards.pop(agent_id, 0.0)
                             result.raw_rewards[agent_id] = acc + arrival_reward
                             result.arrivals[agent_id] = arrived_node
-                        
+
                     elif status.state == AgentState.WAITING:
                         # 等待完成
                         status.state = AgentState.READY
                         waiting_node = self.agents[agent_id].position
                         result.raw_rewards[agent_id] = self.waitT * self.graph.phi[waiting_node]
                         result.wait_completed.add(agent_id)
-        
+
         # 3. 更新时间
         self.current_time += dt
-        
-        # 4. 记录指标
+
+        # 4. 同步 node_idleness dict（供外部 MDP 的 _build_obs / state() 等访问）
+        #    使用 dict.update(zip(...)) 替代 Python 逐元素赋值，利用 C 层批量写入
+        self.node_idleness.update(zip(self._node_order, self._idleness_arr.tolist()))
+
+        # 5. 计算 phi 加权空闲度数组，记录指标（向量化，避免 dict comprehension）
         self.step_count += 1
-        weighted_idleness = {
-            node: float(self.graph.phi.get(node, 1.0)) * float(idle_val)
-            for node, idle_val in self.node_idleness.items()
-        }
-        self.metrics_tracker.record(weighted_idleness, self.step_count, self.current_time)
-        
+        np.multiply(self._phi_arr, self._idleness_arr, out=self._weighted_arr)
+        self.metrics_tracker.record(self._weighted_arr, self.step_count, self.current_time)
+
         return result
 
     def tick_to_next_event(self) -> TickResult:
@@ -268,13 +307,25 @@ class PatrolWorld:
         status.state = AgentState.ON_EDGE
         status.target_node = target_node
         edge_length = self.graph.get_edge_length(current_pos, target_node)
-        # 行驶时间 = 距离 / 速度
-        status.action_remaining = float(edge_length) / max(status.speed, 1e-6)
         status.last_position = current_pos
-        
-        # 离开当前节点
+
+        # 双轨时间：名义时间（actor 可观测）与实际时间（物理到达，含 jitter）
+        T_nom = float(edge_length) / max(status.speed, 1e-6)
+        if self._jitter_enabled:
+            frac = self._jitter_frac
+            T_act = T_nom * self._jitter_rng.uniform(1.0 - frac, 1.0 + frac)
+        else:
+            T_act = T_nom
+        status.nominal_action_remaining = T_nom   # obs 始终用名义值
+        status.action_remaining         = T_act   # 物理到达由实际值驱动
+        status.planned_edge_duration    = T_act   # 动画进度分母（实际时长）
+
+        # 离开当前节点（numpy + set 保持同步）
         self._occupied_nodes.discard(current_pos)
-        
+        ni = self._node_idx[current_pos]
+        if self._occupied_count[ni] > 0:
+            self._occupied_count[ni] -= 1
+
         return True
     
     def set_route_action(self, agent_id: int, target_node: int) -> bool:
@@ -327,10 +378,12 @@ class PatrolWorld:
             return False
         
         status.state = AgentState.WAITING
-        status.action_remaining = self.waitT
+        status.action_remaining         = self.waitT
+        status.nominal_action_remaining = self.waitT  # 等待不扰动，双轨相同
+        status.planned_edge_duration    = 0.0
         status.last_position = status.position
         status.target_node = status.position
-        
+
         return True
 
     # ==================== 状态查询方法 ====================
@@ -375,8 +428,12 @@ class PatrolWorld:
         snapshot = {}
         for agent_id, status in self.agents.items():
             if status.state == AgentState.ON_EDGE:
-                edge_len = self.graph.get_edge_length(status.position, status.target_node)
-                travel_time = edge_len / max(status.speed, 1e-6)
+                # 用实际计划时长（含 jitter）作分母，保证动画进度与物理到达一致
+                travel_time = status.planned_edge_duration
+                if travel_time < 1e-12:
+                    # 保底：回退到名义时长
+                    travel_time = self.graph.get_edge_length(status.position, status.target_node) \
+                                  / max(status.speed, 1e-6)
                 progress = 1.0 - status.action_remaining / travel_time if travel_time > 0 else 1.0
                 progress = max(0.0, min(1.0, progress))
                 snapshot[agent_id] = (status.position, status.target_node, progress)

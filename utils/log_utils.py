@@ -81,62 +81,79 @@ class IdlenessMetrics:
 class EpisodeMetricsTracker:
     """
     Episode 级别的指标追踪器
-    
-    记录每个 step 的 idleness 指标，支持：
-    - 历史数据存储
-    - Episode 结束后的可视化
-    - 导出到文件
+
+    支持两种模式：
+    - training_mode=False（默认/评估）：history 追加完整历史，支持绘图/导出
+    - training_mode=True（训练）：只保留 _current，避免每 tick 创建对象和追加 list，
+      减少内存分配开销。此时 history 恒为空，get_history_dict()/plot() 不可用。
     """
-    
-    def __init__(self):
-        self.reset()
-    
+
+    def __init__(self, training_mode: bool = False):
+        self.training_mode = training_mode
+        self.history: List[IdlenessMetrics] = []
+        self._current: IdlenessMetrics = IdlenessMetrics()
+        self._igi_time_weighted_sum: float = 0.0  # 时间加权累积，用于计算 AGI
+
     def reset(self):
         """重置历史记录"""
-        self.history: List[IdlenessMetrics] = []
-        self._igi_time_weighted_sum: float = 0.0  # 时间加权累积，用于计算 AGI
-    
-    def record(self, node_idleness: Dict[int, float], step: int, time: float):
+        self.history = []
+        self._current = IdlenessMetrics()
+        self._igi_time_weighted_sum = 0.0
+
+    @property
+    def has_data(self) -> bool:
+        """是否有过至少一次 record()（兼容 training_mode 下 history 为空的情况）"""
+        return bool(self.history) or self._current.step > 0
+
+    def record(self, weighted_idleness: np.ndarray, step: int, time: float):
         """
-        记录当前 step 的指标
-        
+        记录当前 step 的指标。
+
         Args:
-            node_idleness: 当前所有节点的空闲度 {node_id: idleness}
+            weighted_idleness: phi 加权后的节点空闲度数组 (shape: N,)，
+                               即 phi[i] * idleness[i]，与 patrol_core 中计算一致。
             step: 当前步数
             time: 当前时间
         """
-        idleness_values = list(node_idleness.values())
-        n_nodes = len(idleness_values)
-        
-        if n_nodes == 0:
+        if weighted_idleness.size == 0:
             return
-        
-        # 计算瞬时指标
-        igi = sum(idleness_values) / n_nodes
-        iwi = max(idleness_values)
-        
+
+        # 用 numpy 向量化计算，避免 Python 级别的 sum/max 循环
+        igi = float(weighted_idleness.mean())
+        iwi = float(weighted_idleness.max())
+
         # 时间加权累积：乘以本次 tick 的实际时间间隔
         # 保证固定步长（dt=1.0）和事件驱动（dt 可变）下 AGI 均为正确的时间加权平均
-        prev_time = self.history[-1].time if self.history else 0.0
+        prev_time = self._current.time
         dt = time - prev_time
         self._igi_time_weighted_sum += igi * dt
         agi = self._igi_time_weighted_sum / time if time > 0 else 0.0
-        wi = max(iwi, self.history[-1].wi if self.history else 0.0)
-        
-        metrics = IdlenessMetrics(
-            igi=igi,
-            agi=agi,
-            iwi=iwi,
-            wi=wi,
-            step=step,
-            time=time
-        )
-        self.history.append(metrics)
-    
+        wi = max(iwi, self._current.wi)
+
+        if self.training_mode:
+            # 原地更新，避免对象分配和 list 追加
+            self._current.igi = igi
+            self._current.agi = agi
+            self._current.iwi = iwi
+            self._current.wi = wi
+            self._current.step = step
+            self._current.time = time
+        else:
+            metrics = IdlenessMetrics(
+                igi=igi,
+                agi=agi,
+                iwi=iwi,
+                wi=wi,
+                step=step,
+                time=time,
+            )
+            self.history.append(metrics)
+            self._current = metrics
+
     @property
     def current(self) -> IdlenessMetrics:
-        """返回最新的指标"""
-        return self.history[-1] if self.history else IdlenessMetrics()
+        """返回最新的指标（training_mode 和 eval 模式均可用）"""
+        return self._current
     
     def get_history_dict(self) -> Dict[str, List[float]]:
         """

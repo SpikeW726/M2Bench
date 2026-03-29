@@ -99,7 +99,7 @@ class SUNSEnv(EventDrivenEnv):
             agent = self.world.agents[agent_id]
             last_pos = float(agent.last_position)
             target = float(agent.target_node)
-            time_left = float(agent.action_remaining)
+            time_left = float(agent.nominal_action_remaining)  # 名义剩余时间
             agent_metrics.extend([last_pos, target, time_left])
 
         idleness = [

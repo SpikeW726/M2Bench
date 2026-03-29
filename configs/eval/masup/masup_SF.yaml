@@ -7,5 +7,14 @@ env:
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 300
+  edge_time_jitter: false
   custom_configs:
     truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/SF/masup/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 200

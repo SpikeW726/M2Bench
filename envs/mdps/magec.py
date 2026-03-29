@@ -274,7 +274,7 @@ class MAGECEnv(EventDrivenEnv):
                 except Exception:
                     full_dist = float(self.max_edge_length)
 
-                remaining_dist = float(ag.action_remaining) * float(ag.speed)
+                remaining_dist = float(ag.nominal_action_remaining) * float(ag.speed)  # 名义剩余距离
                 dist_traveled = max(0.0, full_dist - remaining_dist)
 
                 es[pos] = virt_idx

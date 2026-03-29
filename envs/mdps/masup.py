@@ -66,6 +66,15 @@ class MASUPEnv(EventDrivenEnv):
         if self.role_ifm == "agent-index":
             self._identity_rows = np.eye(self.world.num_agents, dtype=np.float32)
 
+        # ---- 优化 4: 预计算每节点邻居数，加速 get_action_mask（避免每次调用 get_neighbors()）----
+        self._node_neighbor_count: Dict[int, int] = {
+            n: len(self.world.graph.get_neighbors(n))
+            for n in self.world.graph.nodes
+        }
+
+        # ---- 优化 5: 预分配 pos_flat 缓冲区，复用 np.ndarray 避免每步重新分配 ----
+        self._pos_buf: np.ndarray = np.empty(3 * self.world.num_agents, dtype=np.float32)
+
 
     def observation_space(self, agent):
         """
@@ -302,13 +311,11 @@ class MASUPEnv(EventDrivenEnv):
             agent_status = self.world.agents[agent_id]
             last_pos = float(agent_status.last_position)
             target = float(agent_status.target_node)
-            time_left = float(agent_status.action_remaining)
+            time_left = float(agent_status.nominal_action_remaining)  # 名义剩余时间
             agent_metrics.extend([last_pos, target, time_left])
 
-        weighted_idleness = [
-            float(self.world.graph.phi.get(n, 1.0)) * float(self.world.node_idleness.get(n, 0.0))
-            for n in self.world.graph.nodes
-        ]
+        # 直接读 _weighted_arr，避免 list comprehension + N 次 dict 查找
+        weighted_idleness = self.world._weighted_arr.tolist()
 
         obs_list = agent_metrics + weighted_idleness + [float(self.worst_idleness_fromT), float(self.obs_timer)]
         return np.asarray(obs_list, dtype=np.float32)
@@ -422,25 +429,19 @@ class MASUPEnv(EventDrivenEnv):
 
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, np.ndarray]:
         """构建所有智能体的观测（公共前缀只算一次，与原先 list 拼接顺序一致）。"""
-        idle_vals = np.array(
-            [float(self.world.node_idleness[n]) for n in self._obs_node_order],
-            dtype=np.float32,
-        )
-        weighted = self._phi_arr * idle_vals
+        # 优化 1+3: 直接读 world._weighted_arr（patrol_core.tick 每步计算一次 phi*idleness），
+        # 转 float32 即可，避免 Python 列表推导式和 N 次 dict 查找
+        weighted = self.world._weighted_arr.astype(np.float32)
 
+        # 优化 5: 复用预分配缓冲区，避免每步创建临时 list 和 np.array
         Na = self.world.num_agents
-        pos_list = []
         for aid in range(Na):
             ag = self.world.agents[aid]
-            pos_list.extend(
-                [
-                    float(ag.last_position),
-                    float(ag.target_node),
-                    float(ag.action_remaining),
-                ]
-            )
-        pos_flat = np.array(pos_list, dtype=np.float32)
-        shared = np.concatenate((pos_flat, weighted))
+            i = aid * 3
+            self._pos_buf[i] = ag.last_position
+            self._pos_buf[i + 1] = ag.target_node
+            self._pos_buf[i + 2] = ag.nominal_action_remaining  # 名义剩余时间
+        shared = np.concatenate((self._pos_buf, weighted))
 
         worst = float(self.worst_idleness_fromT)
         timer = float(self.obs_timer)
@@ -552,11 +553,11 @@ class MASUPEnv(EventDrivenEnv):
             # 正在执行动作,只能选 no-op
             mask[-1] = True
         else:
-            # 可以决策:等待 + 邻居节点
+            # 优化 4: 用预计算的邻居数代替每次调用 get_neighbors()
             current_pos = self.world.get_position(agent_id)
-            neighbors = self.world.graph.get_neighbors(current_pos)
-            mask[:len(neighbors) + 1] = True
-                      
+            num_neighbors = self._node_neighbor_count[current_pos]
+            mask[:num_neighbors + 1] = True
+
         return mask
 
     def get_valid_actions(self, agent_str: str) -> List[int]:
