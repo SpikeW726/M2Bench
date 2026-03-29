@@ -70,11 +70,14 @@ class ExGBLAEnv(GBLAEnv):
             else:
                 last_edge = self.world.graph.neighbor_to_edge(current_pos, raw_last)
 
-            # ---- 邻居按 idleness 降序排列, 转为边索引 ----
+            # ---- 邻居按 phi 加权空闲度降序排列, 转为边索引 ----
             neighbors = [n for n, _ in self.world.graph.adj_list.get(current_pos, [])]
             sorted_edges = np.full(M, -1, dtype=np.int32)
             if neighbors:
-                pairs = [(n, self.world.node_idleness[n]) for n in neighbors]
+                pairs = [
+                    (n, self.world.graph.phi.get(n, 1.0) * self.world.node_idleness[n])
+                    for n in neighbors
+                ]
                 pairs.sort(key=lambda x: x[1], reverse=True)
                 for i, (n, _) in enumerate(pairs):
                     sorted_edges[i] = self.world.graph.neighbor_to_edge(current_pos, n)

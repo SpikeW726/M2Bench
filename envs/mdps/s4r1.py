@@ -89,9 +89,12 @@ class S4R1Env(FixedStepEnv):
             # 获取其他智能体的数据 (S4: "other agents' source and target node positions" )
             other_agents_data = np.delete(all_agent_states, agent_id, axis=0).flatten()
 
-            # 获取目标节点 (v_t) 的邻居及其空闲度
+            # 获取目标节点 (v_t) 的邻居及其 phi 加权空闲度
             target_neighbors = self.world.graph.get_neighbors(curr_v_t)
-            neighbors_ini = [self.world.node_idleness[n] for n in target_neighbors]
+            neighbors_ini = [
+                self.world.graph.phi.get(n, 1.0) * self.world.node_idleness[n]
+                for n in target_neighbors
+            ]
             
             # 组装观测向量
             single_obs = np.full(self.obs_size, -1, dtype=np.int32)

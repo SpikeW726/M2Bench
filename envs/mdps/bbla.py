@@ -66,9 +66,12 @@ class BBLAEnv(FixedStepEnv):
             # 获取邻居信息
             neighbors = [n for n, _ in self.world.graph.adj_list.get(current_pos, [])]
             
-            # 计算最大/最小空闲度邻居
+            # 计算最大/最小 phi 加权空闲度邻居
             if neighbors:
-                neighbor_idleness = [self.world.node_idleness[n] for n in neighbors]
+                neighbor_idleness = [
+                    self.world.graph.phi.get(n, 1.0) * self.world.node_idleness[n]
+                    for n in neighbors
+                ]
                 max_idle = max(neighbor_idleness)
                 min_idle = min(neighbor_idleness)
                 

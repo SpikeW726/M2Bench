@@ -119,7 +119,11 @@ class PatrolWorld:
             self._occupied_nodes.add(pos)
         
         # 记录初始状态的指标
-        self.metrics_tracker.record(self.node_idleness, self.step_count, self.current_time)
+        weighted_idleness = {
+            node: float(self.graph.phi.get(node, 1.0)) * float(idle_val)
+            for node, idle_val in self.node_idleness.items()
+        }
+        self.metrics_tracker.record(weighted_idleness, self.step_count, self.current_time)
 
     # Most important funciton
     def tick(self, dt: float) -> TickResult:

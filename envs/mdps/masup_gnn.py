@@ -29,7 +29,7 @@ class MASUPGraphEnv(MASUPEnv):
 
         self.node_feat_dim = kwargs.get("node_feat_dim", 2)     # [Type, Weighted_Idleness]
         self.edge_feat_dim = kwargs.get("edge_feat_dim", 1)     # [Edge Weight]
-        self.global_feat_dim = kwargs.get("global_feat_dim", 2) # [Max_Idleness, Timer]   
+        self.global_feat_dim = kwargs.get("global_feat_dim", 2)  # [WI@T (worst_idleness_fromT), obs_timer]
 
         if self.role_ifm == "agent-index":
             identity_len = self.world.num_agents
@@ -194,7 +194,7 @@ class MASUPGraphEnv(MASUPEnv):
 
         # ======== 4. 全局特征 ========
         global_arr = np.array(
-            [float(self.world.worst_idleness), float(self.obs_timer)],
+            [float(self.worst_idleness_fromT), float(self.obs_timer)],
             dtype=np.float32,
         )
 
