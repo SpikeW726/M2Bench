@@ -6,7 +6,7 @@ env:
   deltaT: 20.0
   num_agents: 3
   init_positions: [0, 5, 11]
-  episode_len: 300
+  episode_len: 1500
   edge_time_jitter: false
   custom_configs:
     truncate_by_time: true

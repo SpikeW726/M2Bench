@@ -17,9 +17,9 @@ env:
   deltaT: 0.333
   num_agents: 3
   init_positions: [0, 5, 11]
-  episode_len: 300
+  episode_len: 1500
   custom_configs:
-    T: 20.0
+    T: 200.0
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true

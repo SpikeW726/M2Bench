@@ -381,11 +381,11 @@ class MASUPEnv(EventDrivenEnv):
                 self._agent_idleness_reduction[agent_id] = \
                     self._agent_idleness_reduction.get(agent_id, 0.0) + reward
         
-        # 更新 worst_idleness（考虑 T_time）
-        self._update_worst_idleness_with_T()
-        
         # 更新计时器
         self._update_timers(result.dt)
+        
+        # 更新 worst_idleness（考虑 T_time）
+        self._update_worst_idleness_with_T()
         
         return result
     
