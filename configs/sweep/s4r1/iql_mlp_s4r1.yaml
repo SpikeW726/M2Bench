@@ -9,7 +9,7 @@
 #   python sweep.py --base-config configs/experiments/s4r1/iql_s4r1_tsp12.yaml \
 #                   --sweep-id <ID> --count 15   # 各 tmux 窗口
 #
-# 其它图: iql_s4r1_grid.yaml / iql_s4r1_longedge.yaml 替换 --base-config 即可
+# 其它图: 替换 --base-config；total_steps 以各 experiment 的 training.total_steps 为准
 
 method: bayes
 
@@ -45,7 +45,7 @@ parameters:
     value: 1.0
 
   epsilon_end:
-    min: 0.01
+    min: 0.005
     max: 0.1
     distribution: uniform
 
@@ -77,10 +77,10 @@ parameters:
     value: 16
 
   num_steps:
-    values: [32, 64, 128]
+    # values: [32, 64, 128]
+    values: [4096, 8192]
 
-  total_steps:
-    value: 10000000
+  # total_steps 由各 experiment base 的 training.total_steps 决定（避免 sweep 覆盖不同图的预算）
 
   save_interval:
     value: 1000

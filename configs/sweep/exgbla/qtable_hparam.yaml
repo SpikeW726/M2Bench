@@ -45,7 +45,7 @@ parameters:
 
   # ---- training params (映射到 TrainerConfig) ----
   total_steps:
-    value: 50000000
+    value: 10000000
 
   save_interval:
     value: 1000

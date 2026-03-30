@@ -39,10 +39,10 @@ class S4R1Env(FixedStepEnv):
 
         max_node_id = self.world.num_nodes - 1
 
-        low = np.array([-1] * self.obs_size, dtype=np.int32)
-        high = np.array([max_node_id, max_node_id] + [idleness_upper_bound] * self.world.max_neighbors + [max_node_id, max_node_id] * (self.world.num_agents-1), dtype=np.int32)
+        low = np.array([-1] * self.obs_size, dtype=np.float32)
+        high = np.array([max_node_id, max_node_id] + [idleness_upper_bound] * self.world.max_neighbors + [max_node_id, max_node_id] * (self.world.num_agents-1), dtype=np.float32)
         
-        return Box(low=low, high=high, dtype=np.int32)
+        return Box(low=low, high=high, dtype=np.float32)
 
     def action_space(self, agent):
         return Discrete(self.world.max_neighbors + 1) # The last dimension means no-op
@@ -68,7 +68,7 @@ class S4R1Env(FixedStepEnv):
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, Any]:
         obs = {}
         num_agents = self.world.num_agents
-        all_agent_states = np.zeros((num_agents, 2), dtype=np.int32)
+        all_agent_states = np.zeros((num_agents, 2), dtype=np.float32)
         
         for i in range(num_agents):
             agent = self.world.agents[i]
@@ -97,7 +97,7 @@ class S4R1Env(FixedStepEnv):
             ]
             
             # 组装观测向量
-            single_obs = np.full(self.obs_size, -1, dtype=np.int32)
+            single_obs = np.full(self.obs_size, -1.0, dtype=np.float32)
             
             # [0-1]: 自身的 v_s, v_t
             single_obs[0] = curr_v_s

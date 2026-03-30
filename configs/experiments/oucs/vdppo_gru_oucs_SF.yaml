@@ -1,0 +1,66 @@
+# VDPPO + GRU + OUCSEnv (SF / SFcrimemap)
+# 用法: python train.py configs/experiments/oucs/vdppo_gru_oucs_SF.yaml
+# Sweep: 与通用 configs/sweep/oucs/vdppo_gru_oucs.yaml 共用（total_steps 以本文件 training 为准）
+
+# ---- 分发字段 ----
+algo_name: vdppo
+env_type: oucs
+actor_type: rnn
+q_type: mlp
+
+# ---- 实验元信息 ----
+exp_name: vdppo-gru-oucs
+graph_name: SF
+track_wandb: true
+wandb_project: MAP-RL
+
+# ---- 环境（与 masup_SF eval 中 num_agents / init_positions / episode_len 对齐）----
+env:
+  graph_path: graphs/SFcrimemap.json
+  enable_wait: false
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 3000
+  custom_configs:
+    truncate_by_time: true
+    penalised_factor: 1.5
+
+# ---- 算法 ----
+algo:
+  use_active_mask: true
+  actor_lr: 0.0005
+  q_lr: 0.0005
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  target_kl: 0.3
+  tau: 0.1
+  target_update_freq: 1
+  q_clip_range: null
+  mixer_embed_dim: 64
+  # 与更长 rollout 对齐，利于 GRU 时序 credit
+  data_chunk_length: 16
+
+# ---- 训练 ----
+# SF 长边 + 按时间截断：加大并行与每轮步数，减少「整轮无 episode 结束」导致的 reward=N/A
+training:
+  num_envs: 12
+  use_subproc: true
+  num_steps: 4096
+  total_steps: 10000000
+  save_interval: 800
+  minibatch_size: 8192
+  update_epochs: 5
+
+# ---- 网络 ----
+actor:
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
+  fc_hidden: [256, 256]
+
+q_network:
+  hidden: [64, 64]
+  dueling: true

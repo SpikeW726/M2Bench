@@ -3,10 +3,10 @@ env_type: masup
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
-  deltaT: 20.0
+  deltaT: 200.0
   num_agents: 3
   init_positions: [0, 5, 11]
-  episode_len: 1500
+  episode_len: 3000
   edge_time_jitter: false
   custom_configs:
     truncate_by_time: true
@@ -17,4 +17,4 @@ eval:
   show_plot: false
   animation: true
   event_driven: true
-  max_frames: 200
+  max_frames: 300
