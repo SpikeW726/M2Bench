@@ -35,6 +35,7 @@ class TickResult:
     wait_completed: Set[int] = field(default_factory=set)   # Agents that finish waiting
     raw_rewards: Dict[int, float] = field(default_factory=dict)  # arrived_node_idleness*phi or waitT*phi or 0.0
     pre_arrival_igi: float = 0.0                            # 到达清零前的 IGI（所有节点空闲度均值）
+    pre_arrival_weighted_iwi: float = 0.0                   # 到达清零前的加权 IWI（max phi*idleness），供 wi_fromT 正确峰值捕获
     
     @property
     def ready_agents(self) -> Set[int]:
@@ -89,8 +90,10 @@ class PatrolWorld:
         )
         # 节点空闲度数组（主存储，tick 后同步到 node_idleness dict）
         self._idleness_arr: np.ndarray = np.zeros(self.num_nodes, dtype=np.float64)
-        # phi * idleness（缓冲区，每 tick 计算一次，传给 metrics_tracker 和 masup._build_obs）
+        # phi * idleness 到达后（缓冲区，每 tick 计算一次，传给 masup._build_obs 和奖励）
         self._weighted_arr: np.ndarray = np.zeros(self.num_nodes, dtype=np.float64)
+        # phi * idleness 到达前（到达清零前快照，传给 metrics_tracker，确保 IWI 捕获真实峰值）
+        self._pre_arrival_weighted_arr: np.ndarray = np.zeros(self.num_nodes, dtype=np.float64)
         # 节点占据计数（>=1 表示有智能体在此节点）
         self._occupied_count: np.ndarray = np.zeros(self.num_nodes, dtype=np.int32)
 
@@ -140,6 +143,7 @@ class PatrolWorld:
         # 重置 numpy 加速结构
         self._idleness_arr[:] = 0.0
         self._weighted_arr[:] = 0.0
+        self._pre_arrival_weighted_arr[:] = 0.0
         self._occupied_count[:] = 0
 
         for i in range(self.num_agents):
@@ -182,10 +186,14 @@ class PatrolWorld:
         free_mask = self._occupied_count == 0
         self._idleness_arr[free_mask] += dt
 
-        # 1.5 快照：到达清零前的 IGI（均值）和 worst_idleness（均未加权，保持原语义）
+        # 1.5 快照：到达清零前的 IGI、worst_idleness（未加权）及加权 IWI（phi*idleness 峰值）
+        # 必须在步骤 2（到达节点清零）之前计算，确保 IWI/wi_fromT 能捕获真实峰值
         result.pre_arrival_igi = float(self._idleness_arr.mean())
         current_worst_idleness = float(self._idleness_arr.max())
         self.worst_idleness = max(self.worst_idleness, current_worst_idleness)
+        # 写入独立缓冲区 _pre_arrival_weighted_arr，步骤 5 将其传给 metrics_tracker
+        np.multiply(self._phi_arr, self._idleness_arr, out=self._pre_arrival_weighted_arr)
+        result.pre_arrival_weighted_iwi = float(self._pre_arrival_weighted_arr.max())
 
         # 2. 更新智能体状态
         for agent_id, status in self.agents.items():
@@ -245,10 +253,12 @@ class PatrolWorld:
         #    使用 dict.update(zip(...)) 替代 Python 逐元素赋值，利用 C 层批量写入
         self.node_idleness.update(zip(self._node_order, self._idleness_arr.tolist()))
 
-        # 5. 计算 phi 加权空闲度数组，记录指标（向量化，避免 dict comprehension）
+        # 5. 计算到达后的 phi 加权空闲度（供观测/奖励使用），并用到达前快照记录指标
+        # _pre_arrival_weighted_arr：步骤 1.5 已计算，携带到达清零前的真实 IWI 峰值
+        # _weighted_arr：到达后重新计算，供 masup._build_obs / _compute_rewards 等读取
         self.step_count += 1
         np.multiply(self._phi_arr, self._idleness_arr, out=self._weighted_arr)
-        self.metrics_tracker.record(self._weighted_arr, self.step_count, self.current_time)
+        self.metrics_tracker.record(self._pre_arrival_weighted_arr, self.step_count, self.current_time)
 
         return result
 

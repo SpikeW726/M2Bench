@@ -124,6 +124,8 @@ def test_trained_policy(
         event_driven: True=事件驱动动画，False=固定步长动画
         max_frames: 动画最大帧数限制
         save_animation_dir: 动画保存目录；None 时回退到 save_plot 的父目录
+        动画文件名：若提供 save_plot，在「算法名_animation_图名」后追加 _ 与 save_plot 的文件名 stem，
+        例如 best_eval.png → mappo_animation_long_edge_best_eval.mp4
     """
     # ---- 1. 加载环境配置 & 创建环境 ----
     env_type, env_cfg = load_eval_config(env_config_path)
@@ -253,6 +255,7 @@ def test_trained_policy(
     # ---- 6. 可视化 ----
     # 动画目录：优先用显式传入的 save_animation_dir，回退到 save_plot 的父目录
     anim_dir = save_animation_dir or (str(Path(save_plot).parent) if save_plot else 'evaluators/results')
+    anim_plot_stem = Path(save_plot).stem if save_plot else None
 
     if metrics_history:
         print(f"\n=== Generating aggregated visualization ===")
@@ -285,6 +288,7 @@ def test_trained_policy(
                 map_name=graph_name,
                 save_dir=anim_dir,
                 max_frames=max_frames,
+                plot_stem=anim_plot_stem,
             )
         else:
             from utils.vis_utils import create_animation
@@ -296,6 +300,7 @@ def test_trained_policy(
                 map_name=graph_name,
                 save_dir=anim_dir,
                 max_frames=max_frames,
+                plot_stem=anim_plot_stem,
             )
 
     return episode_metrics
@@ -331,6 +336,7 @@ def test_qtable_policy(
         event_driven: True=事件驱动动画，False=固定步长动画
         max_frames: 动画最大帧数限制
         save_animation_dir: 动画保存目录；None 时回退到 save_plot 的父目录
+        动画文件名：若提供 save_plot，在「算法名_animation_图名」后追加 _stem（同 test_trained_policy）
     """
     from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
     from configs.algo_configs import QTableParams
@@ -473,6 +479,7 @@ def test_qtable_policy(
     # ---- 6. 可视化 ----
     # 动画目录：优先用显式传入的 save_animation_dir，回退到 save_plot 的父目录
     anim_dir = save_animation_dir or (str(Path(save_plot).parent) if save_plot else 'evaluators/results')
+    anim_plot_stem = Path(save_plot).stem if save_plot else None
     if metrics_history:
         print(f"\n=== Generating aggregated visualization ===")
         aggregated = aggregate_episode_metrics(metrics_history)
@@ -504,6 +511,7 @@ def test_qtable_policy(
                 map_name=graph_name,
                 save_dir=anim_dir,
                 max_frames=max_frames,
+                plot_stem=anim_plot_stem,
             )
         else:
             from utils.vis_utils import create_animation
@@ -515,6 +523,7 @@ def test_qtable_policy(
                 map_name=graph_name,
                 save_dir=anim_dir,
                 max_frames=max_frames,
+                plot_stem=anim_plot_stem,
             )
 
     return episode_metrics

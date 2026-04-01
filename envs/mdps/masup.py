@@ -385,22 +385,26 @@ class MASUPEnv(EventDrivenEnv):
         # 更新计时器
         self._update_timers(result.dt)
         
-        # 更新 worst_idleness（考虑 T_time）
-        self._update_worst_idleness_with_T()
+        # 更新 worst_idleness（考虑 T_time），传入 result 以使用到达清零前的加权 IWI 峰值
+        self._update_worst_idleness_with_T(result)
         
         return result
     
-    def _update_worst_idleness_with_T(self):
+    def _update_worst_idleness_with_T(self, result):
         """
-        更新 worst_idleness,考虑 T_time
-        
-        关键:T_time 之前,worst_idleness = 0;T_time 之后才开始记录
+        更新 worst_idleness,考虑 T_time。
+
+        关键:T_time 之前,worst_idleness = 0;T_time 之后才开始记录。
+
+        必须使用 result.pre_arrival_weighted_iwi（到达清零前的加权 IWI 峰值），
+        而非 metrics_tracker.iwi（metrics_tracker.record 在节点清零后才调用，
+        峰值已消失，会系统性低估 wi_fromT）。
         """
         if self.obs_timer < self.T_time:
             self.worst_idleness_fromT = 0.0
         else:
-            # 使用 metrics_tracker 中的 iwi (Instantaneous Worst Idleness)
-            current_iwi = self.world.current_metrics.iwi
+            # 使用到达前的加权 IWI 峰值（patrol_core.tick step1.5 计算，节点清零前）
+            current_iwi = result.pre_arrival_weighted_iwi
             if current_iwi > self.worst_idleness_fromT:
                 self.worst_idleness_fromT = current_iwi
         self._wi_fromT_history.append(float(self.worst_idleness_fromT))

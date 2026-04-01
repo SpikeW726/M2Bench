@@ -178,7 +178,16 @@ def _downsample_frames(frames, max_frames):
     return [frames[i] for i in indices]
 
 
-def create_animation(map_graph, agent_positions_history, total_frames, algorithm_name, map_name, save_dir=None, max_frames=None):
+def create_animation(
+    map_graph,
+    agent_positions_history,
+    total_frames,
+    algorithm_name,
+    map_name,
+    save_dir=None,
+    max_frames=None,
+    plot_stem=None,
+):
     """
     创建agent移动的动画视频，保存到save_dir。
     Args:
@@ -189,6 +198,8 @@ def create_animation(map_graph, agent_positions_history, total_frames, algorithm
         map_name: 地图名称
         save_dir: 保存目录
         max_frames: 最大帧数限制（None=不限制）
+        plot_stem: 可选；评估图 save_plot 的文件名 stem（不含扩展名），拼为
+            {algorithm_name}_animation_{map_name}_{plot_stem}.mp4
     """
     # 帧数限制
     if max_frames is not None and len(agent_positions_history) > max_frames:
@@ -318,13 +329,16 @@ def create_animation(map_graph, agent_positions_history, total_frames, algorithm
     if save_dir is None:
         save_dir = '.'
     os.makedirs(save_dir, exist_ok=True)
+
+    stem_part = f"_{plot_stem}" if plot_stem else ""
+    base_name = f"{algorithm_name}_animation_{map_name}{stem_part}"
     
     # Choose output format - set this to True for MP4, False for GIF  
     use_mp4_format = True  # 使用MP4输出
     
     if use_mp4_format:
         # MP4 output - higher quality, smaller file size, but slower rendering
-        animation_filename = os.path.join(save_dir, f"{algorithm_name}_animation_{map_name}.mp4")
+        animation_filename = os.path.join(save_dir, f"{base_name}.mp4")
         try:
             # 尝试使用ffmpeg保存MP4
             import matplotlib.animation as animation_mod
@@ -340,17 +354,26 @@ def create_animation(map_graph, agent_positions_history, total_frames, algorithm
             print(f"MP4保存失败，错误: {e}")
             print("回退到GIF格式...")
             # 回退到GIF格式
-            animation_filename = os.path.join(save_dir, f"{algorithm_name}_animation_{map_name}.gif")
+            animation_filename = os.path.join(save_dir, f"{base_name}.gif")
             anim.save(animation_filename, writer='pillow', fps=6, dpi=90)
     else:
         # GIF output - faster rendering, larger file size
-        animation_filename = os.path.join(save_dir, f"{algorithm_name}_animation_{map_name}.gif")
+        animation_filename = os.path.join(save_dir, f"{base_name}.gif")
         anim.save(animation_filename, writer='pillow', fps=6, dpi=90)
     
     plt.close()
     print(f"Animation saved as '{animation_filename}'")
 
-def create_event_driven_animation(map_graph, agent_positions_history, time_intervals, algorithm_name, map_name, save_dir=None, max_frames=None):
+def create_event_driven_animation(
+    map_graph,
+    agent_positions_history,
+    time_intervals,
+    algorithm_name,
+    map_name,
+    save_dir=None,
+    max_frames=None,
+    plot_stem=None,
+):
     """
     创建事件驱动的智能体移动动画，考虑实际时间间隔。
     专门用于SUP_MDP等事件驱动的环境，其中每个事件之间的时间间隔可能不同。
@@ -371,6 +394,7 @@ def create_event_driven_animation(map_graph, agent_positions_history, time_inter
         map_name: 地图名称
         save_dir: 保存目录
         max_frames: 最大帧数限制，None 表示不限制。超出时均匀降采样
+        plot_stem: 可选，与 create_animation 一致，追加到输出文件名
     """
     print("Starting event-driven animation...")
 
@@ -482,7 +506,15 @@ def create_event_driven_animation(map_graph, agent_positions_history, time_inter
 
     # 调用底层动画函数
     total_frames = len(interpolated_positions)
-    create_animation(map_graph, interpolated_positions, total_frames, algorithm_name, map_name, save_dir)
+    create_animation(
+        map_graph,
+        interpolated_positions,
+        total_frames,
+        algorithm_name,
+        map_name,
+        save_dir,
+        plot_stem=plot_stem,
+    )
 
 
 def _get_text_color_for_bg(bg_color_rgb):
