@@ -38,6 +38,7 @@ from data.buffer import ReplayBuffer, SequenceReplayBuffer
 from policies.marl.marl_base import MultiAgentPolicy
 from policies.rl.rl_base import ActorPolicy, ValuePolicy
 from utils.model_io import save_model
+from utils.autodl_paths import resolve_models_path
 
 
 # =============================================================================
@@ -170,7 +171,7 @@ def _load_pretrained(
 
     loaded_from = None
     if has_actor_path:
-        actor_p = Path(actor_path)
+        actor_p = resolve_models_path(actor_path)
         if actor_p.exists():
             actor_ckpt = torch.load(actor_p, map_location=device, weights_only=True)
             actor_net.load_state_dict(actor_ckpt.get("actor_state_dict", actor_ckpt))
@@ -178,7 +179,7 @@ def _load_pretrained(
             print(f"[Train] Loaded pretrained actor from {actor_path}")
 
     if has_critic_path:
-        critic_p = Path(critic_path)
+        critic_p = resolve_models_path(critic_path)
         if critic_p.exists():
             critic_ckpt = torch.load(critic_p, map_location=device, weights_only=True)
             critic_net.load_state_dict(critic_ckpt.get("critic_state_dict", critic_ckpt))

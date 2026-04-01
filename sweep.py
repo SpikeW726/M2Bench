@@ -27,6 +27,7 @@ import wandb
 from configs.registry import load_config
 from configs.exp_configs import ExperimentConfig
 from train import train
+from utils.autodl_paths import AUTODL_RESULTS_ROOT, resolve_results_path
 
 
 # =============================================================================
@@ -206,7 +207,11 @@ def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: in
             extra["save_plot"] = str(p.with_stem(f"{p.stem}_{rank}"))
         if record_animation:
             # 动画目录独立到与图像同目录下的 run_{rank}/ 子目录
-            base_dir = str(_Path(base_save_plot).parent) if base_save_plot else "evaluators/results"
+            base_dir = (
+                str(_Path(resolve_results_path(base_save_plot)).parent)
+                if base_save_plot
+                else str(AUTODL_RESULTS_ROOT)
+            )
             extra["save_animation_dir"] = str(_Path(base_dir) / f"run_{rank}")
 
         try:

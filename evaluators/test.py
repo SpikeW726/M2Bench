@@ -44,6 +44,12 @@ from configs.registry import (
 )
 from utils.model_io import load_policy_for_eval, get_model_config
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
+from utils.autodl_paths import (
+    AUTODL_MODELS_ROOT,
+    AUTODL_RESULTS_ROOT,
+    resolve_models_path,
+    resolve_results_path,
+)
 
 
 # MASUP / MASUPGraphEnv：第四幅子图用 wi_fromT 替代全 episode 的 wi
@@ -127,6 +133,12 @@ def test_trained_policy(
         动画文件名：若提供 save_plot，在「算法名_animation_图名」后追加 _ 与 save_plot 的文件名 stem，
         例如 best_eval.png → mappo_animation_long_edge_best_eval.mp4
     """
+    model_dir = resolve_models_path(model_dir)
+    if save_plot is not None:
+        save_plot = resolve_results_path(save_plot)
+    if save_animation_dir is not None:
+        save_animation_dir = resolve_results_path(save_animation_dir)
+
     # ---- 1. 加载环境配置 & 创建环境 ----
     env_type, env_cfg = load_eval_config(env_config_path)
 
@@ -254,7 +266,8 @@ def test_trained_policy(
 
     # ---- 6. 可视化 ----
     # 动画目录：优先用显式传入的 save_animation_dir，回退到 save_plot 的父目录
-    anim_dir = save_animation_dir or (str(Path(save_plot).parent) if save_plot else 'evaluators/results')
+    _default_results = str(AUTODL_RESULTS_ROOT)
+    anim_dir = save_animation_dir or (str(Path(save_plot).parent) if save_plot else _default_results)
     anim_plot_stem = Path(save_plot).stem if save_plot else None
 
     if metrics_history:
@@ -338,6 +351,12 @@ def test_qtable_policy(
         save_animation_dir: 动画保存目录；None 时回退到 save_plot 的父目录
         动画文件名：若提供 save_plot，在「算法名_animation_图名」后追加 _stem（同 test_trained_policy）
     """
+    model_dir = resolve_models_path(model_dir)
+    if save_plot is not None:
+        save_plot = resolve_results_path(save_plot)
+    if save_animation_dir is not None:
+        save_animation_dir = resolve_results_path(save_animation_dir)
+
     from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
     from configs.algo_configs import QTableParams
 
@@ -478,7 +497,8 @@ def test_qtable_policy(
 
     # ---- 6. 可视化 ----
     # 动画目录：优先用显式传入的 save_animation_dir，回退到 save_plot 的父目录
-    anim_dir = save_animation_dir or (str(Path(save_plot).parent) if save_plot else 'evaluators/results')
+    _default_results_q = str(AUTODL_RESULTS_ROOT)
+    anim_dir = save_animation_dir or (str(Path(save_plot).parent) if save_plot else _default_results_q)
     anim_plot_stem = Path(save_plot).stem if save_plot else None
     if metrics_history:
         print(f"\n=== Generating aggregated visualization ===")
@@ -558,11 +578,19 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
     with open(eval_config_path) as f:
         raw = yaml.safe_load(f)
     algo_name = raw.get("algo_name", None)
-    eval_params = raw.get("eval", {})
+    eval_params = dict(raw.get("eval", {}))
 
     # extra_params 覆盖 yaml 中的 eval 字段
     if extra_params:
         eval_params.update(extra_params)
+
+    model_dir = str(resolve_models_path(model_dir))
+    sp = eval_params.get("save_plot")
+    if sp is not None:
+        eval_params["save_plot"] = resolve_results_path(sp)
+    sad = eval_params.get("save_animation_dir")
+    if sad is not None:
+        eval_params["save_animation_dir"] = resolve_results_path(sad)
 
     # animation 字段在 CLI 中叫 record_animation，统一映射
     if "animation" in eval_params:
@@ -592,7 +620,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='通用 RL 策略评估')
     parser.add_argument('--model', type=str,
-                        default='models/mappo/imi/final',
+                        default=str(AUTODL_MODELS_ROOT / 'mappo' / 'imi' / 'final'),
                         help='模型目录 (含 config.yaml + policy.pt)')
     parser.add_argument('--env_config', type=str,
                         default='configs/eval/masup/masup_tsp12.yaml',
@@ -601,7 +629,8 @@ if __name__ == '__main__':
                         help='评估 episode 数量（未指定时从 env_config 的 eval 段读取）')
     parser.add_argument('--episode_time', type=float, default=None,
                         help='每个 episode 的仿真时间上限（秒）；未指定时从 env 段的 episode_len 读取')
-    parser.add_argument('--save_plot', type=str, default='evaluators/results/eval.png',
+    parser.add_argument('--save_plot', type=str,
+                        default=str(AUTODL_RESULTS_ROOT / 'eval.png'),
                         help='图表保存路径')
     parser.add_argument('--no_show', action='store_true',
                         help='不显示图表')

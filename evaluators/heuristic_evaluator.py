@@ -25,6 +25,7 @@ from envs.mdps.patrol_core import PatrolWorld
 from configs.registry import load_env_config, _env_config_to_dicts
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
+from utils.autodl_paths import AUTODL_RESULTS_ROOT, resolve_results_path
 
 
 # =============================================================================
@@ -191,7 +192,7 @@ def main():
     parser.add_argument('--policy_config', type=str, default=None,
                         help='策略配置路径 (default: configs/policies/{POLICY}.yaml)')
     parser.add_argument('--save_plot', type=str,
-                        default='evaluators/results/heuristic_eval.png',
+                        default=str(AUTODL_RESULTS_ROOT / 'heuristic_eval.png'),
                         help='图表保存路径')
     parser.add_argument('--no_show', action='store_true',
                         help='不显示图表')
@@ -203,6 +204,7 @@ def main():
                         help='动画最大帧数限制（默认不限制，推荐 300~600）')
 
     args = parser.parse_args()
+    args.save_plot = resolve_results_path(args.save_plot)
 
     # ---- 加载环境配置 ----
     env_cfg = load_env_config(args.env_config)

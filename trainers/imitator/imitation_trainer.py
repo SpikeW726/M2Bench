@@ -18,6 +18,7 @@ import h5py
 
 from networks.mlp import ActorMLP, CriticMLP
 from utils.model_io import _convert_to_native_types as _ensure_native_types
+from utils.autodl_paths import resolve_models_path, resolve_runs_path
 from configs.registry import (
     create_actor, ENV_REGISTRY, _import_class, _env_config_to_dicts, load_eval_config
 )
@@ -165,12 +166,12 @@ class imi_trainer:
         self.run_name = f"{self.exp_name}__{int(time.time())}"
         
         # 模型保存配置
-        self.save_dir = Path(kwargs.get("save_dir", "models"))
+        self.save_dir = resolve_models_path(kwargs.get("save_dir", "models"))
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.save_model = kwargs.get("save_model", True)
         
         # 初始化 tensorboard
-        self.writer = SummaryWriter(f"runs/{self.run_name}")
+        self.writer = SummaryWriter(str(resolve_runs_path(f"runs/{self.run_name}")))
         self.writer.add_text("hyperparameters", 
             "|param|value|\n|-|-|\n" + "\n".join([f"|{k}|{v}|" for k, v in kwargs.items()]))
         

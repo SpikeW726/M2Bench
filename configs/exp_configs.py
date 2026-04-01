@@ -8,6 +8,7 @@ from typing import Optional
 from sensai.util.string import ToStringMixin
 
 from configs.env_configs import EnvConfig
+from utils.autodl_paths import AUTODL_MODELS_ROOT, AUTODL_RUNS_ROOT
 from configs.algo_configs import AlgoParams, MAPPOParams
 from configs.training_configs import TrainerConfig, OnPolicyTrainerConfig
 from configs.network_configs import NetworkConfig
@@ -59,8 +60,8 @@ class ExperimentConfig(ToStringMixin):
 
     @property
     def save_dir(self) -> Path:
-        return Path(f"models/{self.algo_name}-{self.env_type}-{self.graph_name}/{self._timestamp}")
+        return AUTODL_MODELS_ROOT / f"{self.algo_name}-{self.env_type}-{self.graph_name}" / self._timestamp
 
     @property
     def log_dir(self) -> Path:
-        return Path(f"runs/{self.run_name}")
+        return AUTODL_RUNS_ROOT / self.run_name
