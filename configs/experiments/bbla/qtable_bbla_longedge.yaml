@@ -1,4 +1,5 @@
 # Q-table + BBLA 环境 (LongEdge) — 3 agents
+# episode_len=100 与 DRL longedge 对齐；epsilon 固定 0.1（decay 无效果）
 # 用法: python train.py configs/experiments/bbla/qtable_bbla_longedge.yaml
 
 algo_name: qtable
@@ -23,7 +24,7 @@ algo:
   gamma: 0.9
   epsilon_start: 0.1
   epsilon_end: 0.1
-  epsilon_decay: 0.9995
+  epsilon_decay: 1.0
   sync_update: true
 
 training:

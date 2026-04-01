@@ -1,13 +1,21 @@
-# MAPPO + MPNN + MASUPGraphEnv (masup_gnn) 超参数搜索
+# MAPPO + MPNN + MASUPGraphEnv (masup_gnn) 超参数搜索（通用，覆盖 TSP12 / longedge / SF 图）
 #
-# 用法:
+# 用法（TSP12，imi-init 权重）:
 #   python sweep.py \
 #     --base-config configs/experiments/masupgnn/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
 #     --sweep-config configs/sweep/masupgnn/mappo_mpnn_masupgnn.yaml \
 #     --eval-config configs/eval/masupgnn/masup_gnn_tsp12.yaml \
 #     --count 40
 #
-# Step 预算：base config 中 total_steps=50M；sweep 调 num_steps 时 max_iterations 自动 ceil，各 trial 总步数 ≥ 50M
+# 用法（SF，从零训练）:
+#   python sweep.py \
+#     --base-config configs/experiments/masupgnn/mappo_masupgnn_SF.yaml \
+#     --sweep-config configs/sweep/masupgnn/mappo_mpnn_masupgnn.yaml \
+#     --eval-config configs/eval/masupgnn/masupgnn_SF.yaml \
+#     --count 40
+#
+# total_steps 由各 base_config 的 training.total_steps 决定（避免覆盖不同图预算）
+# SF: steps_per_episode≈330 (EventDrivenEnv)，num_steps [1024,2048,4096] 均可正常记录 reward
 
 method: bayes
 
@@ -15,10 +23,6 @@ metric:
   name: env/wi_fromT
   goal: minimize
 
-early_terminate:
-  type: hyperband
-  min_iter: 1000
-  eta: 3
 
 parameters:
   actor_lr:
@@ -49,7 +53,7 @@ parameters:
 
   # ---- OnPolicyTrainerConfig ----
   minibatch_size:
-    values: [1024, 2048, 4096]   # 总数据量 16×2048=32768，minibatch 不超过总量
+    values: [1024, 2048, 4096]
 
   update_epochs:
     values: [3, 5, 10]
@@ -57,8 +61,7 @@ parameters:
   num_steps:
     values: [1024, 2048, 4096]
 
-  total_steps:
-    value: 20000000
+  # total_steps 由各 experiment base（tsp12/longedge/SF）的 training.total_steps 决定，避免覆盖图相关预算
 
   save_interval:
-    value: 1000
+    value: 400

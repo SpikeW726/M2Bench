@@ -1,0 +1,66 @@
+# A2C + SUNSGymEnv (SF) — 单智能体训练，多智能体评估用 configs/eval/suns/suns_SF.yaml
+# 训练: python train.py configs/experiments/suns/a2c_suns_SF.yaml
+#
+# SF 图特性:
+#   12 节点，全连通 (max_degree=11)，边权 6.1~53.9 (均值≈27.3)
+#   JointEventDrivenEnv (单智能体): 每步推进到该智能体到达事件
+#   steps_per_episode ≈ 3000/27.3 ≈ 110 步
+#   → num_steps=1024 可覆盖 ~9 个 episode，不会出现 reward=N/A
+#
+# 注意: SUNS 单智能体训练 (num_agents=1)，评估时部署 3 个共享权重的 agent
+#       训练 init_positions=[0]，评估 init_positions=[0, 5, 11]
+
+# ---- 分发字段 ----
+algo_name: a2c
+env_type: suns_gym
+actor_type: sun
+critic_type: sun
+
+# ---- 实验元信息 ----
+exp_name: a2c-suns-SF
+graph_name: SF
+track_wandb: true
+wandb_project: MAP-RL
+
+# ---- 环境 ----
+env:
+  graph_path: graphs/SFcrimemap.json
+  enable_wait: false
+  num_agents: 1
+  init_positions: [0]
+  episode_len: 3000
+  custom_configs:
+    truncate_by_time: true
+
+# ---- 算法 ----
+algo:
+  lr: 7.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  vf_coef: 0.5
+  ent_coef: 0.01
+
+# ---- 训练 ----
+# step_per_iteration = 12 × 1024 = 12288
+# max_iterations = ceil(10M / 12288) = 814
+training:
+  num_envs: 12
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 10000000
+  save_interval: 200
+  minibatch_size: 2048
+  update_epochs: 1
+
+# ---- 网络 (SUN: f1 2→4→1, f2 3→6→1) ----
+# SF: 12 节点，node_feat_dim=2
+actor:
+  num_nodes: 12
+  node_feat_dim: 2
+  f1_hidden: 4
+  f2_hidden: 6
+critic:
+  num_nodes: 12
+  node_feat_dim: 2
+  f1_hidden: 4
+  f2_hidden: 6

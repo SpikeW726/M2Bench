@@ -1,0 +1,23 @@
+# MAGECEnv SF 评估配置
+# 用法:
+#   python evaluators/test.py --env_config configs/eval/magec/magec_SF.yaml --model models/xxx/final
+
+env_type: magec
+
+env:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 3000
+  custom_configs:
+    truncate_by_time: true
+    alpha: 1.0
+    beta: 0.5
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/SF/magec/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: True
+  max_frames: 2000

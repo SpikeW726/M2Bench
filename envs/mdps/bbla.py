@@ -80,7 +80,7 @@ class BBLAEnv(FixedStepEnv):
 
                 # 平局时随机选取
                 max_node = self.world.graph.neighbor_to_edge(current_pos, random.choice(max_nodes))
-                min_node = self.world.graph.neighbor_to_edge(current_pos, random.choice(max_nodes))
+                min_node = self.world.graph.neighbor_to_edge(current_pos, random.choice(min_nodes))
             else:
                 max_node = min_node = -1
             

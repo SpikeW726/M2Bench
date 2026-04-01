@@ -14,7 +14,7 @@ class Graph:
 
             self.nodes: List[int] = data["nodes"]
             tmp_edges: List[Dict] = data["edges"]
-            self.phi: Dict[int, int] = {int(k): int(v) for k, v in data["phi"].items()}
+            self.phi: Dict[int, float] = {int(k): float(v) for k, v in data["phi"].items()}
 
         # Initialize adjacency list
         self.adj_list: Dict[int, List[Tuple[int, float]]] = {node: [] for node in self.nodes}

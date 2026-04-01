@@ -11,8 +11,8 @@ env_type: nep
 env:
   graph_path: graphs/long_edge.json
   enable_wait: false
-  num_agents: 4
-  init_positions: [0, 1, 2, 3]
-  episode_len: 300
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 100
   custom_configs:
     truncate_by_time: true

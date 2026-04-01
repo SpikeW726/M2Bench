@@ -1,4 +1,5 @@
 # Q-table + ExGBLA 环境 (LongEdge) — 3 agents
+# episode_len=100 → N_ep≈10M/(4*100)=25000；epsilon_decay 接近 1
 # 用法: python train.py configs/experiments/exgbla/qtable_ex_gbla_longedge.yaml
 
 algo_name: qtable
@@ -14,16 +15,16 @@ env:
   enable_wait: false
   num_agents: 3
   init_positions: [0, 1, 2]
-  episode_len: 5000
+  episode_len: 100
   custom_configs:
     truncate_by_time: true
 
 algo:
   lr: 0.1
   gamma: 0.99
-  epsilon_start: 1.0
-  epsilon_end: 0.01
-  epsilon_decay: 0.9995
+  epsilon_start: 0.1
+  epsilon_end: 0.05
+  epsilon_decay: 0.99996
   sync_update: true
 
 training:

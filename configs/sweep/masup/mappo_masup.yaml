@@ -5,16 +5,11 @@
 #
 # 其它入口: mappo_masup_tsp12_scratch.yaml、mappo_masup_longedge_scratch.yaml 等替换 --base-config
 
-method: random
+method: bayes
 
 metric:
   name: env/wi_fromT
   goal: minimize
-
-early_terminate:
-  type: hyperband
-  min_iter: 1000
-  eta: 3
 
 parameters:
   # ---- algo params (映射到 MAPPOParams) ----

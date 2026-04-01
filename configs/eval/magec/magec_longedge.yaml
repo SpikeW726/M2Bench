@@ -19,5 +19,5 @@ eval:
   save_plot: evaluators/results/long_edge/magec/best_eval.png
   show_plot: false
   animation: true
-  event_driven: false
+  event_driven: True
   max_frames: 200

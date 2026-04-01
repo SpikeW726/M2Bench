@@ -160,14 +160,15 @@ class MASUPEnv(EventDrivenEnv):
         # 2. 推进物理世界（考虑 T_time 截断）
         result = self._advance_with_T_time()
 
-        # 3. 为本次决策计算每个 agent 的决策序号（同节点内随机顺序）
+        # 3. 为本次决策计算每个 agent 的决策序号（同节点内按 agent id 升序，确定性，便于测试）
         self._decision_index_map = {}
         node_to_deciders = {}
         for aid in self.world.get_ready_agents():
             node = self.world.get_position(aid)
             node_to_deciders.setdefault(node, []).append(aid)
         for node, aids in node_to_deciders.items():
-            random.shuffle(aids)
+            aids.sort()
+            # random.shuffle(aids)
             for idx, aid in enumerate(aids, start=0):
                 self._decision_index_map[aid] = idx
 

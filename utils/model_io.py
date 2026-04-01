@@ -48,7 +48,7 @@ def _get_class_registry() -> Dict[str, type]:
     from networks.mlp import ActorMLP, CriticMLP, QMLP
     from networks.rnn import ActorRNN, CriticRNN, QRNN
     from networks.custom.suns import SUNActor, SUNCritic
-    from networks.gnn import MPNNActor
+    from networks.gnn import MPNNActor, GraphSageActor
 
     return {
         "ActorMLP": ActorMLP,
@@ -60,6 +60,7 @@ def _get_class_registry() -> Dict[str, type]:
         "SUNActor": SUNActor,
         "SUNCritic": SUNCritic,
         "MPNNActor": MPNNActor,
+        "GraphSageActor": GraphSageActor,
     }
 
 

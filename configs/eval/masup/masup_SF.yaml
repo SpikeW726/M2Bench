@@ -17,4 +17,4 @@ eval:
   show_plot: false
   animation: true
   event_driven: true
-  max_frames: 300
+  max_frames: 2000

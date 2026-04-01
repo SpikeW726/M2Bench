@@ -1,13 +1,18 @@
-# A2C + SUNSGymEnv (TSP12) 超参数搜索
-# 用法:
+# A2C + SUNSGymEnv 超参数搜索（通用，覆盖 TSP12 / longedge / SF 图）
+# 用法（TSP12）:
 #   python sweep.py --base-config configs/experiments/suns/a2c_suns_tsp12.yaml \
 #                   --sweep-config configs/sweep/suns/a2c_suns.yaml --count 40
+# 用法（SF）:
+#   python sweep.py --base-config configs/experiments/suns/a2c_suns_SF.yaml \
+#                   --sweep-config configs/sweep/suns/a2c_suns.yaml --count 40
 #
-# 并行:
-#   python sweep.py --base-config configs/experiments/suns/a2c_suns_tsp12.yaml \
+# 并行示例:
+#   python sweep.py --base-config configs/experiments/suns/a2c_suns_SF.yaml \
 #                   --sweep-config configs/sweep/suns/a2c_suns.yaml --create-only
-#   python sweep.py --base-config configs/experiments/suns/a2c_suns_tsp12.yaml \
-#                   --sweep-id <ID> --count 15   # 各 tmux 窗口
+#   python sweep.py --base-config configs/experiments/suns/a2c_suns_SF.yaml \
+#                   --sweep-id <ID> --count 15
+#
+# total_steps 由各 base_config 的 training.total_steps 决定（避免覆盖不同图预算）
 
 method: bayes
 
@@ -43,8 +48,7 @@ parameters:
   update_epochs:
     values: [1, 3, 5]
 
-  total_steps:
-    value: 10000000
+  # total_steps 由各 experiment base 的 training.total_steps 决定，避免覆盖不同图预算
 
   save_interval:
     value: 1000

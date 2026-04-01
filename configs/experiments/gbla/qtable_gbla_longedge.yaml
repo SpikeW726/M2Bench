@@ -1,4 +1,5 @@
 # Q-table + GBLA 环境 (LongEdge) — 3 agents
+# episode_len=100 → N_ep≈10M/(16*100)≈6250；epsilon_decay 需接近 1 避免探索过早耗尽
 # 用法: python train.py configs/experiments/gbla/qtable_gbla_longedge.yaml
 
 algo_name: qtable
@@ -21,9 +22,9 @@ env:
 algo:
   lr: 0.1
   gamma: 0.99
-  epsilon_start: 1.0
-  epsilon_end: 0.01
-  epsilon_decay: 0.9995
+  epsilon_start: 0.1
+  epsilon_end: 0.05
+  epsilon_decay: 0.99996
   sync_update: true
 
 training:

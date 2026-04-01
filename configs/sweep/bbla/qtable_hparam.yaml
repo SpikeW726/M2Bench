@@ -26,7 +26,7 @@ parameters:
     values: [0.9, 0.99, 0.999]
 
   epsilon_start:
-    values: [0.5, 0.8, 1.0]
+    values: [0.05, 0.1, 0.2, 0.5]  # 加入低探索起点；避免episode预算不足时长期随机
 
   epsilon_end:
     min: 0.01
@@ -34,13 +34,12 @@ parameters:
     distribution: uniform
 
   epsilon_decay:
-    min: 0.9990
+    min: 0.990   # longedge ep_len=100: N_ep≈6k(16env)~25k(4env)，短episode需高decay(≈0.99996~0.99999)
     max: 0.99999
     distribution: uniform
 
   # ---- training params (映射到 TrainerConfig) ----
-  total_steps:
-    value: 10000000
+  # total_steps 由 base_config 控制，sweep 不硬编码
 
   save_interval:
     value: 1000

@@ -20,9 +20,9 @@ env:
 algo:
   lr: 0.1
   gamma: 0.99
-  epsilon_start: 1.0
-  epsilon_end: 0.01
-  epsilon_decay: 0.9995
+  epsilon_start: 0.1   # ~1250个episode预算，0.9995^1250≈0.54，epsilon无法衰减到合理水平
+  epsilon_end: 0.05
+  epsilon_decay: 0.999  # 1250 episode后约衰减至0.03，触达epsilon_end
   sync_update: true
 
 training:

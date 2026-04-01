@@ -1,24 +1,25 @@
-# MAPPO + MAGECEnv 超参数搜索
-# 用法:
+# MAPPO + MAGECEnv 超参数搜索（通用，覆盖 longedge / TSP12 / SF 图）
+# 用法（longedge）:
 #   python sweep.py --base-config configs/experiments/magec/mappo_magec_longedge.yaml \
 #                   --sweep-config configs/sweep/magec/mappo_magec.yaml --count 40
+# 用法（SF）:
+#   python sweep.py --base-config configs/experiments/magec/mappo_magec_SF.yaml \
+#                   --sweep-config configs/sweep/magec/mappo_magec.yaml --count 40
 #
-# 并行:
-#   python sweep.py --base-config configs/experiments/magec/mappo_magec_longedge.yaml \
+# 并行示例:
+#   python sweep.py --base-config configs/experiments/magec/mappo_magec_SF.yaml \
 #                   --sweep-config configs/sweep/magec/mappo_magec.yaml --create-only
-#   python sweep.py --base-config configs/experiments/magec/mappo_magec_longedge.yaml \
+#   python sweep.py --base-config configs/experiments/magec/mappo_magec_SF.yaml \
 #                   --sweep-id <ID> --count 15
+#
+# total_steps 由各 base_config 的 training.total_steps 决定（避免覆盖不同图的预算）
+# num_steps 最小值 512: SF 图 steps_per_episode≈330，256 会导致部分 iteration reward=N/A
 
 method: bayes
 
 metric:
   name: env/wi
   goal: minimize
-
-early_terminate:
-  type: hyperband
-  min_iter: 1000
-  eta: 3
 
 parameters:
   # ---- MAPPOParams: 优化器 ----
@@ -54,17 +55,17 @@ parameters:
     values: [0.99, 0.995, 0.999]
 
   # ---- OnPolicyTrainerConfig ----
+  # 最小值 512: SF EventDrivenEnv 上 256 步/env 约只覆盖 0.77 个 episode，易出现 N/A
   num_steps:
-    values: [256, 512, 1024]
+    values: [512, 1024, 2048]
 
   minibatch_size:
-    values: [512, 1024, 2048]
+    values: [1024, 2048, 4096]
 
   update_epochs:
     values: [3, 5, 10]
 
-  total_steps:
-    value: 10000000
+  # total_steps 由各 experiment base 的 training.total_steps 决定，避免覆盖不同图预算
 
   save_interval:
-    value: 200
+    value: 400

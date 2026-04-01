@@ -1,0 +1,84 @@
+# MAPPO + MAGECEnv (SF) — Neighbor Scoring Actor + MLP Critic
+# 用法: python train.py configs/experiments/magec/mappo_magec_SF.yaml
+#
+# SF 图特性:
+#   12 节点，全连通 (max_degree=11, action_dim=12)
+#   边权 6.1~53.9 (均值≈27.3)，phi ∈ {0.256,...,1.0}
+#   EventDrivenEnv: 每步推进到下一智能体到达事件
+#   steps_per_episode ≈ 3000/(27.3/3) ≈ 330 步 (远小于 episode_len=3000)
+#   → num_steps=1024 可覆盖 ~3 个 episode，无 reward=N/A 问题
+#
+# state_dim = num_nodes + num_nodes^2 = 12 + 144 = 156
+# critic_input_dim = 156 + 3 (agent_one_hot) = 159 (train.py 自动计算)
+
+# ---- 分发字段 ----
+algo_name: mappo
+env_type: magec
+actor_type: sage
+critic_type: mlp
+
+# ---- 实验元信息 ----
+exp_name: mappo-magec-SF
+graph_name: SF
+track_wandb: true
+wandb_project: MAP-RL
+
+# ---- 环境 ----
+# SF: 12 节点全连通，phi 各异（犯罪热力权重），truncate_by_time=true
+env:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 3000
+  custom_configs:
+    truncate_by_time: true
+    alpha: 1.0
+    beta: 0.5
+
+# ---- 算法 ----
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  shared_policy: true
+
+# ---- 训练 ----
+# step_per_iteration = 8 × 1024 = 8192
+# max_iterations = ceil(10M / 8192) = 1221
+training:
+  num_envs: 8
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 10000000
+  save_interval: 400
+  minibatch_size: 2048
+  update_epochs: 5
+
+# ---- 网络 ----
+# GraphSageActor (Neighbor Scoring 模式):
+#   SF: max_degree=11, action_dim=12
+#   node_feat_dim=3: [nodeType, phi_idleness_norm, degree]
+#   edge_feat_dim=2: [weight_norm, neighborIndex]
+#   global_feat_dim=2: [avg_phi_idle_norm, worst_phi_idle_norm]
+# SF 全连通图（1跳即覆盖全图），gnn_layers=3 提供足够表达力
+actor:
+  graph_path: graphs/SFcrimemap.json
+  agent_num: 3
+  role_imformation: agent-index
+  hidden_dim: 64
+  gnn_layers: 3
+  actor_mlp_layers: 1
+  mlp_activation: relu
+  node_feat_dim: 3
+  edge_feat_dim: 2
+  global_feat_dim: 2
+  neighbor_scoring: true
+  use_jk: true
+
+critic:
+  hidden: [256, 256]
