@@ -12,7 +12,7 @@
 method: bayes
 
 metric:
-  name: env/wi
+  name: env/wi_fromT
   goal: minimize
 
 early_terminate:
@@ -45,8 +45,8 @@ parameters:
     distribution: uniform
 
   epsilon_decay:
-    min: 0.990
-    max: 0.999
+    min: 0.9993
+    max: 0.9996
     distribution: uniform
 
   max_grad_norm:
@@ -69,7 +69,7 @@ parameters:
     values: [1, 2]
 
   collect_per_step:
-    value: 12
+    value: 24
 
   num_steps:
     values: [32, 64, 128]
