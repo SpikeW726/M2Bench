@@ -67,7 +67,7 @@ class IPPOAlgo(PPOBase):
         all_ret_for_norm = []
 
         for agent, batch in batch_dict.items():
-            final_gs = batch.final_global_state
+            final_obs = batch.final_obs          # per-agent final obs，供 truncation bootstrap
             batch = batch.to_tensor(self.device)
             total_size = batch.obs.shape[0]
             T = total_size // N
@@ -75,7 +75,8 @@ class IPPOAlgo(PPOBase):
             self._last_N = N
 
             with torch.no_grad():
-                critic_input = batch.global_state if batch.global_state is not None else batch.obs
+                # IPPO: critic 只用 per-agent 局部 obs，不使用全局 state
+                critic_input = batch.obs
                 done_2d = batch.done.view(T, N)
 
                 if self.is_critic_recurrent:
@@ -96,7 +97,7 @@ class IPPOAlgo(PPOBase):
                 truncated_2d = batch.truncated.view(T, N) if batch.truncated is not None else None
 
                 trunc_bootstrap = self._compute_trunc_bootstrap(
-                    truncated_2d, final_gs, critic_input, T, N,
+                    truncated_2d, final_obs, critic_input, T, N,
                 )
 
                 active_mask_2d = None
@@ -238,7 +239,8 @@ class IPPOAlgo(PPOBase):
                         ent_loss = entropy.mean()
 
                     # ---- Value loss ----
-                    critic_input = mb.global_state if mb.global_state is not None else mb.obs
+                    # IPPO: critic 只用 per-agent 局部 obs
+                    critic_input = mb.obs
                     if self.is_critic_recurrent:
                         new_value_seq, _ = self.critic.forward_sequence(
                             critic_input, mb.critic_rnn_hidden,

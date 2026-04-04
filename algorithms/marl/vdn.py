@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from algorithms.algorithm_base import BaseAlgorithm, TrainingStats
 from configs.algo_configs import VDNParams
 from data.batch import TransitionBatch
-from networks.mixing import SumMixer
+from networks.mixing import QMIXMixer, SumMixer
 from policies.marl.marl_base import MultiAgentPolicy
 from policies.rl.rl_base import ValuePolicy
 
@@ -114,6 +114,23 @@ class VDNAlgo(BaseAlgorithm):
         done = first_batch.done
         state = first_batch.state
         next_state = first_batch.next_state
+
+        if isinstance(self.mixer, QMIXMixer):
+            if state is None or next_state is None:
+                raise RuntimeError(
+                    "QMIX 需要 TransitionBatch.state / next_state；当前为 None，"
+                    "请确认采集端 collect_state=True 且环境实现 state()。"
+                )
+            if state.shape[0] != B or state.shape[-1] != self.mixer.state_dim:
+                raise RuntimeError(
+                    f"QMIX state 形状与 batch 不一致: state.shape={tuple(state.shape)}, "
+                    f"B={B}, expected_state_dim={self.mixer.state_dim}"
+                )
+            if next_state.shape[0] != B or next_state.shape[-1] != self.mixer.state_dim:
+                raise RuntimeError(
+                    f"QMIX next_state 形状与 batch 不一致: next_state.shape={tuple(next_state.shape)}, "
+                    f"B={B}, expected_state_dim={self.mixer.state_dim}"
+                )
 
         # Action masks
         next_am_all = None

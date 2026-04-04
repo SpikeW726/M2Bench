@@ -116,6 +116,8 @@ class RolloutBatch(BaseBatch):
     active_mask: torch.Tensor | np.ndarray = None  # (batch,)
     # For truncation value bootstrap (List[List[ndarray or None]]，不转为 tensor)
     final_global_state: list = None
+    # IPPO 用 per-agent final obs 做 truncation bootstrap（结构同 final_global_state）
+    final_obs: list = None
     # Actor RNN hidden state at each step (batch, recurrent_N, hidden_size)。MLP 时为 None。
     rnn_hidden: torch.Tensor | np.ndarray = None
     # Critic RNN hidden state at each step (batch, recurrent_N, hidden_size)。MLP critic 时为 None。
@@ -201,7 +203,7 @@ class RolloutBatch(BaseBatch):
                     kwargs[f.name] = None
                     continue
 
-                if f.name == "final_global_state":
+                if f.name in ("final_global_state", "final_obs"):
                     kwargs[f.name] = None
                     continue
 

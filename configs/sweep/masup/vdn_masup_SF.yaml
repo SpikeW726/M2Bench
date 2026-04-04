@@ -1,13 +1,7 @@
-# QMIX + MASUPEnv 超参数搜索
+# VDN + MASUP SF 超参数搜索
 # 用法:
-#   python sweep.py --base-config configs/experiments/masup/qmix_masup_longedge.yaml \
-#                   --sweep-config configs/sweep/masup/qmix_masup.yaml --count 40
-#
-# 并行:
-#   python sweep.py --base-config configs/experiments/masup/qmix_masup_longedge.yaml \
-#                   --sweep-config configs/sweep/masup/qmix_masup.yaml --create-only
-#   python sweep.py --base-config configs/experiments/masup/qmix_masup_longedge.yaml \
-#                   --sweep-id <ID> --count 15
+#   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF.yaml \
+#                   --sweep-config configs/sweep/masup/vdn_masup_SF.yaml --count 40
 
 method: bayes
 
@@ -21,7 +15,6 @@ early_terminate:
   eta: 3
 
 parameters:
-  # ---- algo params (映射到 QMIXParams) ----
   lr:
     min: 1.0e-6
     max: 5.0e-4
@@ -45,8 +38,8 @@ parameters:
     distribution: uniform
 
   epsilon_decay:
-    min: 0.9993
-    max: 0.9996
+    min: 0.990
+    max: 0.999
     distribution: uniform
 
   max_grad_norm:
@@ -55,10 +48,6 @@ parameters:
   use_double_dqn:
     value: true
 
-  mixer_embed_dim:
-    values: [16, 32, 64]
-
-  # ---- training params (映射到 OffPolicyTrainerConfig) ----
   batch_size:
     values: [128, 256, 512]
 
@@ -81,4 +70,4 @@ parameters:
     value: 20000000
 
   save_interval:
-    value: 1000
+    value: 500

@@ -273,6 +273,7 @@ class MAOnPolicyCollector(BaseCollector):
         buf_keys = [
             'obs', 'act', 'rew', 'done', 'truncated', 'log_prob',
             'action_mask', 'active_mask', 'global_state', 'final_global_state',
+            'final_obs',
         ]
         if getattr(self, '_is_recurrent', False):
             buf_keys.append('rnn_hidden')
@@ -365,6 +366,16 @@ class MAOnPolicyCollector(BaseCollector):
             for agent in self.agents:
                 self._buffers[agent]['final_global_state'].append(final_gs_list)
 
+            # per-agent final obs（供 IPPO obs-based critic 的 truncation bootstrap 使用）
+            for agent in self.agents:
+                final_obs_list = []
+                for i in range(self.num_envs):
+                    if trunc[agent][i]:
+                        final_obs_list.append(next_obs[agent][i].copy())
+                    else:
+                        final_obs_list.append(None)
+                self._buffers[agent]['final_obs'].append(final_obs_list)
+
             # 所有智能体平均 reward
             mean_rew = sum(rew[a] for a in self.agents) / len(self.agents)
             self._current_rewards += mean_rew
@@ -392,6 +403,7 @@ class MAOnPolicyCollector(BaseCollector):
             rnn_h = None
             if self._is_recurrent and buf.get('rnn_hidden'):
                 rnn_h = np.concatenate(buf['rnn_hidden'], axis=0)
+            final_obs = buf['final_obs'] if buf['final_obs'] else None
             batch_dict[agent] = RolloutBatch(
                 obs=np.concatenate(buf['obs'], axis=0),
                 act=np.concatenate(buf['act'], axis=0),
@@ -412,6 +424,7 @@ class MAOnPolicyCollector(BaseCollector):
                     if buf['active_mask'] else None
                 ),
                 final_global_state=final_gs,
+                final_obs=final_obs,
                 rnn_hidden=rnn_h,
             )
 
@@ -732,6 +745,12 @@ class MAOffPolicyCollector(BaseCollector):
             next_obs, rew, term, trunc, info = self.env.step(actions)
 
             next_state = self._get_global_states() if self._collect_state else None
+
+            if self._collect_state and (cur_state is None or next_state is None):
+                raise RuntimeError(
+                    "CTDE(off-policy) 需要 global state，但 VectorEnv 未返回有效 state()。"
+                    "QMIX 等算法会因此写入错误 replay；请检查 env.call_env_method('state') 与并行封装。"
+                )
 
             # 提取 step 后的 active_mask（用于判断 agent 是否到达）
             next_active_masks: Dict[str, Optional[np.ndarray]] = {}

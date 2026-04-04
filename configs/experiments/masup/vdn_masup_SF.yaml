@@ -1,34 +1,30 @@
-# QMIX + MASUPEnv (LongEdge)
-# 用法: python train.py configs/experiments/masup/qmix_masup_longedge.yaml
+# VDN + MASUPEnv (SF / SFcrimemap)
+# 用法: python train.py configs/experiments/masup/vdn_masup_SF.yaml
 
-# ---- 分发字段 ----
-algo_name: qmix
+algo_name: vdn
 env_type: masup
 q_type: mlp
 
-# ---- 实验元信息 ----
-exp_name: qmix-longedge
-graph_name: long_edge
+exp_name: vdn-SF
+graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
 
-# ---- 环境 ----
 env:
-  graph_path: graphs/long_edge.json
+  graph_path: graphs/SFcrimemap.json
   enable_wait: true
-  deltaT: 0.5
+  deltaT: 0.333
   num_agents: 3
-  init_positions: [0, 1, 2]
-  episode_len: 100
+  init_positions: [0, 5, 11]
+  episode_len: 3000
   custom_configs:
-    T: 10.0
+    T: 200.0
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true
     idi_scale: 0.05
     contribution_scale: 0.05
 
-# ---- 算法 ----
 algo:
   lr: 1.0e-4
   gamma: 0.99
@@ -36,12 +32,10 @@ algo:
   target_update_freq: 200
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay: 0.9995
+  epsilon_decay: 0.995
   use_double_dqn: true
   shared_policy: true
-  mixer_embed_dim: 32
 
-# ---- 训练 ----
 training:
   num_envs: 24
   use_subproc: true
@@ -54,7 +48,6 @@ training:
   collect_per_step: 24
   update_per_step: 1
 
-# ---- Q-network ----
 q_network:
   hidden: [256, 256]
   dueling: false

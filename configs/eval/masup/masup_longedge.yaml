@@ -14,14 +14,14 @@ env:
   episode_len: 100
   edge_time_jitter: False
   custom_configs:
-    T: 5.0
+    T: 10.0
     role_imformation: decision
     truncate_by_time: true
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/long_edge/masup/best_eval.png
+  save_plot: evaluators/results/long_edge/ippo_masup/best_eval.png
   show_plot: false
   animation: true
   event_driven: true
-  max_frames: 500
+  max_frames: 350

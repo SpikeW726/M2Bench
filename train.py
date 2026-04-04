@@ -107,9 +107,12 @@ def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
     state_dim = len(states[0])
 
     # MAPPO/VDPPO: centralized critic = global_state + agent one-hot
-    # IPPO/MAA2C 等: critic = global_state（无 one-hot）
+    # IPPO: decentralized critic = per-agent obs（不依赖全局信息）
+    # 其余算法（MAA2C 等）: critic = global_state（无 one-hot）
     if algo_name in ("mappo", "vdppo"):
         critic_input_dim = state_dim + num_agents
+    elif algo_name == "ippo":
+        critic_input_dim = obs_dim
     else:
         critic_input_dim = state_dim
 
@@ -615,6 +618,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
         "policy_type": get_policy_type(config.algo_name),
         "shared_policy": getattr(config.algo, "shared_policy", True),
         "agent_ids": dims["agent_ids"],
+        # 训练时的 custom_configs（含 sweep 覆盖后的 idi_scale / contribution_scale 等）
+        # 评估时会从 config.yaml 读回并覆盖 eval yaml 里的同名字段，确保评估环境与训练一致
+        "train_env_custom_configs": dict(config.env.custom_configs or {}),
     }
 
     def _get_value_norm_config():

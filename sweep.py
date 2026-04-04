@@ -118,6 +118,13 @@ def sweep_train():
         lines = [
             f"[Sweep] Error during training: {type(e).__name__}: {e!r}",
         ]
+        # 挤出可能挂在上一次 CUDA 核上的真实错误（与 CUDA_LAUNCH_BLOCKING 互补）
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        except Exception as sync_e:
+            lines.append(f"  cuda_synchronize: {type(sync_e).__name__}: {sync_e!r}")
         if e.__cause__ is not None:
             lines.append(f"  __cause__: {type(e.__cause__).__name__}: {e.__cause__!r}")
         if e.__context__ is not None and e.__context__ is not e.__cause__:
