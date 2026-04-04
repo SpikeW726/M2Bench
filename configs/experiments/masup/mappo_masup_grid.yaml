@@ -1,0 +1,49 @@
+algo_name: mappo
+env_type: masup
+actor_type: mlp
+critic_type: mlp
+
+exp_name: mappo-grid
+graph_name: grid
+track_wandb: true
+wandb_project: MAP-RL
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: true
+  deltaT: 0.5
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
+  episode_len: 500
+  custom_configs:
+    T: 50.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  use_value_norm: true
+
+training:
+  num_envs: 24
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 10000000
+  save_interval: 500
+  minibatch_size: 2048
+  update_epochs: 5
+
+actor:
+  hidden: [256, 256]
+critic:
+  hidden: [256, 256]

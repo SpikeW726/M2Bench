@@ -1,17 +1,25 @@
-# MASUPEnv Grid 评估配置
-# 用法:
-#   python evaluators/heuristic_evaluator.py --env_config configs/eval/masup/masup_grid.yaml --policy ER
-#   python evaluators/test.py --env_config configs/eval/masup/masup_grid.yaml --model models/xxx/final
-
 env_type: masup
 
 env:
   graph_path: graphs/grid.json
   enable_wait: true
-  deltaT: 1.0
-  num_agents: 8
-  init_positions: [6, 12, 18, 24, 30, 36, 42, 48]
-  episode_len: 1000
-  edge_time_jitter: true
+  deltaT: 0.5
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
+  episode_len: 500
+  edge_time_jitter: false
   custom_configs:
+    T: 50.0
+    role_imformation: decision
+    reward_scale: 0.01
     truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/grid/mappo_masup/eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 500
