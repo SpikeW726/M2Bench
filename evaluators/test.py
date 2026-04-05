@@ -113,6 +113,7 @@ def test_trained_policy(
     event_driven: bool = True,
     max_frames: int = None,
     save_animation_dir: str = None,
+    env_custom_config_overrides: dict = None,
 ):
     """
     评估训练好的策略，自动适配算法/网络/环境类型。
@@ -130,6 +131,9 @@ def test_trained_policy(
         event_driven: True=事件驱动动画，False=固定步长动画
         max_frames: 动画最大帧数限制
         save_animation_dir: 动画保存目录；None 时回退到 save_plot 的父目录
+        env_custom_config_overrides: 覆盖 eval yaml 中 custom_configs 的字段（优先级高于 yaml）；
+            通常由 run_eval_from_config 从模型 config.yaml 的 train_env_custom_configs 中读取，
+            以确保 idi_scale / contribution_scale 等 sweep 参数与训练时保持一致。
         动画文件名：若提供 save_plot，在「算法名_animation_图名」后追加 _ 与 save_plot 的文件名 stem，
         例如 best_eval.png → mappo_animation_long_edge_best_eval.mp4
     """
@@ -141,6 +145,11 @@ def test_trained_policy(
 
     # ---- 1. 加载环境配置 & 创建环境 ----
     env_type, env_cfg = load_eval_config(env_config_path)
+
+    # 用训练时的 custom_configs 覆盖 eval yaml 中的同名字段（如 idi_scale / contribution_scale）
+    if env_custom_config_overrides:
+        env_cfg.custom_configs = {**(env_cfg.custom_configs or {}), **env_custom_config_overrides}
+        print(f"[Eval] Merged train-time custom_configs: {env_custom_config_overrides}")
 
     print(f"\n=== Creating {env_type} environment ===")
     env = _create_env(env_type, env_cfg)
@@ -574,6 +583,11 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
                       为每个 trial 生成独立的 save_plot / save_animation_dir 等）。
 
     若未提供 eval 段，则使用各评估函数的默认参数。
+
+    custom_configs 自动对齐：若模型 config.yaml 的 extra 段包含 train_env_custom_configs
+    （由 train.py 在训练时写入），会将其合并到 eval 环境的 custom_configs 中，
+    确保 idi_scale / contribution_scale 等 sweep 参数与训练时保持一致。
+    eval yaml 中显式设置的同名字段以训练时值为准（保证一致性）。
     """
     with open(eval_config_path) as f:
         raw = yaml.safe_load(f)
@@ -596,6 +610,18 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
     if "animation" in eval_params:
         eval_params.setdefault("record_animation", eval_params.pop("animation"))
 
+    # 从模型 config.yaml 读取训练时的 custom_configs，覆盖 eval yaml 中的同名字段
+    # 这样 sweep 时被搜索的 idi_scale / contribution_scale 等参数在评估时与训练保持一致
+    train_custom_configs = None
+    try:
+        model_config_path = Path(model_dir) / "config.yaml"
+        if model_config_path.exists():
+            with open(model_config_path) as f:
+                model_cfg = yaml.safe_load(f)
+            train_custom_configs = (model_cfg.get("extra") or {}).get("train_env_custom_configs")
+    except Exception:
+        pass
+
     print(f"\n[Eval] model_dir={model_dir}, config={eval_config_path}")
     if algo_name == "qtable":
         test_qtable_policy(
@@ -607,6 +633,7 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
         test_trained_policy(
             model_dir=model_dir,
             env_config_path=eval_config_path,
+            env_custom_config_overrides=train_custom_configs,
             **eval_params,
         )
 

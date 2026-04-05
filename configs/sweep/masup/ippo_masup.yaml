@@ -18,7 +18,7 @@ metric:
 parameters:
   # ---- algo params (映射到 IPPOParams) ----
   lr:
-    min: 0.00001
+    min: 0.000001
     max: 0.001
     distribution: log_uniform_values
 

@@ -44,7 +44,8 @@ class QMIXAlgo(VDNAlgo):
     def _init_mixer(self, n_agents: int, state_dim: int, params: QMIXParams):
         """QMIX: 含超网络参数的 Mixer + deepcopy target。"""
         self.mixer = QMIXMixer(n_agents, state_dim, params.mixer_embed_dim).to(self.device)
-        self.target_mixer = copy.deepcopy(self.mixer)
+        # deepcopy 在部分环境下会把副本留在 CPU；显式 .to(device) 避免 target 与 batch 设备不一致
+        self.target_mixer = copy.deepcopy(self.mixer).to(self.device)
         self.target_mixer.eval()
         for p in self.target_mixer.parameters():
             p.requires_grad = False

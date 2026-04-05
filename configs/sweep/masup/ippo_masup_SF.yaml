@@ -1,0 +1,47 @@
+# IPPO + MASUP SF 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/masup/ippo_masup_SF.yaml \
+#                   --sweep-config configs/sweep/masup/ippo_masup_SF.yaml --count 40
+
+method: bayes
+
+metric:
+  name: env/wi_fromT
+  goal: minimize
+
+parameters:
+  lr:
+    min: 1.0e-6
+    max: 0.001
+    distribution: log_uniform_values
+
+  clip_range:
+    min: 0.1
+    max: 0.4
+  vf_coef:
+    min: 0.5
+    max: 2.0
+  ent_coef:
+    min: 0.01
+    max: 0.3
+  gae_lambda:
+    min: 0.9
+    max: 1.0
+  gamma:
+    value: 0.999
+
+  minibatch_size:
+    values: [256, 512, 1024, 2048]
+  update_epochs:
+    values: [3, 5, 10]
+  num_steps:
+    values: [1024, 2048, 4096]
+  total_steps:
+    value: 20000000
+  save_interval:
+    value: 1000
+
+  custom_configs.idi_scale:
+    values: [0.0, 0.05, 0.1]
+  custom_configs.contribution_scale:
+    values: [0.0, 0.05, 0.1]

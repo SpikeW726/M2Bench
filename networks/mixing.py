@@ -118,6 +118,22 @@ class QMIXMixer(BaseMixer):
         B = q_vals.shape[0]
         N = self.n_agents
 
+        wdev = self.hyper_w1[0].weight.device
+        if states.device != wdev:
+            raise RuntimeError(
+                f"QMIXMixer: states.device={states.device} != hyper_w1.weight.device={wdev} "
+                f"(q_vals.device={q_vals.device})"
+            )
+        if states.dtype not in (torch.float32, torch.float16, torch.bfloat16):
+            raise RuntimeError(f"QMIXMixer: states.dtype={states.dtype} 应为浮点类型")
+        if states.dim() != 2 or states.shape[0] != B or states.shape[1] != self.state_dim:
+            raise RuntimeError(
+                f"QMIXMixer: states.shape={tuple(states.shape)} 期望 (B={B}, {self.state_dim})"
+            )
+        if not torch.isfinite(states).all():
+            nf = (~torch.isfinite(states)).float().mean().item()
+            raise RuntimeError(f"QMIXMixer: states 含非有限值, 比例={nf:.4f}")
+
         # 第一层: (B, 1, N) × (B, N, E) + (B, 1, E) → (B, 1, E)
         w1 = self.hyper_w1(states).abs().view(B, N, self.embed_dim)
         b1 = self.hyper_b1(states).view(B, 1, self.embed_dim)

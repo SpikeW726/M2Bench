@@ -10,7 +10,6 @@ Off-policy:
 """
 
 from abc import ABC, abstractmethod
-from re import M
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
@@ -273,6 +272,7 @@ class MAOnPolicyCollector(BaseCollector):
         buf_keys = [
             'obs', 'act', 'rew', 'done', 'truncated', 'log_prob',
             'action_mask', 'active_mask', 'global_state', 'final_global_state',
+            'final_obs',
         ]
         if getattr(self, '_is_recurrent', False):
             buf_keys.append('rnn_hidden')
@@ -365,6 +365,16 @@ class MAOnPolicyCollector(BaseCollector):
             for agent in self.agents:
                 self._buffers[agent]['final_global_state'].append(final_gs_list)
 
+            # per-agent final obs（供 IPPO obs-based critic 的 truncation bootstrap 使用）
+            for agent in self.agents:
+                final_obs_list = []
+                for i in range(self.num_envs):
+                    if trunc[agent][i]:
+                        final_obs_list.append(next_obs[agent][i].copy())
+                    else:
+                        final_obs_list.append(None)
+                self._buffers[agent]['final_obs'].append(final_obs_list)
+
             # 所有智能体平均 reward
             mean_rew = sum(rew[a] for a in self.agents) / len(self.agents)
             self._current_rewards += mean_rew
@@ -385,6 +395,10 @@ class MAOnPolicyCollector(BaseCollector):
             self._obs = next_obs
             self._info = info
 
+        # rollout 结束后立刻采集边界 global state（= 下一步的初始 state）。
+        # 供 VDPPO 修正 next_states[-1]，其他算法忽略此字段。
+        boundary_gs = self._get_global_states()
+
         batch_dict: Dict[str, RolloutBatch] = {}
         for agent in self.agents:
             buf = self._buffers[agent]
@@ -392,6 +406,7 @@ class MAOnPolicyCollector(BaseCollector):
             rnn_h = None
             if self._is_recurrent and buf.get('rnn_hidden'):
                 rnn_h = np.concatenate(buf['rnn_hidden'], axis=0)
+            final_obs = buf['final_obs'] if buf['final_obs'] else None
             batch_dict[agent] = RolloutBatch(
                 obs=np.concatenate(buf['obs'], axis=0),
                 act=np.concatenate(buf['act'], axis=0),
@@ -412,7 +427,9 @@ class MAOnPolicyCollector(BaseCollector):
                     if buf['active_mask'] else None
                 ),
                 final_global_state=final_gs,
+                final_obs=final_obs,
                 rnn_hidden=rnn_h,
+                boundary_global_state=boundary_gs,
             )
 
         return CollectResult(
@@ -630,6 +647,7 @@ class MAOffPolicyCollector(BaseCollector):
         collect_state: bool = False,
         sync_mode: bool = False,
         gamma: float = 0.99,
+        shared_indices: Optional[bool] = None,
     ):
         if not env.is_parallel_env:
             raise ValueError(
@@ -640,7 +658,10 @@ class MAOffPolicyCollector(BaseCollector):
         self.agents = env.agents
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         self._collect_state = collect_state
-        self._shared_indices = collect_state
+        # VDN/QMIX 等值分解算法需要 shared_indices 保证多 agent buffer 时间对齐；
+        # 若未显式传入，仅在 collect_state=True（QMIX 路径）时默认启用，
+        # 调用方应根据算法语义显式传入该参数。
+        self._shared_indices = collect_state if shared_indices is None else shared_indices
         self._sync_mode = sync_mode
         self._gamma = gamma
         self._hidden: Optional[Dict[str, torch.Tensor]] = None
@@ -654,6 +675,9 @@ class MAOffPolicyCollector(BaseCollector):
             buf["next_action_mask"] = []
         if getattr(self.buffers.get(agent), "has_active_mask", False):
             buf["active_mask"] = []
+        if getattr(self.buffers.get(agent), "has_state", False):
+            buf["state"] = []
+            buf["next_state"] = []
         return buf
 
     def _reset_buffer(self):
@@ -733,6 +757,12 @@ class MAOffPolicyCollector(BaseCollector):
 
             next_state = self._get_global_states() if self._collect_state else None
 
+            if self._collect_state and (cur_state is None or next_state is None):
+                raise RuntimeError(
+                    "CTDE(off-policy) 需要 global state，但 VectorEnv 未返回有效 state()。"
+                    "QMIX 等算法会因此写入错误 replay；请检查 env.call_env_method('state') 与并行封装。"
+                )
+
             # 提取 step 后的 active_mask（用于判断 agent 是否到达）
             next_active_masks: Dict[str, Optional[np.ndarray]] = {}
             for agent in self.agents:
@@ -760,6 +790,14 @@ class MAOffPolicyCollector(BaseCollector):
                         if "active_mask" in eb:
                             eb["active_mask"].append(
                                 actm[i] if actm is not None else 1.0
+                            )
+                        if "state" in eb:
+                            eb["state"].append(
+                                cur_state[i].copy() if cur_state is not None else None
+                            )
+                        if "next_state" in eb:
+                            eb["next_state"].append(
+                                next_state[i].copy() if next_state is not None else None
                             )
             elif self._sync_mode:
                 self._collect_sync_mlp(
@@ -830,6 +868,9 @@ class MAOffPolicyCollector(BaseCollector):
                 episode["next_action_mask"] = np.stack(eb["next_action_mask"])
             if eb.get("active_mask") is not None and len(eb.get("active_mask", [])) > 0:
                 episode["active_mask"] = np.array(eb["active_mask"], dtype=np.float32)
+            if eb.get("state") and eb["state"][0] is not None:
+                episode["state"] = np.stack(eb["state"]).astype(np.float32)
+                episode["next_state"] = np.stack(eb["next_state"]).astype(np.float32)
             self.buffers[agent].add_episode(episode)
             self._episode_buffers[agent][env_idx] = self._init_ep_buf(agent)
 

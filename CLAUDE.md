@@ -271,7 +271,14 @@ algo:
 
 #### VDPPO (Actor + Q-network)
 
+VDPPO 结合 PPO actor 与 QPLEX-style Q-value decomposition。Q-network 支持 MLP 和 RNN 两种结构：
+
+**Q-network 输入设计说明**：Q-network 不在算法层拼接局部观测 o_i，仅使用全局状态 s（+ agent one-hot；RNN 路径还额外拼接 prev_action one-hot）。若某环境的局部观测与全局状态差异显著，应在环境的 `_get_global_state()` / `state()` 函数中自行将 o_i 拼入 s，算法层不做处理。
+
+**Advantage 计算**：直接使用 Q-advantage：`A_i = Q_i(τ_i, u_i) - V_i(τ_i)`，其中 `V_i = max_a Q_i(τ_i, a)`，不经过 GAE。
+
 ```yaml
+# VDPPO（MLP Actor + MLP Q-network，向后兼容）
 algo_name: vdppo
 actor_type: mlp
 q_type: mlp
@@ -280,6 +287,26 @@ actor:
 q_network:
   hidden: [64, 64]
   dueling: false
+algo:
+  reward_global: false  # true: 环境所有 agent reward 相同，取 agent_0 的值；false: 求和
+```
+
+```yaml
+# VDPPO（RNN Actor + RNN Q-network，更贴近论文原文）
+algo_name: vdppo
+actor_type: rnn
+q_type: rnn             # RNN Q-network 额外输入 prev_action，input_dim = state_dim + n_agents + action_dim
+actor:
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
+q_network:
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
+  dueling: true
+algo:
+  reward_global: false
 ```
 
 ### Factory Functions (`configs/registry.py`)

@@ -1,20 +1,29 @@
+# MASUP SF 评估（与 experiments/masup/*_masup_SF.yaml 环境对齐）
+# 用法:
+#   python evaluators/test.py --env_config configs/eval/masup/masup_SF.yaml --model models/xxx/final
+
 env_type: masup
 
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
-  deltaT: 200.0
+  deltaT: 0.333
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
   edge_time_jitter: false
   custom_configs:
+    T: 200.0
+    role_imformation: decision
+    reward_scale: 0.01
     truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/SF/masup/best_eval.png
+  save_plot: evaluators/results/SF/ippo_masup/best_eval.png
   show_plot: false
   animation: true
   event_driven: true
-  max_frames: 2000
+  max_frames: 1500

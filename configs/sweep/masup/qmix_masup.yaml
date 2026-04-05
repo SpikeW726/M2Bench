@@ -23,7 +23,7 @@ early_terminate:
 parameters:
   # ---- algo params (映射到 QMIXParams) ----
   lr:
-    min: 5.0e-5
+    min: 1.0e-6
     max: 5.0e-4
     distribution: log_uniform_values
 
@@ -81,4 +81,4 @@ parameters:
     value: 20000000
 
   save_interval:
-    value: 500
+    value: 1000

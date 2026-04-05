@@ -39,6 +39,7 @@ algo:
   epsilon_decay: 0.9995
   use_double_dqn: true
   shared_policy: true
+  reward_global: true
 
 # ---- 训练 ----
 training:

@@ -141,8 +141,8 @@ class _BaseRNN(nn.Module):
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
         return {
             "type": type(self).__name__,
-            "input_dim": input_dim,
-            "output_dim": output_dim,
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
             "hidden_size": self.hidden_size,
             "num_layers": self.num_layers,
             "rnn_type": self.rnn_type,

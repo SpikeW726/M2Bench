@@ -116,6 +116,11 @@ class RolloutBatch(BaseBatch):
     active_mask: torch.Tensor | np.ndarray = None  # (batch,)
     # For truncation value bootstrap (List[List[ndarray or None]]，不转为 tensor)
     final_global_state: list = None
+    # IPPO 用 per-agent final obs 做 truncation bootstrap（结构同 final_global_state）
+    final_obs: list = None
+    # VDPPO rollout 边界处的全局 state (num_envs, state_dim)，用于修正末尾步 next_state。
+    # 由 MAOnPolicyCollector 在每次 collect 结束后采集，不转为 tensor（保持 ndarray 或 None）。
+    boundary_global_state: np.ndarray = None
     # Actor RNN hidden state at each step (batch, recurrent_N, hidden_size)。MLP 时为 None。
     rnn_hidden: torch.Tensor | np.ndarray = None
     # Critic RNN hidden state at each step (batch, recurrent_N, hidden_size)。MLP critic 时为 None。
@@ -201,7 +206,7 @@ class RolloutBatch(BaseBatch):
                     kwargs[f.name] = None
                     continue
 
-                if f.name == "final_global_state":
+                if f.name in ("final_global_state", "final_obs"):
                     kwargs[f.name] = None
                     continue
 
@@ -266,6 +271,9 @@ class SequenceBatch(BaseBatch):
     action_mask: torch.Tensor | np.ndarray = None       # (B, L, act_dim)
     next_action_mask: torch.Tensor | np.ndarray = None  # (B, L, act_dim)
     active_mask: torch.Tensor | np.ndarray = None       # (B, L) 1=READY, 0=ON_EDGE
+    # CTDE 算法（QMIX）所需全局 state
+    state: torch.Tensor | np.ndarray = None             # (B, L, state_dim)
+    next_state: torch.Tensor | np.ndarray = None        # (B, L, state_dim)
     burn_in_len: int = 0                                # burn-in 步数（标量元数据，不转 tensor）
 
 

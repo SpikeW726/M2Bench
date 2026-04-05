@@ -1,9 +1,13 @@
-# MAPPO + MASUP 超参数搜索（WandB Sweep）
+# MAPPO + MASUP LongEdge 超参数搜索（WandB Sweep）
 # 用法:
-#   python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml \
-#                   --sweep-config configs/sweep/masup/mappo_masup.yaml
+#   python sweep.py --base-config configs/experiments/masup/mappo_masup_longedge_scratch.yaml \
+#                   --sweep-config configs/sweep/masup/mappo_masup.yaml --count 40
 #
-# 其它入口: mappo_masup_tsp12_scratch.yaml、mappo_masup_longedge_scratch.yaml 等替换 --base-config
+# 并行:
+#   python sweep.py --base-config configs/experiments/masup/mappo_masup_longedge_scratch.yaml \
+#                   --sweep-config configs/sweep/masup/mappo_masup.yaml --create-only
+#   python sweep.py --base-config configs/experiments/masup/mappo_masup_longedge_scratch.yaml \
+#                   --sweep-id <ID> --count 15
 
 method: bayes
 
@@ -14,12 +18,12 @@ metric:
 parameters:
   # ---- algo params (映射到 MAPPOParams) ----
   actor_lr:
-    min: 0.00001
-    max: 0.001
+    min: 1.0e-6
+    max: 1.0e-3
     distribution: log_uniform_values
   critic_lr:
-    min: 0.0001
-    max: 0.003
+    min: 1.0e-6
+    max: 5.0e-3
     distribution: log_uniform_values
 
   clip_range:
@@ -34,18 +38,22 @@ parameters:
   gae_lambda:
     min: 0.9
     max: 1.0
+
+  # LongEdge episode 极短（T=5, episode_len=100），gamma 无需特别高
   gamma:
-    value: 0.999
+    values: [0.97, 0.99, 0.999]
 
   # ---- training params (映射到 OnPolicyTrainerConfig) ----
+  # LongEdge 短 episode，较小 rollout 即可覆盖多个完整 episode
+  num_steps:
+    values: [512, 1024, 2048]
   minibatch_size:
     values: [256, 512, 1024, 2048]
   update_epochs:
     values: [3, 5, 10]
-  num_steps:
-    values: [1024, 2048, 4096]
+
   total_steps:
-    value: 20000000
+    value: 10000000
   save_interval:
     value: 1000
 
@@ -53,57 +61,3 @@ parameters:
     values: [0.0, 0.05, 0.1]
   custom_configs.contribution_scale:
     values: [0.0, 0.05, 0.1]
-
-# method: bayes
-
-# metric:
-#   name: env/wi
-#   goal: minimize
-
-# early_terminate:
-#   type: median_stopping_rule
-#   min_iter: 300
-#   min_samples_to_check: 8
-
-# parameters:
-#   # ---- algo params (映射到 MAPPOParams) ----
-#   actor_lr:
-#     min: 0.00003
-#     max: 0.003
-#     distribution: log_uniform_values
-#   critic_lr:
-#     min: 0.00001
-#     max: 0.001
-#     distribution: log_uniform_values
-
-#   clip_range:
-#     min: 0.05
-#     max: 0.3
-#   vf_coef:
-#     min: 0.1
-#     max: 0.6
-#   ent_coef:
-#     min: 0.0
-#     max: 0.1
-#   gae_lambda:
-#     min: 0.95
-#     max: 1.0
-#   gamma:
-#     value: 0.999
-
-#   # ---- training params (映射到 OnPolicyTrainerConfig) ----
-#   minibatch_size:
-#     values: [256, 512, 1024, 2048, 4096]
-#   update_epochs:
-#     values: [5, 8, 10]
-#   num_steps:
-#     values: [2048, 4096, 6144]
-#   total_steps:
-#     value: 50000000
-#   save_interval:
-#     value: 500
-
-#   custom_configs.idi_scale:
-#     values: [0.01, 0.05, 0.1]
-#   custom_configs.contribution_scale:
-#     values: [0.01, 0.05, 0.1]

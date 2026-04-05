@@ -23,7 +23,7 @@ early_terminate:
 parameters:
   # ---- algo params (映射到 VDNParams / IQLParams) ----
   lr:
-    min: 5.0e-5
+    min: 1.0e-6
     max: 5.0e-4
     distribution: log_uniform_values
 

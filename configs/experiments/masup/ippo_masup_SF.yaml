@@ -1,0 +1,51 @@
+# IPPO + MASUPEnv (SF / SFcrimemap) — 从零训练
+# 用法: python train.py configs/experiments/masup/ippo_masup_SF.yaml
+
+algo_name: ippo
+env_type: masup
+actor_type: mlp
+critic_type: mlp
+
+exp_name: ippo-SF
+graph_name: SF
+track_wandb: true
+wandb_project: MAP-RL
+
+env:
+  graph_path: graphs/SFcrimemap.json
+  enable_wait: true
+  deltaT: 0.333
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 3000
+  custom_configs:
+    T: 200.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+algo:
+  use_active_mask: true
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  use_value_norm: true
+
+training:
+  num_envs: 24
+  use_subproc: true
+  num_steps: 2048
+  total_steps: 20000000
+  save_interval: 200
+  minibatch_size: 4096
+  update_epochs: 5
+
+actor:
+  hidden: [256, 256]
+critic:
+  hidden: [256, 256]

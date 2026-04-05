@@ -1,0 +1,69 @@
+# MAPPO + MASUP SF 超参数搜索（WandB Sweep）
+# 用法:
+#   python sweep.py --base-config configs/experiments/masup/mappo_masup_SF_scratch.yaml \
+#                   --sweep-config configs/sweep/masup/mappo_masup_SF.yaml --count 40
+#
+# 并行:
+#   python sweep.py --base-config configs/experiments/masup/mappo_masup_SF_scratch.yaml \
+#                   --sweep-config configs/sweep/masup/mappo_masup_SF.yaml --create-only
+#   python sweep.py --base-config configs/experiments/masup/mappo_masup_SF_scratch.yaml \
+#                   --sweep-id <ID> --count 15
+
+method: bayes
+
+metric:
+  name: env/wi_fromT
+  goal: minimize
+
+parameters:
+  # ---- algo params (映射到 MAPPOParams) ----
+  actor_lr:
+    min: 1.0e-6
+    max: 1.0e-3
+    distribution: log_uniform_values
+  critic_lr:
+    min: 1.0e-6
+    max: 5.0e-3
+    distribution: log_uniform_values
+
+  clip_range:
+    min: 0.1
+    max: 0.4
+  vf_coef:
+    min: 0.1
+    max: 2.0
+  ent_coef:
+    min: 0.0
+    max: 0.3
+  gae_lambda:
+    min: 0.9
+    max: 1.0
+
+  # SF 地图 episode 极长（T=200, episode_len=3000），gamma 应偏高
+  gamma:
+    values: [0.99, 0.995, 0.999]
+
+  # use_value_norm 在长 episode / 大图上收益明显，固定开启
+  use_value_norm:
+    value: true
+
+  # ---- training params (映射到 OnPolicyTrainerConfig) ----
+  # SF 每轮 rollout 应覆盖更多 step，以减少「整轮无完整 episode」的概率
+  num_steps:
+    values: [2048, 4096, 8192]
+  minibatch_size:
+    values: [1024, 2048, 4096, 8192]
+  update_epochs:
+    values: [3, 5, 10]
+
+  total_steps:
+    value: 20000000
+
+  # SF 每个完整 episode 很长，save_interval 设小以便捕获早期良好 checkpoint
+  save_interval:
+    value: 200
+
+  custom_configs.idi_scale:
+    values: [0.0, 0.05, 0.1]
+  custom_configs.contribution_scale:
+    values: [0.0, 0.05, 0.1]

@@ -20,7 +20,6 @@ env:
   episode_len: 3000
   custom_configs:
     T: 200.0
-    T: 200.0
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true
@@ -37,10 +36,11 @@ algo:
   clip_range: 0.2
   vf_coef: 0.5
   ent_coef: 0.01
+  use_value_norm: true
 
 # ---- 训练 ----
 training:
-  num_envs: 16
+  num_envs: 24
   use_subproc: true
   num_steps: 2048
   total_steps: 20000000

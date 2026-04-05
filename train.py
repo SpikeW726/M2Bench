@@ -108,9 +108,12 @@ def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
     state_dim = len(states[0])
 
     # MAPPO/VDPPO: centralized critic = global_state + agent one-hot
-    # IPPO/MAA2C 等: critic = global_state（无 one-hot）
+    # IPPO: decentralized critic = per-agent obs（不依赖全局信息）
+    # 其余算法（MAA2C 等）: critic = global_state（无 one-hot）
     if algo_name in ("mappo", "vdppo"):
         critic_input_dim = state_dim + num_agents
+    elif algo_name == "ippo":
+        critic_input_dim = obs_dim
     else:
         critic_input_dim = state_dim
 
@@ -275,6 +278,8 @@ def _build_collector(
         is_q_recurrent = getattr(algorithm, "is_recurrent", False)
 
         needs_state = config.algo_name in ("qmix",)
+        # VDN/QMIX 等值分解算法须用共享 indices 保证多 agent buffer 时间对齐
+        needs_shared_indices = config.algo_name in ("vdn", "qmix")
 
         # sync_replay 仅 IQL 生效
         sync_replay = (
@@ -296,6 +301,8 @@ def _build_collector(
                         has_action_mask=True,
                         action_dim=dims["action_dim"],
                         has_active_mask=sync_replay,
+                        has_state=needs_state,
+                        state_dim=dims["state_dim"] if needs_state else 0,
                     )
                     for aid in dims["agent_ids"]
                 }
@@ -320,6 +327,7 @@ def _build_collector(
                 collect_state=needs_state,
                 sync_mode=sync_replay and not is_q_recurrent,
                 gamma=gamma,
+                shared_indices=needs_shared_indices,
             )
         else:
             if is_q_recurrent:
@@ -531,7 +539,13 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
             device=str(device),
         )
     if config.q_type and config.q_network is not None:
-        q_input_dim = dims["state_dim"] + dims["num_agents"] if get_policy_type(config.algo_name) == "actor" else dims["obs_dim"]
+        if config.algo_name == "vdppo" and config.q_type == "rnn":
+            # VDPPO RNN Q-network 额外输入 prev_action one-hot
+            q_input_dim = dims["state_dim"] + dims["num_agents"] + dims["action_dim"]
+        elif get_policy_type(config.algo_name) == "actor":
+            q_input_dim = dims["state_dim"] + dims["num_agents"]
+        else:
+            q_input_dim = dims["obs_dim"]
         q_net = create_q_network(
             q_type=config.q_type,
             q_config=config.q_network,
@@ -616,6 +630,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
         "policy_type": get_policy_type(config.algo_name),
         "shared_policy": getattr(config.algo, "shared_policy", True),
         "agent_ids": dims["agent_ids"],
+        # 训练时的 custom_configs（含 sweep 覆盖后的 idi_scale / contribution_scale 等）
+        # 评估时会从 config.yaml 读回并覆盖 eval yaml 里的同名字段，确保评估环境与训练一致
+        "train_env_custom_configs": dict(config.env.custom_configs or {}),
     }
 
     def _get_value_norm_config():
