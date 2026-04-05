@@ -277,6 +277,8 @@ def _build_collector(
         is_q_recurrent = getattr(algorithm, "is_recurrent", False)
 
         needs_state = config.algo_name in ("qmix",)
+        # VDN/QMIX 等值分解算法须用共享 indices 保证多 agent buffer 时间对齐
+        needs_shared_indices = config.algo_name in ("vdn", "qmix")
 
         # sync_replay 仅 IQL 生效
         sync_replay = (
@@ -324,6 +326,7 @@ def _build_collector(
                 collect_state=needs_state,
                 sync_mode=sync_replay and not is_q_recurrent,
                 gamma=gamma,
+                shared_indices=needs_shared_indices,
             )
         else:
             if is_q_recurrent:
@@ -535,7 +538,13 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
             device=str(device),
         )
     if config.q_type and config.q_network is not None:
-        q_input_dim = dims["state_dim"] + dims["num_agents"] if get_policy_type(config.algo_name) == "actor" else dims["obs_dim"]
+        if config.algo_name == "vdppo" and config.q_type == "rnn":
+            # VDPPO RNN Q-network 额外输入 prev_action one-hot
+            q_input_dim = dims["state_dim"] + dims["num_agents"] + dims["action_dim"]
+        elif get_policy_type(config.algo_name) == "actor":
+            q_input_dim = dims["state_dim"] + dims["num_agents"]
+        else:
+            q_input_dim = dims["obs_dim"]
         q_net = create_q_network(
             q_type=config.q_type,
             q_config=config.q_network,

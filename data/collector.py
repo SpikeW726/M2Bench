@@ -10,7 +10,6 @@ Off-policy:
 """
 
 from abc import ABC, abstractmethod
-from re import M
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
@@ -396,6 +395,10 @@ class MAOnPolicyCollector(BaseCollector):
             self._obs = next_obs
             self._info = info
 
+        # rollout 结束后立刻采集边界 global state（= 下一步的初始 state）。
+        # 供 VDPPO 修正 next_states[-1]，其他算法忽略此字段。
+        boundary_gs = self._get_global_states()
+
         batch_dict: Dict[str, RolloutBatch] = {}
         for agent in self.agents:
             buf = self._buffers[agent]
@@ -426,6 +429,7 @@ class MAOnPolicyCollector(BaseCollector):
                 final_global_state=final_gs,
                 final_obs=final_obs,
                 rnn_hidden=rnn_h,
+                boundary_global_state=boundary_gs,
             )
 
         return CollectResult(
@@ -643,6 +647,7 @@ class MAOffPolicyCollector(BaseCollector):
         collect_state: bool = False,
         sync_mode: bool = False,
         gamma: float = 0.99,
+        shared_indices: Optional[bool] = None,
     ):
         if not env.is_parallel_env:
             raise ValueError(
@@ -653,7 +658,10 @@ class MAOffPolicyCollector(BaseCollector):
         self.agents = env.agents
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         self._collect_state = collect_state
-        self._shared_indices = collect_state
+        # VDN/QMIX 等值分解算法需要 shared_indices 保证多 agent buffer 时间对齐；
+        # 若未显式传入，仅在 collect_state=True（QMIX 路径）时默认启用，
+        # 调用方应根据算法语义显式传入该参数。
+        self._shared_indices = collect_state if shared_indices is None else shared_indices
         self._sync_mode = sync_mode
         self._gamma = gamma
         self._hidden: Optional[Dict[str, torch.Tensor]] = None

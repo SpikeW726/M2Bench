@@ -2,7 +2,7 @@
 algo_name: vdppo
 env_type: oucs
 actor_type: rnn
-q_type: mlp
+q_type: rnn
 
 # ---- 实验元信息 ----
 exp_name: vdppo-gru-oucs
@@ -37,6 +37,7 @@ algo:
   q_clip_range: null
   mixer_embed_dim: 64
   data_chunk_length: 10
+  reward_global: false
 
 # ---- 训练 ----
 training:
@@ -56,5 +57,7 @@ actor:
   fc_hidden: [256, 256]   # GRU 前编码层
 
 q_network:
-  hidden: [64, 64]
-  dueling: True
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
+  dueling: true

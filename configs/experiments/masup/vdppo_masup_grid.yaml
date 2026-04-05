@@ -1,7 +1,7 @@
 algo_name: vdppo
 env_type: masup
 actor_type: mlp
-q_type: mlp
+q_type: rnn
 
 exp_name: vdppo-grid
 graph_name: grid
@@ -38,6 +38,7 @@ algo:
   q_clip_range: null
   mixer_embed_dim: 64
   data_chunk_length: 10
+  reward_global: true
 
 training:
   num_envs: 24
@@ -51,5 +52,7 @@ training:
 actor:
   hidden: [256, 256]
 q_network:
-  hidden: [256, 256]
+  rnn_type: gru
+  hidden_size: 64
+  num_layers: 1
   dueling: true

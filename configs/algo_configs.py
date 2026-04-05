@@ -101,6 +101,9 @@ class VDPPOParams(PPOParams):
     q_lr_start_factor: float = 1.0
     q_lr_end_factor: float = 0.1
     q_lr_decay_ratio: float = 0.8
+    # True:  环境所有 agent reward 相同，取 agent_0 的值作为 r_tot
+    # False: 各 agent reward 求和作为 r_tot
+    reward_global: bool = False
 
 
 # =============================================================================

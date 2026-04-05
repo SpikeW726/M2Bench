@@ -55,8 +55,8 @@ class ActorMLP(nn.Module):
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
         return {
             "type": type(self).__name__,
-            "input_dim": input_dim,
-            "output_dim": output_dim,
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
             "hidden_sizes": self.hidden_sizes,
         }
 
@@ -103,8 +103,8 @@ class CriticMLP(nn.Module):
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
         return {
             "type": type(self).__name__,
-            "input_dim": input_dim,
-            "output_dim": output_dim,
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
             "hidden_sizes": self.hidden_sizes,
         }
 
@@ -156,8 +156,8 @@ class QMLP(nn.Module):
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
         return {
             "type": type(self).__name__,
-            "input_dim": input_dim,
-            "output_dim": output_dim,
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
             "hidden_sizes": self.hidden_sizes,
             "dueling": self.dueling,
         }
