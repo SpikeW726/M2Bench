@@ -298,6 +298,8 @@ def _build_collector(
                         has_action_mask=True,
                         action_dim=dims["action_dim"],
                         has_active_mask=sync_replay,
+                        has_state=needs_state,
+                        state_dim=dims["state_dim"] if needs_state else 0,
                     )
                     for aid in dims["agent_ids"]
                 }

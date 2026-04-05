@@ -10,7 +10,7 @@ _init_mixer / _init_optimizer / _update_target_networks 实现差异化。
 """
 
 import copy
-from typing import Dict
+from typing import Dict, Union
 
 import torch
 import torch.nn as nn
@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 from algorithms.algorithm_base import BaseAlgorithm, TrainingStats
 from configs.algo_configs import VDNParams
-from data.batch import TransitionBatch
+from data.batch import TransitionBatch, SequenceBatch
 from networks.mixing import QMIXMixer, SumMixer
 from policies.marl.marl_base import MultiAgentPolicy
 from policies.rl.rl_base import ValuePolicy
@@ -32,7 +32,7 @@ class VDNAlgo(BaseAlgorithm):
     集中训练时通过 Q_tot = Σ Q_i 的联合 TD loss 更新共享 Q-network。
 
     同时作为 QMIX 等值分解算法的基类，可 override 的扩展点：
-    - _init_mixer(): Mixer 网络创建（VDN=SumMixer, QMIX=QMIXMixer）
+    - _init_mixer(): Mixer 网络创建（VDN=SumMixer 无参数, QMIX=QMIXMixer 含 target_mixer）
     - _init_optimizer(): 优化器创建（QMIX 需包含 mixer 参数）
     - _update_target_networks(): Target 更新（QMIX 需额外更新 target_mixer）
     """
@@ -45,6 +45,14 @@ class VDNAlgo(BaseAlgorithm):
         state_dim: int = 0,
     ):
         super().__init__(policy)
+
+        # VDN/QMIX 必须使用参数共享；独立网络模式下只有 agent_0 能被优化
+        if not policy.shared:
+            raise ValueError(
+                f"{type(self).__name__} 要求 shared_policy=true。"
+                "独立网络模式下其余 agent 的 Q-network 永远不会被更新，请在 YAML 中设置 shared_policy: true。"
+            )
+
         self.params = params
         self.gamma = params.gamma
         self.max_grad_norm = params.max_grad_norm
@@ -79,9 +87,8 @@ class VDNAlgo(BaseAlgorithm):
     # ====================================================================
 
     def _init_mixer(self, n_agents: int, state_dim: int, params):
-        """创建 Mixer 网络。VDN 使用无参数的 SumMixer。"""
+        """创建 Mixer 网络。VDN 使用无参数的 SumMixer，无需 target_mixer。"""
         self.mixer = SumMixer(n_agents, state_dim)
-        self.target_mixer = SumMixer(n_agents, state_dim)
 
     def _init_optimizer(self, params):
         """创建优化器。VDN 仅优化 Q-network（SumMixer 无参数）。"""
@@ -94,10 +101,10 @@ class VDNAlgo(BaseAlgorithm):
         return getattr(self.q_network, "is_recurrent", False)
 
     # ====================================================================
-    #                       compute joint loss
+    #               MLP 路径: compute joint loss (flat transitions)
     # ====================================================================
 
-    def _compute_loss(
+    def _compute_loss_flat(
         self,
         batch_dict: Dict[str, TransitionBatch],
     ) -> tuple[torch.Tensor, dict]:
@@ -159,11 +166,18 @@ class VDNAlgo(BaseAlgorithm):
                     q_next_target = q_next_target.masked_fill(~next_am_all.bool(), float("-inf"))
                 q_next_chosen = q_next_target.max(dim=-1)[0]
 
-            q_tot_target = self.target_mixer(q_next_chosen, next_state)
-            r_tot = rew_all.sum(dim=-1)  # (B,) — 联合奖励 = 各 agent 奖励之和
+            # VDN 无 target_mixer（SumMixer 无参数），QMIX 有独立 target_mixer
+            target_mixer = getattr(self, "target_mixer", self.mixer)
+            q_tot_target = target_mixer(q_next_chosen, next_state)
+
+            if self.params.reward_global:
+                r_tot = rew_all[:, 0]   # 环境各 agent 奖励相同，取第一个
+            else:
+                r_tot = rew_all.sum(dim=-1)   # 各 agent 奖励之和
+
             td_target = r_tot + self.gamma * (1.0 - done) * q_tot_target
 
-        loss = F.smooth_l1_loss(q_tot, td_target)
+        loss = F.mse_loss(q_tot, td_target)
 
         info = {
             "q_tot_mean": q_tot.detach().mean().item(),
@@ -173,12 +187,120 @@ class VDNAlgo(BaseAlgorithm):
         return loss, info
 
     # ====================================================================
+    #               RNN 路径: compute joint loss (sequences)
+    # ====================================================================
+
+    def _compute_loss_seq(
+        self,
+        batch_dict: Dict[str, SequenceBatch],
+    ) -> tuple[torch.Tensor, dict]:
+        agents = self.policy.agent_ids
+        first_batch = batch_dict[agents[0]]
+        B, T = first_batch.obs.shape[:2]
+        N = self.n_agents
+        device = first_batch.obs.device
+        bi = first_batch.burn_in_len
+        S = T - bi          # 训练步数
+
+        # === 1. 所有 agent 堆叠 → (B, T, N, *) ===
+        obs_all       = torch.stack([batch_dict[a].obs       for a in agents], dim=2)   # (B,T,N,D)
+        next_obs_all  = torch.stack([batch_dict[a].next_obs  for a in agents], dim=2)
+        act_all       = torch.stack([batch_dict[a].act       for a in agents], dim=2).long()  # (B,T,N)
+        rew_all       = torch.stack([batch_dict[a].rew       for a in agents], dim=2)   # (B,T,N)
+        done          = first_batch.done    # (B, T)
+        mask          = first_batch.mask    # (B, T)  1=有效步, 0=padding
+        state_seq     = getattr(first_batch, "state",      None)  # (B, T, state_dim) or None
+        next_state_seq= getattr(first_batch, "next_state", None)
+
+        # === 2. 共享网络：以 B*N 为批次维度运行序列 ===
+        obs_seq      = obs_all.permute(1, 0, 2, 3).contiguous().view(T, B * N, -1)
+        next_obs_seq = next_obs_all.permute(1, 0, 2, 3).contiguous().view(T, B * N, -1)
+        h0  = self.q_network.get_initial_hidden(B * N, device)
+
+        # --- Online Q ---
+        q_full, _ = self.q_network.forward_sequence(obs_seq, h0)   # (T, B*N, act_dim)
+        q_train   = q_full.view(T, B, N, -1)[bi:]                  # (S, B, N, act_dim)
+
+        act_train = act_all[:, bi:, :].permute(1, 0, 2).unsqueeze(-1)   # (S, B, N, 1)
+        q_chosen  = q_train.gather(3, act_train).squeeze(-1)             # (S, B, N)
+
+        # Mix online → Q_tot
+        q_chosen_flat = q_chosen.reshape(S * B, N)
+        state_train_flat = None
+        if state_seq is not None:
+            state_train_flat = (
+                state_seq[:, bi:, :].permute(1, 0, 2).contiguous().view(S * B, -1)
+            )
+        q_tot = self.mixer(q_chosen_flat, state_train_flat).view(S, B)  # (S, B)
+
+        # === 3. 目标 Q-values ===
+        with torch.no_grad():
+            h0_tgt = self.target_q_network.get_initial_hidden(B * N, device)
+
+            # 可选 action mask
+            next_am_train = None
+            if getattr(first_batch, "next_action_mask", None) is not None:
+                next_am_all = torch.stack(
+                    [batch_dict[a].next_action_mask for a in agents], dim=2
+                )   # (B, T, N, act_dim)
+                next_am_train = next_am_all[:, bi:, :, :].permute(1, 0, 2, 3)  # (S,B,N,act_dim)
+
+            if self.params.use_double_dqn:
+                q_next_online_full, _ = self.q_network.forward_sequence(next_obs_seq, h0)
+                q_next_online = q_next_online_full.view(T, B, N, -1)[bi:]
+                if next_am_train is not None:
+                    q_next_online = q_next_online.masked_fill(~next_am_train.bool(), float("-inf"))
+                next_actions = q_next_online.argmax(dim=-1, keepdim=True)  # (S,B,N,1)
+                q_next_tgt_full, _ = self.target_q_network.forward_sequence(next_obs_seq, h0_tgt)
+                q_next_tgt    = q_next_tgt_full.view(T, B, N, -1)[bi:]
+                q_next_chosen = q_next_tgt.gather(3, next_actions).squeeze(-1)  # (S,B,N)
+            else:
+                q_next_tgt_full, _ = self.target_q_network.forward_sequence(next_obs_seq, h0_tgt)
+                q_next_tgt = q_next_tgt_full.view(T, B, N, -1)[bi:]
+                if next_am_train is not None:
+                    q_next_tgt = q_next_tgt.masked_fill(~next_am_train.bool(), float("-inf"))
+                q_next_chosen = q_next_tgt.max(dim=-1)[0]                       # (S,B,N)
+
+            # Mix target → Q_tot_target
+            q_next_flat = q_next_chosen.reshape(S * B, N)
+            next_state_flat = None
+            if next_state_seq is not None:
+                next_state_flat = (
+                    next_state_seq[:, bi:, :].permute(1, 0, 2).contiguous().view(S * B, -1)
+                )
+            target_mixer  = getattr(self, "target_mixer", self.mixer)
+            q_tot_target  = target_mixer(q_next_flat, next_state_flat).view(S, B)
+
+            # 联合奖励: (S, B)
+            rew_train = rew_all[:, bi:, :].permute(1, 0, 2)   # (S, B, N)
+            if self.params.reward_global:
+                r_tot = rew_train[..., 0]          # 取第一个 agent（环境奖励相同）
+            else:
+                r_tot = rew_train.sum(dim=-1)      # 各 agent 奖励之和
+
+            done_train = done[:, bi:].T            # (S, B)
+            td_target  = r_tot + self.gamma * (1.0 - done_train) * q_tot_target
+
+        # === 4. 带序列 mask 的 MSE loss ===
+        td_loss     = F.mse_loss(q_tot, td_target, reduction="none")   # (S, B)
+        mask_train  = mask[:, bi:].T                                    # (S, B)
+        denom       = mask_train.sum().clamp(min=1)
+        loss        = (td_loss * mask_train).sum() / denom
+
+        info = {
+            "q_tot_mean": q_tot.detach().mean().item(),
+            "q_tot_max":  q_tot.detach().max().item(),
+            "td_error":   ((td_target - q_tot).abs() * mask_train).sum().item() / denom.item(),
+        }
+        return loss, info
+
+    # ====================================================================
     #                       update
     # ====================================================================
 
     def update(
         self,
-        batch_dict: Dict[str, TransitionBatch],
+        batch_dict: Dict[str, Union[TransitionBatch, SequenceBatch]],
         **kwargs,
     ) -> TrainingStats:
         batch_dict = {
@@ -186,7 +308,10 @@ class VDNAlgo(BaseAlgorithm):
             for aid, batch in batch_dict.items()
         }
 
-        loss, info = self._compute_loss(batch_dict)
+        if self.is_recurrent:
+            loss, info = self._compute_loss_seq(batch_dict)
+        else:
+            loss, info = self._compute_loss_flat(batch_dict)
 
         self.optimizer.zero_grad()
         loss.backward()

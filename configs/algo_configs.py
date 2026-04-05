@@ -177,6 +177,9 @@ class IQLParams(D3QNParams):
 class VDNParams(IQLParams):
     """VDN 参数，默认共享 Q-network。"""
     shared_policy: bool = True
+    # True: 环境对所有 agent 返回相同奖励（取 agent_0 的值作为全局奖励）
+    # False: 各 agent 奖励不同，对全体 agent 奖励求和得到全局奖励
+    reward_global: bool = False
 
 
 @dataclass(kw_only=True)

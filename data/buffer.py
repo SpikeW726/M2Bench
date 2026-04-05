@@ -320,6 +320,8 @@ class SequenceReplayBuffer:
         has_action_mask: bool = False,
         action_dim: int = 0,
         has_active_mask: bool = False,
+        has_state: bool = False,
+        state_dim: int = 0,
     ):
         self.obs_dim = obs_dim
         self.seq_len = seq_len
@@ -328,6 +330,8 @@ class SequenceReplayBuffer:
         self.max_seqs = max_seqs
         self.has_action_mask = has_action_mask
         self.has_active_mask = has_active_mask
+        self.has_state = has_state
+        self.state_dim = state_dim
         self.action_dim = action_dim
 
         # 预分配扁平循环数组
@@ -345,6 +349,10 @@ class SequenceReplayBuffer:
 
         if has_active_mask:
             self.active_mask_buf = np.zeros((max_seqs, T), dtype=np.float32)
+
+        if has_state:
+            self.state_buf = np.zeros((max_seqs, T, state_dim), dtype=np.float32)
+            self.next_state_buf = np.zeros((max_seqs, T, state_dim), dtype=np.float32)
 
         self._ptr = 0
         self._size = 0
@@ -382,6 +390,8 @@ class SequenceReplayBuffer:
             # 目标数组内的偏移
             dst_offset = src_lo - src_start  # burn-in 左侧 padding 步数
 
+            has_st = "state" in episode and self.has_state
+
             # 写入一条序列到循环数组
             idx = self._ptr
             self.obs[idx] = 0
@@ -395,6 +405,9 @@ class SequenceReplayBuffer:
                 self.next_action_mask_buf[idx] = False
             if has_actm and self.has_active_mask:
                 self.active_mask_buf[idx] = 0
+            if has_st:
+                self.state_buf[idx] = 0
+                self.next_state_buf[idx] = 0
 
             self.obs[idx, dst_offset:dst_offset + src_data_len] = episode["obs"][src_lo:src_hi]
             self.act[idx, dst_offset:dst_offset + src_data_len] = episode["act"][src_lo:src_hi]
@@ -408,6 +421,10 @@ class SequenceReplayBuffer:
 
             if has_actm and self.has_active_mask:
                 self.active_mask_buf[idx, dst_offset:dst_offset + src_data_len] = episode["active_mask"][src_lo:src_hi]
+
+            if has_st:
+                self.state_buf[idx, dst_offset:dst_offset + src_data_len] = episode["state"][src_lo:src_hi]
+                self.next_state_buf[idx, dst_offset:dst_offset + src_data_len] = episode["next_state"][src_lo:src_hi]
 
             # mask: burn-in 区间=0, 训练区间有效步=1, padding=0
             train_data_start = max(0, b - dst_offset)  # 训练数据在 src 中的起始偏移
@@ -445,6 +462,10 @@ class SequenceReplayBuffer:
 
         if self.has_active_mask:
             result.active_mask = self.active_mask_buf[indices].copy()
+
+        if self.has_state:
+            result.state = self.state_buf[indices].copy()
+            result.next_state = self.next_state_buf[indices].copy()
 
         return result
 

@@ -667,6 +667,9 @@ class MAOffPolicyCollector(BaseCollector):
             buf["next_action_mask"] = []
         if getattr(self.buffers.get(agent), "has_active_mask", False):
             buf["active_mask"] = []
+        if getattr(self.buffers.get(agent), "has_state", False):
+            buf["state"] = []
+            buf["next_state"] = []
         return buf
 
     def _reset_buffer(self):
@@ -780,6 +783,14 @@ class MAOffPolicyCollector(BaseCollector):
                             eb["active_mask"].append(
                                 actm[i] if actm is not None else 1.0
                             )
+                        if "state" in eb:
+                            eb["state"].append(
+                                cur_state[i].copy() if cur_state is not None else None
+                            )
+                        if "next_state" in eb:
+                            eb["next_state"].append(
+                                next_state[i].copy() if next_state is not None else None
+                            )
             elif self._sync_mode:
                 self._collect_sync_mlp(
                     actions, rew, next_obs, term, trunc, info,
@@ -849,6 +860,9 @@ class MAOffPolicyCollector(BaseCollector):
                 episode["next_action_mask"] = np.stack(eb["next_action_mask"])
             if eb.get("active_mask") is not None and len(eb.get("active_mask", [])) > 0:
                 episode["active_mask"] = np.array(eb["active_mask"], dtype=np.float32)
+            if eb.get("state") and eb["state"][0] is not None:
+                episode["state"] = np.stack(eb["state"]).astype(np.float32)
+                episode["next_state"] = np.stack(eb["next_state"]).astype(np.float32)
             self.buffers[agent].add_episode(episode)
             self._episode_buffers[agent][env_idx] = self._init_ep_buf(agent)
 
