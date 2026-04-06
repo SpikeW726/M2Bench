@@ -1,0 +1,42 @@
+# masup (IPPO, MLP) Grid 图模仿学习配置
+#
+# 模仿训练阶段用法:
+#   python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_mlp_ippo_grid.yaml
+#   python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_mlp_ippo_grid.yaml --data_path dataset/grid/samples.h5
+#
+# 预训练模式: actor_critic
+#   - Actor: BC loss (cross-entropy on expert actions)
+#   - Critic: MSE(V, returns)，输入为 obs（IPPO 独立 critic，不用 global state）
+
+# ----- 算法（决定预训练模式：actor_critic / actor_only / q_net）-----
+algo_name: ippo
+
+# ----- 环境配置（用于自动推断 obs_dim / action_dim / state_dim / num_agents）-----
+env_type: masup
+env_config: configs/eval/masup/masup_grid.yaml
+
+# ----- 网络结构参数 -----
+actor_type: mlp
+
+# ActorMLP 配置
+actor:
+  hidden: [512, 256, 128]
+
+# CriticMLP 配置（IPPO critic 输入为 obs，维度由环境自动推断）
+critic_hidden_sizes: [512, 256, 128]
+
+# ----- 训练超参 -----
+actor_lr: 3.0e-4
+critic_lr: 3.0e-4
+batch_size: 1024
+iteration: 100
+actor_patience: 5
+actor_min_delta: 1.0e-5
+use_value_norm: true
+
+# ----- 数据 & 日志 -----
+data_path: dataset/grid/samples_pure_0.01reward_random.h5
+save_dir: models/masup-mlp-ippo-imitation
+exp_name: imi_masup_mlp_ippo_grid
+track: false
+wandb_project: MAP-imitation

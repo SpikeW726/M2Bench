@@ -1,0 +1,43 @@
+# masup (QMIX, MLP Q-network) 模仿学习配置
+#
+# 模仿训练阶段用法:
+#   python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_mlp_qmix.yaml
+#
+# 预训练模式: q_net
+#   - 预训练 per-agent Q-network（QMIX 所有 agent 共用一个 Q-network）
+#   - QMIXMixer（超网络）无法脱离全局 state 进行有意义的预训练，跳过
+#   - 输入: obs（QMIX MLP Q-network 输入维度）
+#
+# 注意:
+#   QMIX 要求 shared_policy=true（共用 Q-network）。
+#   预训练完成后，在 QMIX 实验 YAML 中设置 actor_path 指向 _final/policy.pt。
+
+# ----- 算法（决定预训练模式：actor_critic / actor_only / q_net）-----
+algo_name: qmix
+
+# ----- 环境配置（用于自动推断 obs_dim / action_dim / state_dim / num_agents）-----
+env_type: masup
+env_config: configs/eval/masup/masup_grid.yaml
+
+# ----- 网络结构参数 -----
+q_type: mlp
+
+# QMLP 配置（与 QMIX 实验 YAML 中 q_network 段保持一致）
+q_network:
+  hidden: [256, 256]
+  dueling: false
+
+# ----- 训练超参 -----
+actor_lr: 3.0e-4
+bc_lambda: 1.0
+value_lambda: 0.5
+batch_size: 1024
+iteration: 100
+use_value_norm: true
+
+# ----- 数据 & 日志 -----
+data_path: dataset/grid/samples_pure_0.01reward_random.h5
+save_dir: models/masup-mlp-qmix-imitation
+exp_name: imi_masup_mlp_qmix
+track: false
+wandb_project: MAP-imitation

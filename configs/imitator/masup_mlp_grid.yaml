@@ -4,10 +4,13 @@
 #   python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_mlp_grid.yaml
 #   python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_mlp_grid.yaml --data_path dataset/grid/samples.h5
 
-# ----- 环境配置（用于自动推断 obs_dim / action_dim / critic_state_dim）-----
+# ----- 算法（决定预训练模式：actor_critic / actor_only / q_net）-----
+algo_name: mappo
+
+# ----- 环境配置（用于自动推断 obs_dim / action_dim / state_dim / num_agents）-----
 env_type: masup
 env_config: configs/eval/masup/masup_grid.yaml
-# obs_dim / action_dim / critic_state_dim 由环境接口自动推断，无需手动填写
+# 维度由环境接口自动推断，无需手动填写
 
 actor_type: mlp
 

@@ -553,7 +553,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
             device=str(device),
         )
 
-    # ---- 5. 加载预训练权重（仅 on-policy，off-policy 一般不预训练） ----
+    # ---- 5. 加载预训练权重 ----
     value_norm_config = None
     if trainer_type == "on_policy":
         value_norm_config = _load_pretrained(
@@ -561,6 +561,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
             config.actor_path, config.critic_path,
             device,
         )
+    elif trainer_type == "off_policy" and config.actor_path and q_net is not None:
+        # off-policy 加载模仿学习预训练的 Q-network 权重（复用 actor_path 字段）
+        _load_pretrained(q_net, None, config.actor_path, None, device)
     else:
         print("[Train] Off-policy algorithm, skipping pretrained weight loading")
 

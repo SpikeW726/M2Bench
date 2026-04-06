@@ -1,0 +1,76 @@
+# IQL + MASUPEnv 超参数搜索（LongEdge 导向，小 trial 预算）
+# 用法:
+#   python sweep.py --base-config configs/experiments/masup/iql_masup_longedge.yaml \
+#                   --sweep-config configs/sweep/masup/iql_masup.yaml --count 24
+#
+# 并行（先 create-only 再本地/多机跑）:
+#   python sweep.py --base-config configs/experiments/masup/iql_masup_longedge.yaml \
+#                   --sweep-config configs/sweep/masup/iql_masup.yaml --create-only
+#   python sweep.py --base-config configs/experiments/masup/iql_masup_longedge.yaml \
+#                   --sweep-id <ID> --count 24
+
+method: random
+
+metric:
+  name: env/wi_fromT
+  goal: minimize
+
+parameters:
+  # ---- algo (IQLParams) ----
+  lr:
+    min: 3.0e-6
+    max: 3.0e-4
+    distribution: log_uniform_values
+
+  gamma:
+    values: [0.98, 0.99, 0.995]
+
+  # 软更新 (tau < 1, freq=1) 与 硬更新 (tau=1.0, freq=200) 均纳入搜索
+  tau:
+    value: 0.005
+
+  target_update_freq:
+    value: 1
+
+  epsilon_start:
+    value: 1.0
+
+  epsilon_end:
+    value: 0.05
+
+  # 离散化衰减档位：避免连续区间在少量 trial 下覆盖不足
+  # 参考：每轮 ~64 次 update (num_envs=24, num_steps=64, collect_per_step=24)
+  # 0.9993^600≈0.67, 0.9995^600≈0.74, 0.9997^600≈0.83 → 探索期长度明显不同
+  epsilon_decay:
+    values: [0.9993, 0.9995, 0.9997]
+
+  max_grad_norm:
+    value: 1.0
+
+  use_double_dqn:
+    value: true
+
+  # ---- training (OffPolicyTrainerConfig) ----
+  batch_size:
+    values: [256, 512]
+
+  buffer_size:
+    value: 50000
+
+  warmup_steps:
+    value: 5000
+
+  update_per_step:
+    value: 1
+
+  collect_per_step:
+    value: 24
+
+  num_steps:
+    values: [64, 128]
+
+  total_steps:
+    value: 20000000
+
+  save_interval:
+    value: 500

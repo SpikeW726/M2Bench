@@ -837,6 +837,55 @@ class MyImprovedAlgo(VDNAlgo):
         )
 ```
 
+### 模仿学习（Imitation Learning）Pipeline 设计
+
+#### 三种预训练模式
+
+| 算法 | 模式 | 预训练网络 | Actor label | Value label | Value 输入 |
+|------|------|------------|-------------|-------------|-----------|
+| MAPPO | `actor_critic` | Actor + Critic | CE(logits, action) | MSE(V, returns) | `critic_states` |
+| IPPO | `actor_critic` | Actor + Critic | CE(logits, action) | MSE(V, returns) | `obs` |
+| VDPPO | `actor_only` | Actor only | CE(logits, action) | 无 | - |
+| IQL | `q_net` | Q-network | CE(Q, action) | MSE(Q[a], returns) | `obs` |
+| VDN | `q_net` | Q-network | 同上 | 同上 | `obs` |
+| QMIX | `q_net` | Q-network | 同上 | 同上 | `obs` |
+
+模式由 `configs/imitator/*.yaml` 中的 `algo_name` 字段决定，`_get_pretraining_strategy()` 自动路由。
+
+#### RNN 网络的 Flat 预训练设计
+
+**采用 Flat 训练策略**：对 RNN 网络（ActorRNN、QRNN）进行模仿学习时，每个 timestep 单独 forward，`hidden_state=None` 自动 zero-initialize，不跨 timestep 传递 hidden state。
+
+**选择 flat 训练的原因**：
+- BC 预训练的目标是让权重矩阵（`fc_in`、GRU 权重、输出层）具有合理初值，而非让 RNN 完整学会跨步记忆
+- 正确的序列记忆依赖于完整的环境交互动态，BC 阶段的静态数据无法充分提供这一信息
+- Flat 训练可以复用现有的 `[K*M, D]` 展平格式，避免修改数据加载管线
+- RL fine-tuning 阶段会以正确的时序连续方式更新 RNN，hidden state 依赖由 RL 阶段修正
+
+**已知局限**：flat 训练无法让 RNN 在预训练阶段学到跨步记忆，初始几步 RL 收集的数据质量略低于 MLP 预训练。实际使用中，预训练主要提供权重矩阵的良好初始化，RNN 的记忆能力在 RL 阶段才真正发挥作用。
+
+**扩展为序列训练**：若未来需要完整序列预训练，HDF5 的 `[N, T, M, D]` + `padded_mask` 结构已天然支持。修改 `_load_episodes_from_hdf5` 改为返回固定长度序列（而非展平），在训练循环中保留时序依赖即可。
+
+#### VDPPO Q-network 不预训练的原因
+
+VDPPO 采用 `actor_only` 模式，仅预训练 Actor，跳过 Q-network 和 QPLEXMixer：
+1. VDPPO Q-network 为 RNN 结构，输入需要 `prev_action_one_hot` 等时序信息，flat 训练下这些输入为 zero，无法有效初始化
+2. QPLEXMixer 在随机初始化时产生噪声 TD target，此时对 Q-network 做 MSE 预训练只会让 Q-network 拟合噪声标签，反而有害
+
+**推荐用法**：预训练 VDPPO Actor 后，在实验 YAML 中设置 `actor_path` 指向 `_actor_best/policy.pt`，Q-network 和 Mixer 保持随机初始化，由 RL 阶段学习。
+
+#### 使用方法
+
+```bash
+# 预训练（采样数据需提前用 heuristic_sampler.py 生成）
+python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_mlp_grid.yaml
+python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_mlp_iql.yaml
+
+# 用于 RL 训练热启动（在实验 YAML 中配置）
+# MAPPO/IPPO/VDPPO: actor_path: models/xxx_actor_best/policy.pt
+# IQL/VDN/QMIX:    actor_path: models/xxx_final/policy.pt  ← 加载到 q_net
+```
+
 ### Adding a new heuristic policy
 
 1. Inherit from `HeuriticBasePolicy` in `policies/heuritic/`
