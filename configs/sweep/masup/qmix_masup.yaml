@@ -15,10 +15,14 @@ metric:
   name: env/wi_fromT
   goal: minimize
 
+# ---- 自定义早停 ----
 early_terminate:
-  type: hyperband
-  min_iter: 1000
-  eta: 3
+  min_trial: 6             # 前 N 个 trial 仅建立 milestone 基准
+  min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
+  terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
+  early_stop_iters: 200  # trial 内至少运行 N iters 后启用 slope 检查
+  slope_horizons: [8, 32, 64]
+  slope_threshold: 1.0e-4
 
 parameters:
   # ---- algo params (映射到 QMIXParams) ----

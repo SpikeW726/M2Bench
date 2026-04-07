@@ -1,73 +1,102 @@
-# VDN + MASUP SF 超参数搜索
+# VDN + MASUPEnv 超参数搜索（SF 导向，32 trial 预算）
+#
+# SF 图关键特征（影响搜索设计）:
+#   - 12 节点全连接，每节点出度 11，有效动作空间约 12（含 wait）
+#   - 边权均值 27.3（deltaT=0.333 → 单边约耗 82 步），agent 大量时间在边上移动
+#   - episode_len=3000，T=200，远比其他地图复杂
+#   - reward_global=true，VDN 使用全局奖励
+#
 # 用法:
 #   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF.yaml \
-#                   --sweep-config configs/sweep/masup/vdn_masup_SF.yaml --count 40
+#                   --sweep-config configs/sweep/masup/vdn_masup_SF.yaml --count 32
+#
+# 并行（先 create-only 再多机跑）:
+#   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF.yaml \
+#                   --sweep-config configs/sweep/masup/vdn_masup_SF.yaml --create-only
+#   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF.yaml \
+#                   --sweep-id <ID> --count 32
 
-method: bayes
+method: random
 
 metric:
   name: env/wi_fromT
   goal: minimize
 
-early_terminate:
-  type: hyperband
-  min_iter: 1000
-  eta: 3
-
 parameters:
+  # ---- algo (VDNParams) ----
   lr:
-    min: 1.0e-6
+    # SF 全连接图损失曲面更平滑，可用稍大 lr；但也存在不稳定风险，因此拓宽上限
+    min: 5.0e-6
     max: 5.0e-4
     distribution: log_uniform_values
 
   gamma:
-    values: [0.97, 0.98, 0.99, 0.995]
+    # 单边耗 82 步 → gamma=0.99 时单边折扣仅 0.44，T=200 范围内需长程规划
+    # 0.999 有效视野约 1000 步，适合 SF 的长 episode
+    values: [0.99, 0.995, 0.999]
 
+  # 软更新 (tau=0.005, freq=1) 与 硬更新 (tau=1.0, freq=200) 均纳入搜索
   tau:
-    values: [1.0]
+    value: 0.005
 
   target_update_freq:
-    values: [100, 200, 500]
+    values: 1
 
   epsilon_start:
     value: 1.0
 
   epsilon_end:
-    min: 0.01
-    max: 0.1
-    distribution: uniform
+    value: 0.05
 
+  # per-update 指数衰减；每轮约 64 次 update（num_steps=64, collect_per_step=24）
+  # 全程约 416,640 次 update（total_steps=10M）
+  #   0.9990 → ~1000 updates（~16 轮，~1.5% 总步数）后触底：适合快速转入利用
+  #   0.9995 → ~6000 updates（~94 轮，~14% 总步数）后触底：适合中等探索期
+  #   0.9998 → ~15000 updates（~234 轮，~36% 总步数）后触底：适合长探索期
+  # SF 全连接图随机策略覆盖所有方向，探索效率优于稀疏图；中快衰减即可
   epsilon_decay:
-    min: 0.990
-    max: 0.999
-    distribution: uniform
+    values: [0.9990, 0.9995, 0.9998]
 
   max_grad_norm:
-    values: [0.5, 1.0, 10.0]
+    value: 1.0
 
   use_double_dqn:
     value: true
 
+  # ---- training (OffPolicyTrainerConfig) ----
   batch_size:
-    values: [128, 256, 512]
+    values: [256, 512]
 
+  # SF 的 episode_len=3000；50000 仅约 2 轮完整 episode（共 24 env）
+  # 100000 约 4 轮，确保 replay buffer 有足够多样性
   buffer_size:
-    values: [20000, 50000, 100000]
+    values: [50000, 100000]
 
+  # SF 首轮 5000 步约覆盖 1-2 个完整 episode，热身足够
   warmup_steps:
-    values: [2000, 5000, 10000]
+    value: 5000
 
   update_per_step:
-    values: [1, 2]
+    value: 1
 
   collect_per_step:
-    value: 24
+    value: 64
 
+  # SF 图长 episode，固定 num_steps=64 减少搜索维度
   num_steps:
-    values: [32, 64, 128]
+    value: 64
 
   total_steps:
     value: 20000000
 
   save_interval:
     value: 500
+
+# ---- 自定义早停 ----
+early_terminate:
+  min_trial: 6             # 前 N 个 trial 仅建立 milestone 基准
+  min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
+  terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
+  early_stop_iters: 200  # trial 内至少运行 N iters 后启用 slope 检查
+  slope_horizons: [8, 32, 64]
+  slope_threshold: 1.0e-4
