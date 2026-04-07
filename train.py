@@ -459,7 +459,8 @@ def _train_qtable(config: ExperimentConfig):
 #                              主训练函数
 # =============================================================================
 
-def train(config: ExperimentConfig, eval_config_path: str = None):
+def train(config: ExperimentConfig, eval_config_path: str = None,
+          early_stopper=None):
     """
     根据 ExperimentConfig 执行完整训练流程。
 
@@ -684,6 +685,18 @@ def train(config: ExperimentConfig, eval_config_path: str = None):
         log_extra_fn=log_extra_fn,
         logger=logger,
     )
+
+    # ---- 10.5. 若提供 early_stopper，patch trainer 的 log_extra_fn ----
+    if early_stopper is not None:
+        _orig_lef = trainer.log_extra_fn
+        def _patched_lef():
+            metrics = _orig_lef() if _orig_lef else {}
+            if metrics:
+                early_stopper.record_metrics(metrics, trainer.total_steps)
+            # 每轮 log 都检查 slope；避免长 episode 下多轮无 env 指标时永远不触发 within-trial 逻辑
+            early_stopper.check_and_maybe_raise(trainer.total_steps)
+            return metrics
+        trainer.log_extra_fn = _patched_lef
 
     # ---- 11. 训练 ----
     print(f"\n[Train] Starting {config.algo_name.upper()} training")

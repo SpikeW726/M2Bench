@@ -27,6 +27,7 @@ import wandb
 from configs.registry import load_config
 from configs.exp_configs import ExperimentConfig
 from train import train
+from trainers.sweep_early_stopper import SweepEarlyStop, SweepEarlyStopper
 
 
 # =============================================================================
@@ -67,6 +68,8 @@ def apply_sweep_overrides(config: ExperimentConfig, sweep_cfg: dict):
 
 # 全局变量：由 CLI 设置，供 sweep_train() 读取
 _BASE_CONFIG_PATH: str = ""
+_SWEEP_ID: str = ""
+_SWEEP_RAW_CONFIG: dict = {}   # 完整 sweep YAML（含 early_terminate 块）
 
 
 def sweep_train():
@@ -78,9 +81,21 @@ def sweep_train():
     2. 从 base YAML 加载完整 config
     3. 用 wandb.config 中的 sweep 参数覆盖
     4. 设置有意义的 run name（算法_地图_时间戳_runID）
-    5. 调用 train.train()
+    5. 调用 train.train()（带 early_stopper，若配置了 early_terminate）
     6. 训练结束后将 save_dir 写入 wandb summary，供 eval_best_runs 查询
+
+    SweepEarlyStop 单独 catch，不写 crash log，不 re-raise，
+    与真实崩溃严格区分。
     """
+    # 构建 early_stopper（若 sweep YAML 含 early_terminate 块）
+    early_stopper = None
+    et_config = _SWEEP_RAW_CONFIG.get("early_terminate")
+    if et_config and _SWEEP_ID:
+        metric_name = _SWEEP_RAW_CONFIG.get("metric", {}).get("name", "env/wi")
+        metric_goal = _SWEEP_RAW_CONFIG.get("metric", {}).get("goal", "minimize")
+        state_file = et_config.get("state_file", f".sweep_es_{_SWEEP_ID}.json")
+        early_stopper = SweepEarlyStopper(et_config, metric_name, metric_goal, state_file)
+
     try:
         wandb.init()
         sweep_cfg = dict(wandb.config)
@@ -102,15 +117,19 @@ def sweep_train():
             if not key.startswith("_"):
                 print(f"  {key}: {value}")
 
-        train(config)
+        train(config, early_stopper=early_stopper)
 
         # 训练完成后记录 save_dir，供 eval_best_runs 事后查询
         final_dir = str(config.save_dir / "final")
         wandb.run.summary["save_dir"] = final_dir
         print(f"[Sweep] Recorded save_dir={final_dir}")
 
+    except SweepEarlyStop as e:
+        # 优雅早停：不写 crash log，不 re-raise，wandb agent 会继续下一个 trial
+        print(f"\n[Sweep] *** EARLY STOP *** (not a crash): {e}", flush=True)
+
     except Exception as e:
-        # wandb.agent 有时会吞掉链式信息；这里强制打印类型/repr/ cause，并写文件备查
+        # 真实崩溃：强制打印完整链式错误并写文件备查
         import traceback
         import sys
         from pathlib import Path
@@ -118,7 +137,6 @@ def sweep_train():
         lines = [
             f"[Sweep] Error during training: {type(e).__name__}: {e!r}",
         ]
-        # 挤出可能挂在上一次 CUDA 核上的真实错误（与 CUDA_LAUNCH_BLOCKING 互补）
         try:
             import torch
             if torch.cuda.is_available():
@@ -145,6 +163,11 @@ def sweep_train():
         except OSError:
             pass
         raise
+
+    finally:
+        # 无论正常结束、早停还是崩溃，都将本 trial 结果写入共享状态
+        if early_stopper is not None:
+            early_stopper.finalize_trial()
 
 
 # =============================================================================
@@ -251,6 +274,8 @@ def create_sweep(args, project: str) -> str:
         with open(args.sweep_config) as f:
             sweep_config = yaml.safe_load(f)
         print(f"[Main] Loaded sweep config from {args.sweep_config}")
+        # early_terminate 是本框架自定义字段，不传给 wandb
+        sweep_config = {k: v for k, v in sweep_config.items() if k != "early_terminate"}
     else:
         sweep_config = {
             "method": args.method,
@@ -328,9 +353,22 @@ def main():
     _BASE_CONFIG_PATH = args.base_config
     project = _resolve_project(args)
 
+    # 加载 sweep YAML 供 early_terminate 使用（create_sweep 内过滤后再传给 wandb）
+    global _SWEEP_RAW_CONFIG
+    if args.sweep_config:
+        with open(args.sweep_config) as f:
+            _SWEEP_RAW_CONFIG = yaml.safe_load(f) or {}
+
     if args.sweep_id:
         # 模式 2: 加入已有 sweep
+        global _SWEEP_ID
         sweep_id = args.sweep_id
+        _SWEEP_ID = sweep_id
+        if not args.sweep_config:
+            print(
+                "[Main] Warning: --sweep-config 未提供，自定义 early_terminate 不会加载；"
+                "并行 worker 请传入与创建 sweep 时相同的 YAML。"
+            )
         print(f"[Main] Joining existing sweep: {sweep_id}")
         print(f"[Main] Project: {project}")
         print(f"[Main] Will run {args.count} trials in this agent")
@@ -340,7 +378,9 @@ def main():
 
     elif args.create_only:
         # 模式 1: 仅创建 sweep
+        global _SWEEP_ID
         sweep_id = create_sweep(args, project)
+        _SWEEP_ID = sweep_id
         print(f"\n{'=' * 60}")
         print(f"  Sweep created successfully!")
         print(f"  Sweep ID: {sweep_id}")
@@ -353,7 +393,9 @@ def main():
 
     else:
         # 模式 3: 创建并立即运行（默认）
+        global _SWEEP_ID
         sweep_id = create_sweep(args, project)
+        _SWEEP_ID = sweep_id
         print(f"[Main] Created sweep: {sweep_id} in project '{project}', "
               f"starting agent with {args.count} trials")
         wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
