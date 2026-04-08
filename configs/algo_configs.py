@@ -12,7 +12,7 @@ AlgoParams
 │   └── D3QNParams
 │       └── IQLParams      ← 独立 Q-Learning
 │           ├── VDNParams  ← VDN (SumMixer, 默认参数共享)
-│           └── QMIXParams ← QMIX (超网络 Mixer, 默认参数共享)
+│           └── QMIXParams ← QMIX (继承 VDN + 超网络 Mixer)
 └── QTableParams           ← Tabular Q-learning
 """
 
@@ -186,9 +186,8 @@ class VDNParams(IQLParams):
 
 
 @dataclass(kw_only=True)
-class QMIXParams(IQLParams):
-    """QMIX 参数，额外含 mixer 超网络维度。"""
-    shared_policy: bool = True
+class QMIXParams(VDNParams):
+    """QMIX 参数：继承 VDN（含 reward_global / shared_policy），仅增加 mixer 维度。"""
     mixer_embed_dim: int = 32
 
 
