@@ -320,7 +320,7 @@ def main():
       python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml \\
                       --sweep-id abc12345 --count 10
     """
-    global _BASE_CONFIG_PATH
+    global _BASE_CONFIG_PATH, _SWEEP_ID, _SWEEP_RAW_CONFIG
 
     parser = argparse.ArgumentParser(description="WandB Sweep 超参数搜索")
 
@@ -361,7 +361,6 @@ def main():
 
     if args.sweep_id:
         # 模式 2: 加入已有 sweep
-        global _SWEEP_ID
         sweep_id = args.sweep_id
         _SWEEP_ID = sweep_id
         if not args.sweep_config:
@@ -378,7 +377,6 @@ def main():
 
     elif args.create_only:
         # 模式 1: 仅创建 sweep
-        global _SWEEP_ID
         sweep_id = create_sweep(args, project)
         _SWEEP_ID = sweep_id
         print(f"\n{'=' * 60}")
@@ -393,7 +391,6 @@ def main():
 
     else:
         # 模式 3: 创建并立即运行（默认）
-        global _SWEEP_ID
         sweep_id = create_sweep(args, project)
         _SWEEP_ID = sweep_id
         print(f"[Main] Created sweep: {sweep_id} in project '{project}', "

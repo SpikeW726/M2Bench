@@ -959,11 +959,8 @@ class MAOffPolicyCollector(BaseCollector):
 
     def sample(self, batch_size: int) -> Dict[str, Union[TransitionBatch, SequenceBatch]]:
         first_buf = next(iter(self.buffers.values()))
-        if isinstance(first_buf, SequenceReplayBuffer):
-            return {
-                aid: buf.sample(batch_size)
-                for aid, buf in self.buffers.items()
-            }
+        # shared_indices: VDN/QMIX 要求所有 agent 取同一批 episode/transition，
+        # 保证多 agent 数据时间对齐，对 ReplayBuffer 和 SequenceReplayBuffer 均适用。
         if self._shared_indices:
             indices = np.random.choice(len(first_buf), size=batch_size, replace=False)
             return {

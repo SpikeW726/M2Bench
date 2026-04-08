@@ -146,6 +146,10 @@ class VDNAlgo(BaseAlgorithm):
                 [batch_dict[a].next_action_mask for a in agents], dim=1,
             )
 
+        # Active mask: 仅 READY 决策步（ON_EDGE 步 active_mask=0）参与 loss。
+        # MASUP 等事件驱动环境中约 80% 的 transition 为 ON_EDGE，不过滤会严重稀释梯度。
+        active_mask = getattr(first_batch, "active_mask", None)  # (B,)
+
         # --- Online Q-values ---
         q_all = self.q_network(obs_all.view(B * N, -1)).view(B, N, -1)
         q_chosen = q_all.gather(-1, act_all.unsqueeze(-1)).squeeze(-1)  # (B, N)
@@ -177,12 +181,25 @@ class VDNAlgo(BaseAlgorithm):
 
             td_target = r_tot + self.gamma * (1.0 - done) * q_tot_target
 
-        loss = F.mse_loss(q_tot, td_target)
+        per_sample_loss = F.mse_loss(q_tot, td_target, reduction="none")
+        if active_mask is not None:
+            am_sum = active_mask.sum().clamp(min=1)
+            loss = (per_sample_loss * active_mask).sum() / am_sum
+        else:
+            loss = per_sample_loss.mean()
 
+        td_err = (td_target - q_tot).detach().abs()
+        if active_mask is not None:
+            am_sum = active_mask.sum().clamp(min=1)
+            td_err_scalar = (td_err * active_mask).sum().item() / am_sum.item()
+            q_active = q_tot.detach()[active_mask > 0.5]
+        else:
+            td_err_scalar = td_err.mean().item()
+            q_active = q_tot.detach()
         info = {
-            "q_tot_mean": q_tot.detach().mean().item(),
-            "q_tot_max": q_tot.detach().max().item(),
-            "td_error": (td_target - q_tot).detach().abs().mean().item(),
+            "q_tot_mean": q_active.mean().item() if q_active.numel() > 0 else 0.0,
+            "q_tot_max":  q_active.max().item()  if q_active.numel() > 0 else 0.0,
+            "td_error": td_err_scalar,
         }
         return loss, info
 
@@ -281,11 +298,15 @@ class VDNAlgo(BaseAlgorithm):
             done_train = done[:, bi:].T            # (S, B)
             td_target  = r_tot + self.gamma * (1.0 - done_train) * q_tot_target
 
-        # === 4. 带序列 mask 的 MSE loss ===
-        td_loss     = F.mse_loss(q_tot, td_target, reduction="none")   # (S, B)
-        mask_train  = mask[:, bi:].T                                    # (S, B)
-        denom       = mask_train.sum().clamp(min=1)
-        loss        = (td_loss * mask_train).sum() / denom
+        # === 4. 带序列 mask（+ 可选 active_mask）的 MSE loss ===
+        td_loss    = F.mse_loss(q_tot, td_target, reduction="none")   # (S, B)
+        mask_train = mask[:, bi:].T                                    # (S, B)
+        # 若 batch 含 active_mask，叠加过滤 ON_EDGE 步
+        raw_am = getattr(first_batch, "active_mask", None)
+        if raw_am is not None:
+            mask_train = mask_train * raw_am[:, bi:].T                 # (S, B)
+        denom = mask_train.sum().clamp(min=1)
+        loss  = (td_loss * mask_train).sum() / denom
 
         info = {
             "q_tot_mean": q_tot.detach().mean().item(),
