@@ -127,6 +127,13 @@ def sweep_train():
     except SweepEarlyStop as e:
         # 优雅早停：不写 crash log，不 re-raise，wandb agent 会继续下一个 trial
         print(f"\n[Sweep] *** EARLY STOP *** (not a crash): {e}", flush=True)
+        # train.py 已将权重写入 save_dir/final；此处补记 summary 供 eval_best_runs 查询
+        try:
+            final_dir = str(config.save_dir / "final")
+            wandb.run.summary["save_dir"] = final_dir
+            wandb.run.summary["early_stopped"] = True
+        except Exception:
+            pass
 
     except Exception as e:
         # 真实崩溃：强制打印完整链式错误并写文件备查
