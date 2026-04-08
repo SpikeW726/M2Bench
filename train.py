@@ -37,6 +37,7 @@ from data.collector import (
 from data.buffer import ReplayBuffer, SequenceReplayBuffer
 from policies.marl.marl_base import MultiAgentPolicy
 from policies.rl.rl_base import ActorPolicy, ValuePolicy
+from trainers.sweep_early_stopper import SweepEarlyStop
 from utils.model_io import save_model
 from utils.autodl_paths import resolve_models_path
 
@@ -716,33 +717,48 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     print(f"  Device: {device}")
     print(f"  Save dir: {config.save_dir}")
 
-    trainer.train()
-
-    # ---- 12. 保存最终模型 & 清理 ----
     final_dir = config.save_dir / "final"
-    save_model(
-        save_dir=final_dir,
-        policy=policy,
-        critic=critic_net,
-        actor_config=actor_config_dict,
-        critic_config=critic_config_dict,
-        q_config=q_config_dict,
-        extra_info={
-            **_eval_meta,
-            "iteration": tc.effective_max_iterations,
-            "value_normalization": _get_value_norm_config(),
-        },
-    )
-    print(f"[Train] Saved final model to {final_dir}")
 
-    tb_writer.close()
-    if config.track_wandb:
-        import wandb
-        if wandb.run is not None and wandb.run.sweep_id is None:
-            wandb.finish()
-    vec_env.close()
+    def _save_final_checkpoint(extra_info: dict):
+        save_model(
+            save_dir=final_dir,
+            policy=policy,
+            critic=critic_net,
+            actor_config=actor_config_dict,
+            critic_config=critic_config_dict,
+            q_config=q_config_dict,
+            extra_info={
+                **_eval_meta,
+                "value_normalization": _get_value_norm_config(),
+                **extra_info,
+            },
+        )
 
-    # 训练结束后自动评估
+    try:
+        trainer.train()
+    except SweepEarlyStop as e:
+        _save_final_checkpoint(
+            {
+                "iteration": getattr(trainer, "iteration", 0),
+                "total_env_steps": getattr(trainer, "total_steps", 0),
+                "early_stopped": True,
+                "early_stop_reason": str(e),
+            },
+        )
+        print(f"[Train] Sweep early stop — saved checkpoint to {final_dir}: {e}")
+        raise
+    else:
+        _save_final_checkpoint({"iteration": tc.effective_max_iterations})
+        print(f"[Train] Saved final model to {final_dir}")
+    finally:
+        tb_writer.close()
+        if config.track_wandb:
+            import wandb
+            if wandb.run is not None and wandb.run.sweep_id is None:
+                wandb.finish()
+        vec_env.close()
+
+    # 训练结束后自动评估（早停 re-raise 不会执行到此）
     if eval_config_path:
         from evaluators.test import run_eval_from_config
         print(f"\n[Train] Starting auto-eval from {eval_config_path}")
