@@ -55,7 +55,7 @@ class VDPPOAlgo(PPOBase):
         q_network: Optional[nn.Module] = None,
     ):
         super().__init__(policy, None, params, num_envs, value_norm_config=value_norm_config)
-
+        self.params = params
         self.n_agents = n_agents
         self.action_dim = action_dim
         self.state_dim = state_dim

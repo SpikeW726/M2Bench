@@ -772,7 +772,6 @@ class MAOffPolicyCollector(BaseCollector):
 
             if self._is_recurrent:
                 for agent in self.agents:
-                    done = (term[agent] | trunc[agent]).astype(np.float32)
                     next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
                     am = cur_action_masks[agent]
                     actm = cur_active_masks[agent]
@@ -781,8 +780,15 @@ class MAOffPolicyCollector(BaseCollector):
                         eb["obs"].append(self._obs[agent][i].copy())
                         eb["act"].append(actions[agent][i])
                         eb["rew"].append(rew[agent][i])
-                        eb["next_obs"].append(next_obs[agent][i].copy())
-                        eb["done"].append(done[i])
+                        # 截断≠真实终止：截断步的 next_obs 应用真实 final_obs（截断前最后一个状态），
+                        # 而非 auto-reset 后的初始 obs；done 只由 terminated 决定
+                        if trunc[agent][i] and isinstance(info[agent][i], dict):
+                            final_obs = info[agent][i].get("final_obs")
+                            next_obs_i = final_obs if final_obs is not None else next_obs[agent][i].copy()
+                        else:
+                            next_obs_i = next_obs[agent][i].copy()
+                        eb["next_obs"].append(next_obs_i)
+                        eb["done"].append(float(term[agent][i]))  # trunc 不视为 terminal
                         if am is not None:
                             eb["action_mask"].append(am[i].copy())
                         if next_am is not None:
@@ -807,14 +813,22 @@ class MAOffPolicyCollector(BaseCollector):
                 )
             else:
                 for agent in self.agents:
-                    done = (term[agent] | trunc[agent]).astype(np.float32)
+                    # TD 语义：截断≠真实终止，done 只由 term 决定；
+                    # 截断步的 next_obs 替换为真实 final_obs（截断前最后一个状态）
+                    done_td = term[agent].astype(np.float32)
+                    next_obs_td = next_obs[agent].copy()
+                    for i in range(self.num_envs):
+                        if trunc[agent][i] and isinstance(info[agent][i], dict):
+                            final_obs = info[agent][i].get("final_obs")
+                            if final_obs is not None:
+                                next_obs_td[i] = final_obs
                     next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
                     self.buffers[agent].add_batch(
                         obs=self._obs[agent],
                         act=actions[agent],
                         rew=rew[agent],
-                        next_obs=next_obs[agent],
-                        done=done,
+                        next_obs=next_obs_td,
+                        done=done_td,
                         action_mask=cur_action_masks[agent],
                         next_action_mask=next_am,
                         state=cur_state,

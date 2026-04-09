@@ -101,6 +101,9 @@ class _BaseRNN(nn.Module):
 
     def _rnn_forward(self, x_features: torch.Tensor, hidden_state: torch.Tensor):
         """x_features: (seq_len, batch, hidden_size)"""
+        # cuDNN 要求 RNN 权重连续；deepcopy / load_state_dict / 优化器更新后可能碎片化，避免异常与 NaN
+        if x_features.is_cuda and hasattr(self.rnn, "flatten_parameters"):
+            self.rnn.flatten_parameters()
         rnn_state = self._to_rnn_state(hidden_state)
         rnn_out, new_state = self.rnn(x_features, rnn_state)
         return rnn_out, self._from_rnn_state(new_state)

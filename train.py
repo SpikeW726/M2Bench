@@ -41,6 +41,29 @@ from trainers.sweep_early_stopper import SweepEarlyStop
 from utils.model_io import save_model
 
 
+# WandB：同一进程内多次 train 时按 run.id 重新注册 step 轴
+_WANDB_ENV_STEP_AXIS_RUN_ID: Optional[str] = None
+
+
+def _configure_wandb_env_step_axis() -> None:
+    """将 WandB 所有标量曲线的横轴统一为环境累计步数 global_step。
+
+    与 sweep.py（wandb.agent 已 init、无 sync_tensorboard）对齐；避免仅用 wandb.log(..., step=)
+    时 UI 仍显示为 iteration 或与 TensorBoard 同步冲突。
+    """
+    global _WANDB_ENV_STEP_AXIS_RUN_ID
+    import wandb
+
+    if wandb.run is None:
+        return
+    rid = getattr(wandb.run, "id", None)
+    if rid is None or rid == _WANDB_ENV_STEP_AXIS_RUN_ID:
+        return
+    wandb.define_metric("global_step")
+    wandb.define_metric("*", step_metric="global_step")
+    _WANDB_ENV_STEP_AXIS_RUN_ID = rid
+
+
 # =============================================================================
 #                              Logger
 # =============================================================================
@@ -57,7 +80,12 @@ class SimpleLogger:
             self.tb_writer.add_scalar(key, value, step)
         if self.use_wandb:
             import wandb
-            wandb.log(data, step=step)
+
+            _configure_wandb_env_step_axis()
+            # 使用 step_metric=global_step，不在此传 step=，横轴即为环境交互步数
+            payload = dict(data)
+            payload["global_step"] = int(step)
+            wandb.log(payload)
 
 
 # =============================================================================
@@ -385,8 +413,10 @@ def _train_qtable(config: ExperimentConfig):
                 project=config.wandb_project,
                 name=config.run_name,
                 config=asdict(config),
-                sync_tensorboard=True,
+                # 与 sweep 一致：不同步 TB，避免重复曲线且横轴与 global_step 冲突
+                sync_tensorboard=False,
             )
+        _configure_wandb_env_step_axis()
 
     logger = SimpleLogger(tb_writer, use_wandb=config.track_wandb)
 
@@ -496,8 +526,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
                 project=config.wandb_project,
                 name=config.run_name,
                 config=asdict(config),
-                sync_tensorboard=True,
+                sync_tensorboard=False,
             )
+        _configure_wandb_env_step_axis()
 
     logger = SimpleLogger(tb_writer, use_wandb=config.track_wandb)
 

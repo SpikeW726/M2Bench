@@ -35,12 +35,11 @@ parameters:
     # 0.999 有效视野约 1000 步，适合 SF 的长 episode
     values: [0.99, 0.995, 0.999]
 
-  # 软更新 (tau=0.005, freq=1) 与 硬更新 (tau=1.0, freq=200) 均纳入搜索
   tau:
-    value: 0.005
+    values: [1.0]              # VDN 常用 hard update
 
   target_update_freq:
-    values: 1
+    values: [100, 200, 500]
 
   epsilon_start:
     value: 1.0

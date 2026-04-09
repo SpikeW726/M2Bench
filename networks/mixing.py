@@ -60,9 +60,7 @@ class QPLEXMixer(BaseMixer):
 
 class SumMixer(BaseMixer):
     """
-    VDN Mixer: Q_tot = Σ_i Q_i。
-
-    无可学习参数，forward 签名与 QMIXMixer 统一（忽略 states）。
+    VDN Mixer: Q_tot = Σ_i Q_i
     """
 
     def __init__(self, n_agents: int, state_dim: int = 0):
@@ -71,9 +69,9 @@ class SumMixer(BaseMixer):
     def forward(
         self,
         q_vals: torch.Tensor,               # (B, N)
-        states: torch.Tensor = None,         # unused
+        states: torch.Tensor = None,        # unused
     ) -> torch.Tensor:
-        """返回 Q_tot (B,)。"""
+        """返回 Q_tot (B,)"""
         return q_vals.sum(dim=-1)
 
 

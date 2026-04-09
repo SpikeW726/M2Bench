@@ -1,8 +1,9 @@
-# VDN + MASUPEnv (SF / SFcrimemap)
+# VDN + MASUPEnv (SF / SFcrimemap)，Q-network 为 QRNN (DRQN 风格序列训练)
 # 用法: python train.py configs/experiments/masup/vdn_masup_SF.yaml
 
 algo_name: vdn
 env_type: masup
+# q_type: rnn
 q_type: mlp
 
 exp_name: vdn-SF
@@ -26,29 +27,35 @@ env:
     contribution_scale: 0.05
 
 algo:
-  lr: 1.0e-4
+  lr: 1.0e-6
   gamma: 0.99
   tau: 1.0
   target_update_freq: 200
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay: 0.995
-  use_double_dqn: true
+  epsilon_decay: 0.99995
+  use_double_dqn: false
   shared_policy: true
-  reward_global: true
+  reward_global: false
+  # # RNN Q-network：EpisodeReplayBuffer + 固定长度子序列训练
+  # seq_len: 20
+  # max_episodes: 5000
 
 training:
-  num_envs: 64
+  num_envs: 16
   use_subproc: true
-  num_steps: 64
+  num_steps: 512
   total_steps: 10000000
   save_interval: 500
   batch_size: 256
   warmup_steps: 5000
   buffer_size: 50000
-  collect_per_step: 24
+  collect_per_step: 16
   update_per_step: 1
 
 q_network:
+  # rnn_type: gru
+  # hidden_size: 128
+  # num_layers: 1
   hidden: [256, 256]
   dueling: false
