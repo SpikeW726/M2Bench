@@ -31,14 +31,14 @@ actor:
 # ----- 训练超参 -----
 actor_lr: 3.0e-4
 batch_size: 1024
-iteration: 100
+iteration: 30
 actor_patience: 5
 actor_min_delta: 1.0e-5
 use_value_norm: false
 
 # ----- 数据 & 日志 -----
-data_path: dataset/grid/samples_pure_0.01reward_random.h5
-save_dir: models/masup-mlp-vdppo-imitation
-exp_name: imi_masup_mlp_vdppo
+data_path: dataset/grid/mappo_masup_a6.h5
+save_dir: models/vdppo-masup-grid-imi
+exp_name: imi_masup_vdppo
 track: false
 wandb_project: MAP-imitation

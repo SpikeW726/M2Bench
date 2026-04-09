@@ -121,6 +121,9 @@ class VDPPOAlgo(PPOBase):
                 total_iters=q_decay,
             )
 
+        # Q-network 热身期：前 N 次 update 冻结 actor
+        self.freeze_actor_iters = params.freeze_actor_iters
+
         # prepare_batch 设置，update 消费
         self._q_data: Optional[Dict] = None
 
@@ -506,6 +509,14 @@ class VDPPOAlgo(PPOBase):
           1) Q-network (q_network + mixing_net) — clipped TD loss on Q_tot
           2) Actor — PPO clipped surrogate with per-agent A_i + active_mask
         """
+        # Q-network 热身期：前 freeze_actor_iters 次 update 强制冻结 actor
+        if self.freeze_actor_iters > 0 and self._update_count < self.freeze_actor_iters:
+            update_actor = False
+            if self._update_count == 0:
+                print(f"[VDPPO] Actor frozen for first {self.freeze_actor_iters} updates (Q-network warmup).")
+        elif self.freeze_actor_iters > 0 and self._update_count == self.freeze_actor_iters:
+            print(f"[VDPPO] Q-network warmup done. Actor unfrozen at update #{self._update_count}.")
+
         all_pg_loss, all_q_loss, all_entropy, all_clipfrac = [], [], [], []
         all_approx_kl: list[float] = []
         all_actor_gn, all_q_gn = [], []

@@ -104,6 +104,9 @@ class VDPPOParams(PPOParams):
     # True:  环境所有 agent reward 相同，取 agent_0 的值作为 r_tot
     # False: 各 agent reward 求和作为 r_tot
     reward_global: bool = False
+    # Q-network 热身期：前 N 次 update 冻结 actor，仅训练 Q-network + mixer。
+    # 0 = 不冻结（默认）。适用于有预训练 actor 权重、Q-network 随机初始化的场景。
+    freeze_actor_iters: int = 0
 
 
 # =============================================================================
