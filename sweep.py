@@ -20,6 +20,7 @@ WandB Sweep 超参数搜索脚本。
 import argparse
 from dataclasses import fields
 from datetime import datetime
+from pathlib import Path
 
 import yaml
 import wandb
@@ -178,6 +179,41 @@ def sweep_train():
         # 无论正常结束、早停还是崩溃，都将本 trial 结果写入共享状态
         if early_stopper is not None:
             early_stopper.finalize_trial()
+
+
+# =============================================================================
+#                          Early-stop 临时文件清理
+# =============================================================================
+
+
+def cleanup_sweep_early_stop_files(
+    sweep_id: str,
+    sweep_raw_config: dict,
+    *,
+    keep: bool = False,
+) -> None:
+    """删除 early_terminate 写入的共享状态 JSON 与 .lock，避免残留在项目根目录。
+
+    并行多终端共跑同一 sweep 时，先结束的 agent 若删除文件会打断仍在跑的 worker，
+    请对这些进程加 --keep-sweep-state，全部结束后再手动删或仅最后一个 agent 不传该参数。
+    """
+    if keep:
+        return
+    et = sweep_raw_config.get("early_terminate")
+    if not et:
+        return
+    state_path = Path(et.get("state_file", f".sweep_es_{sweep_id}.json"))
+    lock_path = state_path.with_suffix(".lock")
+    removed: list[str] = []
+    for p in (lock_path, state_path):
+        try:
+            if p.is_file():
+                p.unlink()
+                removed.append(str(p))
+        except OSError as e:
+            print(f"[Sweep] 无法删除 {p}: {e}", flush=True)
+    if removed:
+        print(f"[Sweep] 已清理早停状态文件: {', '.join(removed)}", flush=True)
 
 
 # =============================================================================
@@ -369,6 +405,11 @@ def main():
                         help="评估 YAML 路径；提供则 sweep 结束后评估最优 N 个 trial")
     parser.add_argument("--top-n", type=int, default=5,
                         help="sweep 结束后评估最优的 N 个 trial（默认 5）")
+    parser.add_argument(
+        "--keep-sweep-state",
+        action="store_true",
+        help="不删除 early_terminate 产生的 .json/.lock；并行多终端时先结束的 worker 请加此参数",
+    )
 
     args = parser.parse_args()
     _BASE_CONFIG_PATH = args.base_config
@@ -391,9 +432,14 @@ def main():
         print(f"[Main] Joining existing sweep: {sweep_id}")
         print(f"[Main] Project: {project}")
         print(f"[Main] Will run {args.count} trials in this agent")
-        wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
-        if args.eval_config:
-            eval_best_runs(sweep_id, project, args.eval_config, top_n=args.top_n)
+        try:
+            wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
+            if args.eval_config:
+                eval_best_runs(sweep_id, project, args.eval_config, top_n=args.top_n)
+        finally:
+            cleanup_sweep_early_stop_files(
+                sweep_id, _SWEEP_RAW_CONFIG, keep=args.keep_sweep_state
+            )
 
     elif args.create_only:
         # 模式 1: 仅创建 sweep
@@ -415,9 +461,14 @@ def main():
         _SWEEP_ID = sweep_id
         print(f"[Main] Created sweep: {sweep_id} in project '{project}', "
               f"starting agent with {args.count} trials")
-        wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
-        if args.eval_config:
-            eval_best_runs(sweep_id, project, args.eval_config, top_n=args.top_n)
+        try:
+            wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
+            if args.eval_config:
+                eval_best_runs(sweep_id, project, args.eval_config, top_n=args.top_n)
+        finally:
+            cleanup_sweep_early_stop_files(
+                sweep_id, _SWEEP_RAW_CONFIG, keep=args.keep_sweep_state
+            )
 
 
 if __name__ == "__main__":
