@@ -21,6 +21,8 @@ early_terminate:
   min_samples_to_check: 6
 
 parameters:
+  seed:
+    value: 42
   # ---- algo params (映射到 QTableParams) ----
   lr:
     min: 0.01

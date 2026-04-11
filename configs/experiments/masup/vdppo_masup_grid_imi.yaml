@@ -7,7 +7,8 @@ exp_name: vdppo-grid
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
-actor_path: models/vdppo-masup-grid-imi/imi_masup_vdppo__1775752057_final/actor.pt
+seed: 42
+actor_path: models/vdppo-masup-grid-imi/imi_masup_vdppo__1775752057_final/policy.pt
 
 env:
   graph_path: graphs/grid.json

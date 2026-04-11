@@ -12,6 +12,7 @@ exp_name: mappo-masupgnn-imi
 graph_name: TSP12
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 actor_path:
 critic_path:
 

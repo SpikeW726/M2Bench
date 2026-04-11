@@ -28,6 +28,8 @@ class BaseVectorEnv:
         self.workers = [worker_fn(fn) for fn in env_fns]
         self.num_envs = len(env_fns)
         self.is_closed = False
+        # 每个 worker 对应的 seed（由 seed() 设置后持久化，所有 reset 包括 autoreset 均使用）
+        self._worker_seeds: List[Optional[int]] = [None] * self.num_envs
         
         # 检测环境类型
         self._is_parallel_env = self._detect_parallel_env()
@@ -105,8 +107,13 @@ class BaseVectorEnv:
         """
         assert not self.is_closed, "Cannot reset closed VectorEnv"
         env_id = self._wrap_id(env_id)
-        
-        results = [self.workers[i].reset(**kwargs) for i in env_id]
+
+        results = []
+        for i in env_id:
+            kw = dict(kwargs)
+            if "seed" not in kw and self._worker_seeds[i] is not None:
+                kw["seed"] = self._worker_seeds[i]
+            results.append(self.workers[i].reset(**kw))
         obs_list = [r[0] for r in results]
         info_list = [r[1] for r in results]
         
@@ -166,7 +173,8 @@ class BaseVectorEnv:
                             pass
                     
                     # Reset 环境，用新 obs 替换
-                    obs, reset_info = self.workers[i].reset()
+                    reset_kw = {} if self._worker_seeds[i] is None else {"seed": self._worker_seeds[i]}
+                    obs, reset_info = self.workers[i].reset(**reset_kw)
                     for agent in self.agents:
                         info[agent].update(reset_info.get(agent, {}))
                 
@@ -182,7 +190,8 @@ class BaseVectorEnv:
                 # Autoreset
                 if term or trunc:
                     info["final_obs"] = obs
-                    obs, reset_info = self.workers[i].reset()
+                    reset_kw = {} if self._worker_seeds[i] is None else {"seed": self._worker_seeds[i]}
+                    obs, reset_info = self.workers[i].reset(**reset_kw)
                     info.update(reset_info)
                 
                 results.append((obs, rew, term, trunc, info))
@@ -253,14 +262,15 @@ class BaseVectorEnv:
     # =========================================================================
     
     def seed(self, seed: int | List[int] | None = None) -> List[Any]:
-        """设置随机种子。"""
+        """设置随机种子，并持久化供后续所有 reset（含 autoreset）使用。"""
         assert not self.is_closed
         if seed is None:
             seeds = [None] * self.num_envs
         elif isinstance(seed, int):
             seeds = [seed + i for i in range(self.num_envs)]
         else:
-            seeds = seed
+            seeds = list(seed)
+        self._worker_seeds = seeds
         return [w.seed(s) for w, s in zip(self.workers, seeds)]
     
     def get_env_attr(
@@ -357,9 +367,12 @@ class SubprocVectorEnv(BaseVectorEnv):
         assert not self.is_closed, "Cannot reset closed VectorEnv"
         env_id = self._wrap_id(env_id)
         
-        # scatter: 发送 reset 给所有 worker
+        # scatter: 发送 reset 给所有 worker，注入各 worker 持久化 seed
         for i in env_id:
-            self.workers[i].send_reset(**kwargs)
+            kw = dict(kwargs)
+            if "seed" not in kw and self._worker_seeds[i] is not None:
+                kw["seed"] = self._worker_seeds[i]
+            self.workers[i].send_reset(**kw)
         
         # gather: 接收所有结果
         results = [self.workers[i].recv_reset() for i in env_id]
@@ -429,7 +442,8 @@ class SubprocVectorEnv(BaseVectorEnv):
         
         # Phase 5: 并行 reset done 的环境
         for _, i in done_pairs:
-            self.workers[i].send_reset()
+            reset_kw = {} if self._worker_seeds[i] is None else {"seed": self._worker_seeds[i]}
+            self.workers[i].send_reset(**reset_kw)
         for j_idx, i in done_pairs:
             new_obs, reset_info = self.workers[i].recv_reset()
             results[j_idx][0] = new_obs
@@ -465,7 +479,8 @@ class SubprocVectorEnv(BaseVectorEnv):
         
         # Phase 4: 并行 reset
         for _, i in done_pairs:
-            self.workers[i].send_reset()
+            reset_kw = {} if self._worker_seeds[i] is None else {"seed": self._worker_seeds[i]}
+            self.workers[i].send_reset(**reset_kw)
         for j_idx, i in done_pairs:
             new_obs, reset_info = self.workers[i].recv_reset()
             results[j_idx][0] = new_obs

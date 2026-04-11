@@ -23,6 +23,8 @@ early_terminate:
   slope_threshold: 1.0e-4
 
 parameters:
+  seed:
+    value: 42
   lr:
     min: 5.0e-6
     max: 5.0e-4

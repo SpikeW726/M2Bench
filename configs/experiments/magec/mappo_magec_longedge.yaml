@@ -12,6 +12,7 @@ exp_name: mappo-magec-longedge
 graph_name: long_edge
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 
 # ---- 环境 ----
 # long_edge.json: 4 节点, max_degree=3, action_dim=4

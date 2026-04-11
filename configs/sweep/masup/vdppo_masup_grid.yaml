@@ -23,6 +23,8 @@ early_terminate:
   slope_threshold: 1.0e-4
 
 parameters:
+  seed:
+    value: 42
   actor_lr:
     min: 1.0e-6
     max: 1.0e-3

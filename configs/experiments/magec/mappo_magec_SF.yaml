@@ -22,6 +22,7 @@ exp_name: mappo-magec-SF
 graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 
 # ---- 环境 ----
 # SF: 12 节点全连通，phi 各异（犯罪热力权重），truncate_by_time=true

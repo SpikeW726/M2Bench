@@ -7,9 +7,10 @@ env_type: masup
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
-  deltaT: 0.333
-  num_agents: 3
-  init_positions: [0, 5, 11]
+  deltaT: 0.5
+  num_agents: 1
+  init_positions: [0]
+  # init_positions: [0, 5, 11]
   episode_len: 3000
   edge_time_jitter: false
   custom_configs:
@@ -22,8 +23,12 @@ env:
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/SF/qmix_masup/best_eval.png
+  save_plot: evaluators/results/SF/mappo_masup_1a/best_eval.png
   show_plot: false
   animation: true
   event_driven: true
   max_frames: 1500
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/SF/mappo_masup_1a/action_logits.csv
+  action_logits_active_only: true

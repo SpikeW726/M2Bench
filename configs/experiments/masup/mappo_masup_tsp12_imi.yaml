@@ -12,6 +12,7 @@ exp_name: mappo-imi
 graph_name: TSP12
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 actor_path: models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt
 critic_path: models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt
 

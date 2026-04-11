@@ -18,6 +18,8 @@ metric:
   goal: minimize
 
 parameters:
+  seed:
+    value: 42
   # ---- VDPPOParams: actor 优化器 ----
   actor_lr:
     min: 0.00005

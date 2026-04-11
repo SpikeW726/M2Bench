@@ -104,9 +104,14 @@ class SweepEarlyStopper:
                     )
 
         # ---- Within-trial slope 检查 ----
+        # 必须同时满足：跨 trial warm-up、样本数足够、且当前步数已过 min_steps 门槛
+        # 否则 early_stop_iters 点可能在 min_steps 之前就凑齐，导致过早终止
         n = len(self._metric_history)
         max_horizon = max(self.slope_horizons)
-        if warmed_up and n >= self.early_stop_iters and n >= max_horizon:
+        if (warmed_up
+                and total_steps >= self.min_steps
+                and n >= self.early_stop_iters
+                and n >= max_horizon):
             all_flat = True
             for horizon in self.slope_horizons:
                 window = self._metric_history[-horizon:]

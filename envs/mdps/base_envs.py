@@ -154,12 +154,8 @@ class FixedStepEnv(BaseEnv):
 
     def reset(self, seed: Optional[int] = None):
         """重置环境，返回 (obs, infos)"""
-        if seed is not None:
-            import random
-            random.seed(seed)
-            np.random.seed(seed)
         initial = self.init_pos if len(self.init_pos) == self.world.num_agents else None
-        self.world.reset(initial_positions=initial)
+        self.world.reset(initial_positions=initial, seed=seed)
         self.agents = self.possible_agents[:]
         
         obs = self._build_obs(result=None)
@@ -205,12 +201,8 @@ class EventDrivenEnv(BaseEnv):
 
     def reset(self, seed: Optional[int] = None):
         """重置环境，返回 (obs, infos)"""
-        if seed is not None:
-            import random
-            random.seed(seed)
-            np.random.seed(seed)
         initial = self.init_pos if len(self.init_pos) == self.world.num_agents else None
-        self.world.reset(initial_positions=initial)
+        self.world.reset(initial_positions=initial, seed=seed)
         self.agents = self.possible_agents[:]
         
         obs = self._build_obs(result=None)
@@ -258,7 +250,7 @@ class JointBaseEnv(gymnasium.Env):
     def reset(self, seed: Optional[int] = None, options=None):
         """重置环境，返回 (obs, info)"""
         super().reset(seed=seed)
-        self.world.reset()
+        self.world.reset(seed=seed)
         return self._build_obs(None), self._build_info(None)
 
     # ------------------------------------------------------------------

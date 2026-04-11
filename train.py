@@ -7,6 +7,7 @@
 """
 
 import math
+import random
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Optional
@@ -46,10 +47,9 @@ _WANDB_ENV_STEP_AXIS_RUN_ID: Optional[str] = None
 
 
 def _configure_wandb_env_step_axis() -> None:
-    """将 WandB 所有标量曲线的横轴统一为环境累计步数 global_step。
+    """注册 global_step 为自定义横轴指标；实际主横轴由 SimpleLogger 的 wandb.log(..., step=) 锁定为环境步数。
 
-    与 sweep.py（wandb.agent 已 init、无 sync_tensorboard）对齐；避免仅用 wandb.log(..., step=)
-    时 UI 仍显示为 iteration 或与 TensorBoard 同步冲突。
+    不传 step= 时 WandB 会对每次 log 自增内部计数 → 横轴变成 iteration，与 sweep/直连 train 路径均会不一致。
     """
     global _WANDB_ENV_STEP_AXIS_RUN_ID
     import wandb
@@ -62,6 +62,26 @@ def _configure_wandb_env_step_axis() -> None:
     wandb.define_metric("global_step")
     wandb.define_metric("*", step_metric="global_step")
     _WANDB_ENV_STEP_AXIS_RUN_ID = rid
+
+
+# =============================================================================
+#                          随机种子
+# =============================================================================
+
+
+def _set_training_random_seed(seed: int) -> None:
+    """固定 Python / NumPy / PyTorch RNG（训练可复现）。"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _maybe_seed_vec_env(vec_env, seed: Optional[int]) -> None:
+    if seed is None:
+        return
+    vec_env.seed(seed)
 
 
 # =============================================================================
@@ -82,10 +102,12 @@ class SimpleLogger:
             import wandb
 
             _configure_wandb_env_step_axis()
-            # 使用 step_metric=global_step，不在此传 step=，横轴即为环境交互步数
+            # 必须传 step=：否则 WandB 用内部计数器（每次 log +1）→ 横轴变成 iter。
+            # define_metric 仅辅助 UI 选轴；与 step= 同时存在时以 step= 为准。
             payload = dict(data)
-            payload["global_step"] = int(step)
-            wandb.log(payload)
+            gs = int(step)
+            payload["global_step"] = gs
+            wandb.log(payload, step=gs)
 
 
 # =============================================================================
@@ -93,7 +115,12 @@ class SimpleLogger:
 # =============================================================================
 
 def _wandb_env_metrics_from_finished(finished: list) -> Dict[str, float]:
-    """从各子环境 get_episode_metrics 返回值构造 WandB env/*；仅含 wi_fromT 的环境会多记 env/wi_fromT。"""
+    """从各子环境 get_episode_metrics 返回值构造 WandB env/*。
+
+    可选字段（子类实现时写入）：
+    - wi_fromT → env/wi_fromT
+    - wait_ratio → env/wait_ratio（与 MASUP 终端 [WAIT_ACTIONS] 比例一致，enable_wait 场景）
+    """
     if not finished:
         return {}
     out: Dict[str, float] = {
@@ -105,6 +132,10 @@ def _wandb_env_metrics_from_finished(finished: list) -> Dict[str, float]:
     wi_t = [m["wi_fromT"] for m in finished if m.get("wi_fromT") is not None]
     if wi_t:
         out["env/wi_fromT"] = float(np.mean(wi_t))
+    # MASUP(enable_wait) 等在 get_episode_metrics 中返回 wait_ratio（上一完整 episode）
+    wr = [m["wait_ratio"] for m in finished if "wait_ratio" in m]
+    if wr:
+        out["env/wait_ratio"] = float(np.mean(wr))
     return out
 
 
@@ -402,6 +433,9 @@ def _train_qtable(config: ExperimentConfig):
 
     tc = config.training
 
+    if config.seed is not None:
+        _set_training_random_seed(config.seed)
+
     config.save_dir.mkdir(parents=True, exist_ok=True)
     config.log_dir.mkdir(parents=True, exist_ok=True)
     tb_writer = SummaryWriter(config.log_dir)
@@ -426,6 +460,7 @@ def _train_qtable(config: ExperimentConfig):
         num_envs=tc.num_envs,
         use_subproc=tc.use_subproc,
     )
+    _maybe_seed_vec_env(vec_env, config.seed)
     vec_env.reset()
 
     def log_extra_fn() -> Dict[str, float]:
@@ -514,6 +549,10 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     tc = config.training
     trainer_type = get_trainer_type(config.algo_name)
 
+    if config.seed is not None:
+        _set_training_random_seed(config.seed)
+        print(f"[Train] Random seed: {config.seed}")
+
     # ---- 1. 日志初始化 ----
     config.save_dir.mkdir(parents=True, exist_ok=True)
     config.log_dir.mkdir(parents=True, exist_ok=True)
@@ -539,6 +578,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         num_envs=tc.num_envs,
         use_subproc=tc.use_subproc,
     )
+    _maybe_seed_vec_env(vec_env, config.seed)
     print(f"[Train] Created {tc.num_envs} vectorized {config.env_type} envs "
           f"({'subproc' if tc.use_subproc else 'dummy'})")
 

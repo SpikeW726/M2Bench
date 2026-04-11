@@ -118,7 +118,7 @@ class PatrolWorld:
         _seed = cfg.get("edge_time_jitter_seed", None)
         self._jitter_rng = _random_mod.Random(_seed)  # 独立实例，不干扰全局 random
     
-    def reset(self, initial_positions: Optional[List[int]] = None) -> None:
+    def reset(self, initial_positions: Optional[List[int]] = None, seed: Optional[int] = None) -> None:
         """重置物理世界"""
         # 保存上一个 episode 的终止指标（has_data 兼容 training_mode 下 history 为空的情况）
         if self.metrics_tracker.has_data:
@@ -131,10 +131,11 @@ class PatrolWorld:
         # 重置指标追踪器
         self.metrics_tracker.reset()
 
-        # 初始化智能体位置
+        # 初始化智能体位置：使用局部 RNG 实例，不污染全局 random 状态（与 _jitter_rng 设计一致）
         if initial_positions is None:
-            import random
-            initial_positions = random.sample(list(self.graph.nodes), self.num_agents)
+            import random as _random_mod
+            _pos_rng = _random_mod.Random(seed)
+            initial_positions = _pos_rng.sample(list(self.graph.nodes), self.num_agents)
 
         self._occupied_nodes.clear()
         self._routes.clear()

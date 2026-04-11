@@ -73,7 +73,7 @@ class SUNSGymEnv(JointEventDrivenEnv):
     def reset(self, seed=None, options=None):
         # 直接调 gymnasium.Env.reset 处理 seed，再用 init_pos 重置 world
         gymnasium.Env.reset(self, seed=seed)
-        self.world.reset(initial_positions=self.init_pos if self.init_pos else None)
+        self.world.reset(initial_positions=self.init_pos if self.init_pos else None, seed=seed)
         return self._build_obs(None), self._build_info(None)
 
     # ------------------------------------------------------------------

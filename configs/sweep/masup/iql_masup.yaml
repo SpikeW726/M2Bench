@@ -16,6 +16,8 @@ metric:
   goal: minimize
 
 parameters:
+  seed:
+    value: 42
   # ---- algo (IQLParams) ----
   lr:
     min: 3.0e-6

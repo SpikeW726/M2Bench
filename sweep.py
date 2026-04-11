@@ -26,7 +26,7 @@ import wandb
 
 from configs.registry import load_config
 from configs.exp_configs import ExperimentConfig
-from train import train
+from train import train, _configure_wandb_env_step_axis
 from trainers.sweep_early_stopper import SweepEarlyStop, SweepEarlyStopper
 
 
@@ -98,6 +98,8 @@ def sweep_train():
 
     try:
         wandb.init()
+        # 在 train() 前注册 step 轴，避免 agent / init 侧先写历史导致默认 iter 横轴
+        _configure_wandb_env_step_axis()
         sweep_cfg = dict(wandb.config)
 
         config = load_config(_BASE_CONFIG_PATH)
@@ -190,6 +192,8 @@ def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: in
           → trial 1: evaluators/results/auto_eval_1.png
           → trial 2: evaluators/results/auto_eval_2.png
         animation:  evaluators/results/auto_eval_1/，evaluators/results/auto_eval_2/，...
+        action_logits_csv: 若 eval yaml 中配置了该路径，同样加 _{rank} 后缀，
+          例如 logits.csv → logits_1.csv、logits_2.csv，避免 top_n 次评估互相覆盖。
 
     Args:
         sweep_id: WandB sweep ID。
@@ -221,8 +225,10 @@ def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: in
     # 读取 eval yaml 中的 save_plot 作为路径基准
     with open(eval_config_path) as f:
         _raw = _yaml.safe_load(f)
-    base_save_plot = (_raw.get("eval") or {}).get("save_plot", None)
-    record_animation = (_raw.get("eval") or {}).get("animation", False)
+    _eval_raw = _raw.get("eval") or {}
+    base_save_plot = _eval_raw.get("save_plot", None)
+    base_action_logits_csv = _eval_raw.get("action_logits_csv", None)
+    record_animation = _eval_raw.get("animation", False)
 
     print(f"\n[Eval] Evaluating top-{top_n} runs by {metric_name} ({goal})")
     from evaluators.test import run_eval_from_config
@@ -241,6 +247,9 @@ def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: in
             p = _Path(base_save_plot)
             # e.g. auto_eval.png → auto_eval_1.png
             extra["save_plot"] = str(p.with_stem(f"{p.stem}_{rank}"))
+        if base_action_logits_csv:
+            lp = _Path(base_action_logits_csv)
+            extra["action_logits_csv"] = str(lp.with_stem(f"{lp.stem}_{rank}"))
         if record_animation:
             # 动画目录独立到与图像同目录下的 run_{rank}/ 子目录
             base_dir = str(_Path(base_save_plot).parent) if base_save_plot else "evaluators/results"

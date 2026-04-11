@@ -24,7 +24,7 @@ q_type: mlp
 
 # QMLP 配置（与 VDN 实验 YAML 中 q_network 段保持一致）
 q_network:
-  hidden: [256, 256]
+  hidden: [512, 256, 128]
   dueling: false
 
 # ----- 训练超参 -----
@@ -32,12 +32,12 @@ actor_lr: 3.0e-4
 bc_lambda: 1.0
 value_lambda: 0.5
 batch_size: 1024
-iteration: 100
+iteration: 40
 use_value_norm: true
 
 # ----- 数据 & 日志 -----
-data_path: dataset/grid/samples_pure_0.01reward_random.h5
-save_dir: models/masup-mlp-vdn-imitation
-exp_name: imi_masup_mlp_vdn
+data_path: dataset/grid/mappo_masup_a6.h5
+save_dir: models/vdn-masup-grid-imi
+exp_name: imi_masup_vdn
 track: false
 wandb_project: MAP-imitation

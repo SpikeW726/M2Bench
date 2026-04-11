@@ -33,6 +33,7 @@ exp_name: mappo-mpnn-masupgnn-sweep
 graph_name: TSP12
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 
 # 预训练权重初始化（来自模仿学习）
 # actor 结构须与预训练模型完全一致：input_dim=220, hidden_dim=128, gnn_layers=3

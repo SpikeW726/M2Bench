@@ -23,6 +23,8 @@ early_terminate:
   eta: 3
 
 parameters:
+  seed:
+    value: 42
   # ---- algo params (映射到 IQLParams / D3QNParams) ----
 
   lr:

@@ -23,6 +23,8 @@ early_terminate:
   slope_threshold: 1.0e-4
 
 parameters:
+  seed:
+    value: 42
   actor_lr:
     min: 1.0e-6
     max: 3.0e-5
@@ -81,4 +83,4 @@ parameters:
     value: 200
 
   actor_path:
-    value: models/vdppo-masup-grid-imi/imi_masup_vdppo__1775752057_final/actor.pt
+    value: models/vdppo-masup-grid-imi/imi_masup_vdppo__1775752057_final/policy.pt
