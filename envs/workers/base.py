@@ -34,10 +34,55 @@ class EnvWorker(ABC):
         pass
     
     def seed(self, seed: int | None = None) -> list[int] | None:
-        """设置随机种子。"""
+        """设置各 action_space 的随机种子。
+
+        单智能体 Gymnasium：action_space 为 Space，直接 .seed。
+        PettingZoo / MA：action_space 为 (agent) -> Space，需对每个 agent 分别 .seed。
+        """
+        results: list[int] = []
+
+        def _collect_seed_ret(r) -> None:
+            if r is None:
+                return
+            if isinstance(r, list):
+                results.extend(r)
+            elif isinstance(r, tuple):
+                results.extend(r)
+            else:
+                results.append(r)
+
+        # 多智能体：action_spaces 可能是方法，得到 dict[str, Space]
+        action_spaces = self.get_env_attr("action_spaces")
+        if action_spaces is not None and callable(action_spaces) and not hasattr(
+            action_spaces, "seed"
+        ):
+            try:
+                action_spaces = action_spaces()
+            except TypeError:
+                action_spaces = None
+        if isinstance(action_spaces, dict):
+            for sp in action_spaces.values():
+                if sp is not None and hasattr(sp, "seed"):
+                    _collect_seed_ret(sp.seed(seed))
+            return results or None
+
         action_space = self.get_env_attr("action_space")
-        if action_space is not None:
-            return action_space.seed(seed)
+        if action_space is None:
+            return None
+        if hasattr(action_space, "seed"):
+            _collect_seed_ret(action_space.seed(seed))
+            return results or None
+        # MA: bound method env.action_space(agent)，仅同进程 Dummy worker 可用
+        if callable(action_space):
+            agents = self.get_env_attr("possible_agents")
+            if agents is None:
+                agents = self.get_env_attr("agents")
+            if agents:
+                for agent in agents:
+                    sp = action_space(agent)
+                    if sp is not None and hasattr(sp, "seed"):
+                        _collect_seed_ret(sp.seed(seed))
+                return results or None
         return None
     
     @abstractmethod

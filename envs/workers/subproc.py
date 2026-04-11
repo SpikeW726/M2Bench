@@ -50,10 +50,24 @@ def _worker(
             elif cmd == "render":
                 child_conn.send(env.render(**data) if hasattr(env, "render") else None)
             elif cmd == "seed":
-                if hasattr(env, "seed"):
-                    child_conn.send(env.seed(data))
+                sd = data
+                # 必须在子进程内 seed：action_space(agent) 经管道 pickle 会变成裸 function
+                if getattr(env, "possible_agents", None):
+                    for agent in env.possible_agents:
+                        try:
+                            sp = env.action_space(agent)
+                        except Exception:
+                            continue
+                        if sp is not None and hasattr(sp, "seed"):
+                            sp.seed(sd)
                 else:
-                    env.reset(seed=data)
+                    asp = getattr(env, "action_space", None)
+                    if asp is not None and hasattr(asp, "seed"):
+                        asp.seed(sd)
+                if hasattr(env, "seed"):
+                    child_conn.send(env.seed(sd))
+                else:
+                    env.reset(seed=sd)
                     child_conn.send(None)
             elif cmd == "getattr":
                 child_conn.send(getattr(env, data, None))
@@ -144,7 +158,7 @@ class SubprocEnvWorker(EnvWorker):
         self.parent_conn.recv()
     
     def seed(self, seed: int | None = None) -> list[int] | None:
-        super().seed(seed)
+        # 不在父进程调 EnvWorker.seed：get_env_attr("action_space") 无法跨进程还原 bound method
         self.parent_conn.send(("seed", seed))
         return self.parent_conn.recv()
     
