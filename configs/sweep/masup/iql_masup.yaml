@@ -21,7 +21,9 @@ early_terminate:
   eta: 3
 
 parameters:
-  # ---- algo params (映射到 IQLParams) ----
+  seed:
+    value: 42
+  # ---- algo (IQLParams) ----
   lr:
     min: 5.0e-5
     max: 5.0e-4

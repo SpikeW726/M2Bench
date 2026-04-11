@@ -13,6 +13,7 @@ exp_name: mappo-magec-tsp12
 graph_name: TSP12
 track_wandb: True
 wandb_project: MAP-RL
+seed: 42
 
 # ---- 环境 ----
 # episode_len: 物理时间(truncate_by_time=true) 或 step 数(false)

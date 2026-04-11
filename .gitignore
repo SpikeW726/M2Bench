@@ -4,6 +4,8 @@ dataset/
 wandb/
 runs/
 *.mp4
+*.lock
+.sweep*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

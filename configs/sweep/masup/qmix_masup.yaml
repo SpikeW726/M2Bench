@@ -25,6 +25,8 @@ early_terminate:
   slope_threshold: 1.0e-4
 
 parameters:
+  seed:
+    value: 42
   # ---- algo params (映射到 QMIXParams) ----
   lr:
     min: 1.0e-6

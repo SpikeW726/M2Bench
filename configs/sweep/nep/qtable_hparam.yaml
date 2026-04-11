@@ -21,6 +21,8 @@ early_terminate:
   eta: 3
 
 parameters:
+  seed:
+    value: 42
   # ---- algo params (映射到 QTableParams) ----
   lr:
     min: 0.01

@@ -23,17 +23,25 @@
      python evaluators/test.py --model models/xxx/final \
                                --env_config configs/eval/suns/suns_tsp12.yaml \
                                --save_plot evaluators/results/eval.png --no_show
+
+  4) 记录每次决策的 logits（或 Q 值）以观察动作区分度
+     python evaluators/test.py --model models/xxx/final --env_config configs/eval/masup/masup_SF.yaml \
+                               --log_action_logits --action_logits_csv evaluators/results/action_logits.csv
+     或在 eval yaml 的 eval 段设置 log_action_logits / action_logits_csv。
 """
 import os
 import sys
 from pathlib import Path
+from typing import TextIO
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 os.chdir(project_root)
 
+import csv
 import yaml
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 from configs.registry import (
@@ -67,6 +75,79 @@ def _eval_metrics_history_for_plot(env, env_type: str) -> dict:
         h["wi_fromT"] = list(wfh)
         return h
     return hist
+
+
+def _policy_output_to_action_scores(out: dict) -> tuple[torch.Tensor | None, str]:
+    """从 policy.forward 结果取出用于区分动作的标量向量（actor=logits, value=Q）。"""
+    if out.get("logits") is not None:
+        return out["logits"], "actor_logits"
+    if out.get("q_values") is not None:
+        return out["q_values"], "q_values"
+    return None, ""
+
+
+def _squeeze_scores(scores: torch.Tensor) -> torch.Tensor:
+    s = scores.detach().float()
+    if s.dim() > 1:
+        s = s.squeeze(0)
+    return s.view(-1)
+
+
+def _valid_action_stats(scores_1d: torch.Tensor, mask_1d: torch.Tensor) -> dict:
+    """仅在合法动作上计算 softmax 熵、top-2 logit 间隔等。"""
+    valid = scores_1d[mask_1d]
+    if valid.numel() == 0:
+        return {
+            "n_valid": 0,
+            "max_logit": float("nan"),
+            "min_logit": float("nan"),
+            "logit_gap_top2": float("nan"),
+            "entropy": float("nan"),
+            "max_prob": float("nan"),
+        }
+    n = int(valid.numel())
+    max_logit = float(valid.max().item())
+    min_logit = float(valid.min().item())
+    vs = torch.sort(valid, descending=True).values
+    logit_gap_top2 = float(vs[0] - vs[1]) if n >= 2 else float("nan")
+    logp = F.log_softmax(valid, dim=0)
+    p = logp.exp()
+    entropy = float((-(p * logp)).sum().item())
+    max_prob = float(p.max().item())
+    return {
+        "n_valid": n,
+        "max_logit": max_logit,
+        "min_logit": min_logit,
+        "logit_gap_top2": logit_gap_top2,
+        "entropy": entropy,
+        "max_prob": max_prob,
+    }
+
+
+def _open_action_logits_csv(path: str, action_dim: int) -> tuple[csv.DictWriter, TextIO]:
+    """创建 CSV 并写入表头；返回 (writer, file_handle) 由调用方关闭。"""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    f = open(p, "w", newline="", encoding="utf-8")
+    logits_cols = [f"logit_a{i}" for i in range(action_dim)]
+    fieldnames = [
+        "episode",
+        "step",
+        "sim_time",
+        "agent_id",
+        "policy_head",
+        "chosen_action",
+        "active_mask",
+        "n_valid",
+        "max_logit",
+        "min_logit",
+        "logit_gap_top2",
+        "entropy",
+        "max_prob",
+    ] + logits_cols
+    w = csv.DictWriter(f, fieldnames=fieldnames)
+    w.writeheader()
+    return w, f
 
 
 def _eval_plot_metric_configs(env_type: str, sample_hist: dict):
@@ -114,6 +195,10 @@ def test_trained_policy(
     max_frames: int = None,
     save_animation_dir: str = None,
     env_custom_config_overrides: dict = None,
+    log_action_logits: bool = False,
+    log_action_logits_max_lines: int = 500,
+    action_logits_csv: str = None,
+    action_logits_active_only: bool = True,
 ):
     """
     评估训练好的策略，自动适配算法/网络/环境类型。
@@ -134,6 +219,10 @@ def test_trained_policy(
         env_custom_config_overrides: 覆盖 eval yaml 中 custom_configs 的字段（优先级高于 yaml）；
             通常由 run_eval_from_config 从模型 config.yaml 的 train_env_custom_configs 中读取，
             以确保 idi_scale / contribution_scale 等 sweep 参数与训练时保持一致。
+        log_action_logits: 是否在 stdout 打印每次（有效）决策的动作分数向量及区分度统计。
+        log_action_logits_max_lines: 打印行数上限，避免刷屏；超出后仅提示截断。
+        action_logits_csv: 若提供路径，将所有记录行写入 CSV（含各动作 logit/q 列）。
+        action_logits_active_only: True 时仅记录 active_mask=1 的步（真正决策时刻）。
         动画文件名：若提供 save_plot，在「算法名_animation_图名」后追加 _ 与 save_plot 的文件名 stem，
         例如 best_eval.png → mappo_animation_long_edge_best_eval.mp4
     """
@@ -194,6 +283,21 @@ def test_trained_policy(
     time_desc = f"{eff_episode_time:.0f}s" if eff_episode_time is not None else "env-truncated"
     print(f"\n=== Running {num_episodes} episodes (episode_time={time_desc}) ===")
 
+    do_logits_file = bool(action_logits_csv)
+    do_logits_print = bool(log_action_logits)
+    logits_csv_w = None
+    logits_csv_f = None
+    logits_print_count = 0
+    if do_logits_file:
+        logits_csv_w, logits_csv_f = _open_action_logits_csv(action_logits_csv, action_dim)
+        print(f"[Eval] Writing per-decision action scores to {action_logits_csv}")
+    if do_logits_print or do_logits_file:
+        print(
+            "[Eval] action_logits: actor→logits, value-based→Q；"
+            f"active_only={action_logits_active_only}；"
+            f"entropy/gap 仅在合法动作上按 softmax 计算。"
+        )
+
     episode_metrics = []
     metrics_history = []
     episode_times = []
@@ -230,6 +334,67 @@ def test_trained_policy(
             with torch.no_grad():
                 outputs = multi_policy.forward(obs_tensor, state_dict=hidden_state, action_mask=action_masks)
             actions = {aid: out['act'].cpu().numpy() for aid, out in outputs.items()}
+
+            if do_logits_print or do_logits_file:
+                sim_time = float(getattr(getattr(env, "world", None), "current_time", step_count))
+                for aid, out in outputs.items():
+                    info_i = infos.get(aid) or {}
+                    active = int(info_i.get("active_mask", 1))
+                    if action_logits_active_only and active != 1:
+                        continue
+                    scores_t, head = _policy_output_to_action_scores(out)
+                    if scores_t is None:
+                        continue
+                    s1 = _squeeze_scores(scores_t)
+                    mask_t = action_masks[aid]
+                    m1 = mask_t.detach().bool().cpu().view(-1)
+                    if s1.numel() != m1.numel():
+                        continue
+                    st = _valid_action_stats(s1, m1)
+                    act_t = out["act"]
+                    chosen_action = int(act_t.detach().view(-1)[0].item())
+
+                    row = {
+                        "episode": ep,
+                        "step": step_count,
+                        "sim_time": f"{sim_time:.6f}",
+                        "agent_id": aid,
+                        "policy_head": head,
+                        "chosen_action": chosen_action,
+                        "active_mask": active,
+                        "n_valid": st["n_valid"],
+                        "max_logit": f"{st['max_logit']:.6f}",
+                        "min_logit": f"{st['min_logit']:.6f}",
+                        "logit_gap_top2": f"{st['logit_gap_top2']:.6f}",
+                        "entropy": f"{st['entropy']:.6f}",
+                        "max_prob": f"{st['max_prob']:.6f}",
+                    }
+                    for i in range(action_dim):
+                        key = f"logit_a{i}"
+                        if i < s1.numel() and bool(m1[i].item()):
+                            row[key] = f"{float(s1[i].item()):.6f}"
+                        else:
+                            row[key] = ""
+
+                    if logits_csv_w is not None:
+                        logits_csv_w.writerow(row)
+
+                    if do_logits_print and logits_print_count < log_action_logits_max_lines:
+                        parts = []
+                        for i in range(min(s1.numel(), action_dim)):
+                            if bool(m1[i].item()):
+                                parts.append(f"{float(s1[i].item()):.3f}")
+                            else:
+                                parts.append("—")
+                        scores_compact = "[" + ", ".join(parts) + "]"
+                        print(
+                            f"[action_scores] ep={ep} step={step_count} t={sim_time:.2f} "
+                            f"{aid} {head} a={chosen_action} "
+                            f"H={st['entropy']:.3f} max_p={st['max_prob']:.3f} "
+                            f"gap2={st['logit_gap_top2']:.3f} scores={scores_compact}"
+                        )
+                        logits_print_count += 1
+
             # 保留 RNN hidden state 供下一步使用
             if multi_policy.is_recurrent:
                 hidden_state = {aid: out['state'] for aid, out in outputs.items() if out.get('state') is not None}
@@ -261,6 +426,20 @@ def test_trained_policy(
         if env_type in _MASUP_LIKE_ENV_TYPES:
             ep_line += f", WI@T={getattr(env, 'worst_idleness_fromT', 0.0):.4f}"
         print(ep_line)
+
+    if logits_csv_f is not None:
+        logits_csv_f.close()
+        print(f"[Eval] action_logits CSV saved: {action_logits_csv}")
+
+    if (
+        do_logits_print
+        and log_action_logits_max_lines > 0
+        and logits_print_count >= log_action_logits_max_lines
+    ):
+        print(
+            f"[Eval] action_scores 打印已截断（仅前 {log_action_logits_max_lines} 行）；"
+            "完整记录请使用 action_logits_csv。"
+        )
 
     # ---- 5. 汇总统计 ----
     print(f"\n=== Summary Statistics ({num_episodes} episodes, episode_time={time_desc}) ===")
@@ -575,6 +754,11 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
           animation: false
           event_driven: true
           max_frames: null
+          # 决策时刻动作分数（actor=logits / value=Q）：打印与/或 CSV
+          log_action_logits: false
+          log_action_logits_max_lines: 500
+          action_logits_csv: null   # 例: evaluators/results/run_action_logits.csv
+          action_logits_active_only: true
 
     Args:
         model_dir: 模型目录。
@@ -667,6 +851,12 @@ if __name__ == '__main__':
                         help='使用固定步长动画（默认为事件驱动动画）')
     parser.add_argument('--max_frames', type=int, default=None,
                         help='动画最大帧数限制（默认不限制，推荐 300~600）')
+    parser.add_argument('--log_action_logits', action='store_true',
+                        help='打印每次有效决策的动作 logits/Q 与区分度统计（有行数上限）')
+    parser.add_argument('--log_action_logits_max_lines', type=int, default=None,
+                        help='覆盖 yaml 中的打印行数上限')
+    parser.add_argument('--action_logits_csv', type=str, default=None,
+                        help='将每次决策的 logits/Q 写入该 CSV 路径')
 
     args = parser.parse_args()
 
@@ -678,6 +868,15 @@ if __name__ == '__main__':
 
     num_episodes = args.num_episodes if args.num_episodes is not None else _eval.get("num_episodes", 5)
     episode_time = args.episode_time if args.episode_time is not None else _eval.get("episode_time", None)
+
+    _log_logits = args.log_action_logits or _eval.get("log_action_logits", False)
+    _log_max = (
+        args.log_action_logits_max_lines
+        if args.log_action_logits_max_lines is not None
+        else _eval.get("log_action_logits_max_lines", 500)
+    )
+    _csv = args.action_logits_csv if args.action_logits_csv is not None else _eval.get("action_logits_csv")
+    _active_only = _eval.get("action_logits_active_only", True)
 
     if _algo_name == "qtable":
         test_qtable_policy(
@@ -701,4 +900,8 @@ if __name__ == '__main__':
             record_animation=args.animation,
             event_driven=not args.no_event_driven,
             max_frames=args.max_frames,
+            log_action_logits=_log_logits,
+            log_action_logits_max_lines=_log_max,
+            action_logits_csv=_csv,
+            action_logits_active_only=_active_only,
         )

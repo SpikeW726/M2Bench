@@ -13,6 +13,7 @@ exp_name: vdppo-gru-oucs
 graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 
 # ---- 环境（与 masup_SF eval 中 num_agents / init_positions / episode_len 对齐）----
 env:

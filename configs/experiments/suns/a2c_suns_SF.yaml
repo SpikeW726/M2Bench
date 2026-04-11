@@ -21,6 +21,7 @@ exp_name: a2c-suns-SF
 graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 
 # ---- 环境 ----
 env:

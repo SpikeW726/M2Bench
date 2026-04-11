@@ -16,6 +16,8 @@ metric:
   goal: minimize
 
 parameters:
+  seed:
+    value: 42
   # ---- algo params (映射到 IPPOParams) ----
   lr:
     min: 0.000001

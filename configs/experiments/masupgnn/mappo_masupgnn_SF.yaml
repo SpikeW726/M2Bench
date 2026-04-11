@@ -29,6 +29,7 @@ exp_name: mappo-masupgnn-SF
 graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 
 # ---- 环境 ----
 # T: 时间归一化常数，与 SF 的 episode_len=3000 和平均边长≈27.3 匹配

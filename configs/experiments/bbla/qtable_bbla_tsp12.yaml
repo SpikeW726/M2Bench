@@ -8,6 +8,7 @@ exp_name: qtable-bbla
 graph_name: TSP12
 track_wandb: True
 wandb_project: MAP-RL
+seed: 42
 
 env:
   graph_path: graphs/simple_TSP_12.json

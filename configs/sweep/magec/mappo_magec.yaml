@@ -22,6 +22,8 @@ metric:
   goal: minimize
 
 parameters:
+  seed:
+    value: 42
   # ---- MAPPOParams: 优化器 ----
   actor_lr:
     min: 5.0e-5

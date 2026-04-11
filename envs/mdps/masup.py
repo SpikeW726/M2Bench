@@ -233,11 +233,8 @@ class MASUPEnv(EventDrivenEnv):
             wait_ratio = total_wait / total_decisions if total_decisions > 0 else 0.0
             self.world.metrics_tracker.current.wait_ratio = wait_ratio
         
-        # 2. 确定初始位置
-        if self.init_pos:
-            initial_positions = self.init_pos
-        else:
-            initial_positions = random.sample(list(self.world.graph.nodes), self.world.num_agents)
+        # 2. 确定初始位置（None 时由 PatrolWorld.reset 用局部 RNG 随机采样）
+        initial_positions = self.init_pos if self.init_pos else None
 
         # 在 world.reset 固化 last_episode_metrics 之前，保存上一局终值（与 last_episode_metrics 同步）
         # 注意：world.reset 后 metrics_tracker 只有 1 条初始 record；
@@ -252,8 +249,8 @@ class MASUPEnv(EventDrivenEnv):
         else:
             self.last_episode_wi_fromT = None
         
-        # 3. 重置物理世界
-        self.world.reset(initial_positions=initial_positions)
+        # 3. 重置物理世界（seed 仅在 initial_positions=None 时生效，控制随机采样位置）
+        self.world.reset(initial_positions=initial_positions, seed=seed)
         self.agents = self.possible_agents[:]
         
         # 3. 重置 MASUP 特有的状态变量

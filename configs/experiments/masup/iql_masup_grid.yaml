@@ -6,6 +6,7 @@ exp_name: iql-grid
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
+seed: 42
 
 env:
   graph_path: graphs/grid.json

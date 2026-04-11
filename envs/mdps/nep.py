@@ -40,7 +40,7 @@ class NEPEnv(JointEventDrivenEnv):
     
     def reset(self, seed: Optional[int] = None):  
         gymnasium.Env.reset(self, seed=seed)
-        self.world.reset(initial_positions=self.init_pos if self.init_pos else None)
+        self.world.reset(initial_positions=self.init_pos if self.init_pos else None, seed=seed)
         return self._build_obs(None), self._build_info(None)
 
     def _dispatch_actions(self, action: int):

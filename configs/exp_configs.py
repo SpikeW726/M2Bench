@@ -47,6 +47,7 @@ class ExperimentConfig(ToStringMixin):
     graph_name: str = "TSP12"
     track_wandb: bool = True
     wandb_project: str = "MAP-RL"
+    seed: Optional[int] = None  # 训练可复现；None 表示不固定（与历史行为一致）
     actor_path: Optional[str] = None
     critic_path: Optional[str] = None
 

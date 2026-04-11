@@ -23,6 +23,8 @@ metric:
   goal: minimize
 
 parameters:
+  seed:
+    value: 42
   # ---- algo (VDNParams) ----
   lr:
     # SF 全连接图损失曲面更平滑，可用稍大 lr；但也存在不稳定风险，因此拓宽上限
