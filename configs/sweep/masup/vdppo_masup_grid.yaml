@@ -1,60 +1,75 @@
+# VDPPO + MASUP grid 超参搜索
+#
+# Grid: episode_len=500(仿真秒)、T=50、6 agent、decision 观测；比 SF 短 horizon，gamma 不必过高，
+# rollout 用较小 num_steps 即可稳定完成 episode。
+#
+# 用法:
+#   python sweep.py --base-config configs/experiments/masup/vdppo_masup_grid.yaml \
+#                   --sweep-config configs/sweep/masup/vdppo_masup_grid.yaml --count 32
+
 method: bayes
 
 metric:
   name: env/wi_fromT
   goal: minimize
 
+# ---- 自定义早停（与 mappo_masup_grid 等 on-policy sweep 对齐）----
+early_terminate:
+  min_trial: 6
+  min_steps: 5000000
+  terminate_ratio: 0.4
+  early_stop_iters: 100   # on-policy：与 MAPPO/IPPO/VDPPO sweep 一致
+  slope_horizons: [8, 32, 64]
+  slope_threshold: 1.0e-4
+
 parameters:
   seed:
     value: 42
   actor_lr:
     min: 1.0e-6
-    max: 2.0e-3
+    max: 1.0e-3
     distribution: log_uniform_values
 
   q_lr:
     min: 1.0e-6
-    max: 3.0e-3
+    max: 1.0e-3
     distribution: log_uniform_values
 
   clip_range:
-    min: 0.1
-    max: 0.3
+    values: [0.15, 0.2, 0.25]
 
   ent_coef:
     min: 0.001
-    max: 0.05
+    max: 0.03
     distribution: log_uniform_values
 
   vf_coef:
-    min: 0.5
-    max: 1.0
+    values: [0.5, 1.0]
 
   gamma:
     values: [0.97, 0.98, 0.99]
 
   gae_lambda:
-    min: 0.9
-    max: 1.0
+    values: [0.9, 0.95, 0.99]
 
   tau:
-    min: 0.01
-    max: 0.5
-    distribution: log_uniform_values
+    values: [0.001, 0.005]
 
   target_update_freq:
     value: 1
 
   mixer_embed_dim:
-    values: [32, 64, 128]
+    values: [32, 64]
 
   data_chunk_length:
     value: 10
 
   num_steps:
-    values: [512, 1024, 2048]
+    values: [512, 1024]
+
   minibatch_size:
-    values: [512, 1024, 2048, 4096]
+    values: [2048, 4096]
+
   update_epochs:
     values: [3, 5, 10]
 

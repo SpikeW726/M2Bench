@@ -1,80 +1,75 @@
-# IQL + MASUPEnv 超参数搜索
+# IQL + MASUPEnv 超参数搜索（LongEdge 导向，小 trial 预算）
 # 用法:
 #   python sweep.py --base-config configs/experiments/masup/iql_masup_longedge.yaml \
-#                   --sweep-config configs/sweep/masup/iql_masup.yaml --count 40
+#                   --sweep-config configs/sweep/masup/iql_masup.yaml --count 24
 #
-# 并行:
+# 并行（先 create-only 再本地/多机跑）:
 #   python sweep.py --base-config configs/experiments/masup/iql_masup_longedge.yaml \
 #                   --sweep-config configs/sweep/masup/iql_masup.yaml --create-only
 #   python sweep.py --base-config configs/experiments/masup/iql_masup_longedge.yaml \
-#                   --sweep-id <ID> --count 15
+#                   --sweep-id <ID> --count 24
 
-method: bayes
+method: random
 
 metric:
-  name: env/wi
+  name: env/wi_fromT
   goal: minimize
-
-early_terminate:
-  type: hyperband
-  min_iter: 1000
-  eta: 3
 
 parameters:
   seed:
     value: 42
   # ---- algo (IQLParams) ----
   lr:
-    min: 5.0e-5
-    max: 5.0e-4
+    min: 3.0e-6
+    max: 3.0e-4
     distribution: log_uniform_values
 
   gamma:
-    values: [0.97, 0.98, 0.99, 0.995]
+    values: [0.98, 0.99, 0.995]
 
+  # 软更新 (tau < 1, freq=1) 与 硬更新 (tau=1.0, freq=200) 均纳入搜索
   tau:
-    values: [1.0]
+    value: 0.005
 
   target_update_freq:
-    values: [100, 200, 500]
+    value: 1
 
   epsilon_start:
     value: 1.0
 
   epsilon_end:
-    min: 0.01
-    max: 0.1
-    distribution: uniform
+    value: 0.05
 
+  # 离散化衰减档位：避免连续区间在少量 trial 下覆盖不足
+  # 参考：每轮 ~64 次 update (num_envs=24, num_steps=64, collect_per_step=24)
+  # 0.9993^600≈0.67, 0.9995^600≈0.74, 0.9997^600≈0.83 → 探索期长度明显不同
   epsilon_decay:
-    min: 0.9993
-    max: 0.9996
-    distribution: uniform
+    values: [0.9993, 0.9995, 0.9997]
 
   max_grad_norm:
-    values: [0.5, 1.0, 10.0]
+    value: 1.0
 
   use_double_dqn:
     value: true
 
-  # ---- training params (映射到 OffPolicyTrainerConfig) ----
+  # ---- training (OffPolicyTrainerConfig) ----
   batch_size:
-    values: [128, 256, 512]
+    values: [256, 512]
 
   buffer_size:
-    values: [20000, 50000, 100000]
+    value: 50000
 
   warmup_steps:
-    values: [2000, 5000, 10000]
+    value: 5000
 
   update_per_step:
-    values: [1, 2]
+    value: 1
 
   collect_per_step:
     value: 24
 
   num_steps:
-    values: [32, 64, 128]
+    values: [64, 128]
 
   total_steps:
     value: 20000000

@@ -20,7 +20,7 @@ env:
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/long_edge/ippo_masup/best_eval.png
+  save_plot: evaluators/results/long_edge/iql_masup/best_eval.png
   show_plot: false
   animation: true
   event_driven: true

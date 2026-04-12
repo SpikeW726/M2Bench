@@ -18,8 +18,8 @@ env:
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/grid/mappo_masup/eval.png
+  save_plot: evaluators/results/grid/ippo_masup/eval.png
   show_plot: false
   animation: true
   event_driven: true
-  max_frames: 500
+  max_frames: 300

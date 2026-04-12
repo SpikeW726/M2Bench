@@ -26,10 +26,10 @@ from policies.rl.rl_base import ValuePolicy
 
 class VDNAlgo(BaseAlgorithm):
     """
-    VDN: Value Decomposition Network。
+    VDN: Value Decomposition Network
 
-    CTDE 范式：分散执行时每个 agent 用自身 Q_i 做 argmax，
-    集中训练时通过 Q_tot = Σ Q_i 的联合 TD loss 更新共享 Q-network。
+    CTDE 范式：分散执行时每个 agent 用自身 Q_i 做 argmax
+    集中训练时通过 Q_tot = Σ Q_i 的联合 TD loss 更新共享 Q-network
 
     同时作为 QMIX 等值分解算法的基类，可 override 的扩展点：
     - _init_mixer(): Mixer 网络创建（VDN=SumMixer 无参数, QMIX=QMIXMixer 含 target_mixer）
@@ -60,7 +60,7 @@ class VDNAlgo(BaseAlgorithm):
         self.target_update_freq = params.target_update_freq
         self.n_agents = n_agents
 
-        # 共享 Q-network（从第一个 agent 取出）
+        # 共享 Q-network
         self.q_network = policy.get_policy(policy.agent_ids[0]).q_network
 
         # Target Q-network
@@ -69,7 +69,7 @@ class VDNAlgo(BaseAlgorithm):
         for p in self.target_q_network.parameters():
             p.requires_grad = False
 
-        # Mixer & Optimizer（子类可 override）
+        # Mixer & Optimizer,子类可 override
         self._init_mixer(n_agents, state_dim, params)
         self._init_optimizer(params)
 
@@ -87,11 +87,11 @@ class VDNAlgo(BaseAlgorithm):
     # ====================================================================
 
     def _init_mixer(self, n_agents: int, state_dim: int, params):
-        """创建 Mixer 网络。VDN 使用无参数的 SumMixer，无需 target_mixer。"""
+        """创建 Mixer 网络,VDN 使用无参数的 SumMixer"""
         self.mixer = SumMixer(n_agents, state_dim)
 
     def _init_optimizer(self, params):
-        """创建优化器。VDN 仅优化 Q-network（SumMixer 无参数）。"""
+        """创建优化器,VDN 仅优化 Q-network"""
         self.optimizer = torch.optim.Adam(
             self.q_network.parameters(), lr=params.lr,
         )
@@ -125,8 +125,8 @@ class VDNAlgo(BaseAlgorithm):
         if isinstance(self.mixer, QMIXMixer):
             if state is None or next_state is None:
                 raise RuntimeError(
-                    "QMIX 需要 TransitionBatch.state / next_state；当前为 None，"
-                    "请确认采集端 collect_state=True 且环境实现 state()。"
+                    "QMIX 需要 TransitionBatch.state / next_state,当前为 None"
+                    "请确认采集端 collect_state=True 且环境实现 state()"
                 )
             if state.shape[0] != B or state.shape[-1] != self.mixer.state_dim:
                 raise RuntimeError(
@@ -145,6 +145,10 @@ class VDNAlgo(BaseAlgorithm):
             next_am_all = torch.stack(
                 [batch_dict[a].next_action_mask for a in agents], dim=1,
             )
+
+        # Active mask: 仅 READY 决策步（ON_EDGE 步 active_mask=0）参与 loss。
+        # MASUP 等事件驱动环境中约 80% 的 transition 为 ON_EDGE，不过滤会严重稀释梯度。
+        active_mask = getattr(first_batch, "active_mask", None)  # (B,)
 
         # --- Online Q-values ---
         q_all = self.q_network(obs_all.view(B * N, -1)).view(B, N, -1)
@@ -166,6 +170,9 @@ class VDNAlgo(BaseAlgorithm):
                     q_next_target = q_next_target.masked_fill(~next_am_all.bool(), float("-inf"))
                 q_next_chosen = q_next_target.max(dim=-1)[0]
 
+            # clamp：action mask 全 False 时 max=-inf，进入 SumMixer 后乘 (1-done) 会产生 0*(-inf)=NaN
+            q_next_chosen = q_next_chosen.clamp(min=-1e9, max=1e9)
+
             # VDN 无 target_mixer（SumMixer 无参数），QMIX 有独立 target_mixer
             target_mixer = getattr(self, "target_mixer", self.mixer)
             q_tot_target = target_mixer(q_next_chosen, next_state)
@@ -175,14 +182,30 @@ class VDNAlgo(BaseAlgorithm):
             else:
                 r_tot = rew_all.sum(dim=-1)   # 各 agent 奖励之和
 
-            td_target = r_tot + self.gamma * (1.0 - done) * q_tot_target
+            # where 替代 *(1-done)：done=1 时 0*(-inf)=NaN，显式置 0 更安全
+            bootstrap = torch.where(done.bool(), torch.zeros_like(q_tot_target), q_tot_target)
+            td_target = r_tot + self.gamma * bootstrap
 
-        loss = F.mse_loss(q_tot, td_target)
+        # Huber TD loss：较 MSE 对大误差更温和，与 D3QN 一致，利于 QRNN 等多步 bootstrap 稳定
+        per_sample_loss = F.smooth_l1_loss(q_tot, td_target, reduction="none")
+        if active_mask is not None:
+            am_sum = active_mask.sum().clamp(min=1)
+            loss = (per_sample_loss * active_mask).sum() / am_sum
+        else:
+            loss = per_sample_loss.mean()
 
+        td_err = (td_target - q_tot).detach().abs()
+        if active_mask is not None:
+            am_sum = active_mask.sum().clamp(min=1)
+            td_err_scalar = (td_err * active_mask).sum().item() / am_sum.item()
+            q_active = q_tot.detach()[active_mask > 0.5]
+        else:
+            td_err_scalar = td_err.mean().item()
+            q_active = q_tot.detach()
         info = {
-            "q_tot_mean": q_tot.detach().mean().item(),
-            "q_tot_max": q_tot.detach().max().item(),
-            "td_error": (td_target - q_tot).detach().abs().mean().item(),
+            "q_tot_mean": q_active.mean().item() if q_active.numel() > 0 else 0.0,
+            "q_tot_max":  q_active.max().item()  if q_active.numel() > 0 else 0.0,
+            "td_error": td_err_scalar,
         }
         return loss, info
 
@@ -217,9 +240,14 @@ class VDNAlgo(BaseAlgorithm):
         next_obs_seq = next_obs_all.permute(1, 0, 2, 3).contiguous().view(T, B * N, -1)
         h0  = self.q_network.get_initial_hidden(B * N, device)
 
-        # --- Online Q ---
-        q_full, _ = self.q_network.forward_sequence(obs_seq, h0)   # (T, B*N, act_dim)
-        q_train   = q_full.view(T, B, N, -1)[bi:]                  # (S, B, N, act_dim)
+        # 全序列拼接：[obs₀…obs_{T-1}] + [obs_T] = [obs₀…obs_T]，长度 T+1
+        # 使用同一条 hidden state 链路同时计算训练 Q 和 bootstrap target Q，
+        # 消除 "对 next_obs_seq 单独从 zeros 起步" 导致的 hidden state 断裂问题。
+        full_obs_seq = torch.cat([obs_seq, next_obs_seq[-1:]], dim=0)  # (T+1, B*N, D)
+        q_full_ext, _ = self.q_network.forward_sequence(full_obs_seq, h0)  # (T+1, B*N, act_dim)
+
+        # 训练 Q：output[bi:T]，hidden 链路与原实现完全一致
+        q_train = q_full_ext.view(T + 1, B, N, -1)[bi:T]  # (S, B, N, act_dim)
 
         act_train = act_all[:, bi:, :].permute(1, 0, 2).unsqueeze(-1)   # (S, B, N, 1)
         q_chosen  = q_train.gather(3, act_train).squeeze(-1)             # (S, B, N)
@@ -237,7 +265,7 @@ class VDNAlgo(BaseAlgorithm):
         with torch.no_grad():
             h0_tgt = self.target_q_network.get_initial_hidden(B * N, device)
 
-            # 可选 action mask
+            # 可选 action mask（切片对齐训练区间 S 步）
             next_am_train = None
             if getattr(first_batch, "next_action_mask", None) is not None:
                 next_am_all = torch.stack(
@@ -246,20 +274,26 @@ class VDNAlgo(BaseAlgorithm):
                 next_am_train = next_am_all[:, bi:, :, :].permute(1, 0, 2, 3)  # (S,B,N,act_dim)
 
             if self.params.use_double_dqn:
-                q_next_online_full, _ = self.q_network.forward_sequence(next_obs_seq, h0)
-                q_next_online = q_next_online_full.view(T, B, N, -1)[bi:]
+                # online net 已在 no_grad 外跑过 full_obs_seq；
+                # bootstrap 区间 output[bi+1:T+1]，detach 阻断 backward
+                q_next_online = q_full_ext.view(T + 1, B, N, -1)[bi + 1:T + 1].detach()  # (S,B,N,A)
                 if next_am_train is not None:
                     q_next_online = q_next_online.masked_fill(~next_am_train.bool(), float("-inf"))
                 next_actions = q_next_online.argmax(dim=-1, keepdim=True)  # (S,B,N,1)
-                q_next_tgt_full, _ = self.target_q_network.forward_sequence(next_obs_seq, h0_tgt)
-                q_next_tgt    = q_next_tgt_full.view(T, B, N, -1)[bi:]
+
+                # target net 同样跑 full_obs_seq，bootstrap 区间 [bi+1:T+1]
+                q_tgt_ext, _ = self.target_q_network.forward_sequence(full_obs_seq, h0_tgt)
+                q_next_tgt   = q_tgt_ext.view(T + 1, B, N, -1)[bi + 1:T + 1]  # (S,B,N,A)
                 q_next_chosen = q_next_tgt.gather(3, next_actions).squeeze(-1)  # (S,B,N)
             else:
-                q_next_tgt_full, _ = self.target_q_network.forward_sequence(next_obs_seq, h0_tgt)
-                q_next_tgt = q_next_tgt_full.view(T, B, N, -1)[bi:]
+                q_tgt_ext, _ = self.target_q_network.forward_sequence(full_obs_seq, h0_tgt)
+                q_next_tgt   = q_tgt_ext.view(T + 1, B, N, -1)[bi + 1:T + 1]  # (S,B,N,A)
                 if next_am_train is not None:
                     q_next_tgt = q_next_tgt.masked_fill(~next_am_train.bool(), float("-inf"))
                 q_next_chosen = q_next_tgt.max(dim=-1)[0]                       # (S,B,N)
+
+            # clamp：action mask 全 False 或 padding 步 max=-inf，进入 SumMixer 后产生 0*(-inf)=NaN
+            q_next_chosen = q_next_chosen.clamp(min=-1e9, max=1e9)
 
             # Mix target → Q_tot_target
             q_next_flat = q_next_chosen.reshape(S * B, N)
@@ -279,13 +313,19 @@ class VDNAlgo(BaseAlgorithm):
                 r_tot = rew_train.sum(dim=-1)      # 各 agent 奖励之和
 
             done_train = done[:, bi:].T            # (S, B)
-            td_target  = r_tot + self.gamma * (1.0 - done_train) * q_tot_target
+            # where 替代 *(1-done)：done=1 时 0*(-inf)=NaN，显式置 0 更安全
+            bootstrap = torch.where(done_train.bool(), torch.zeros_like(q_tot_target), q_tot_target)
+            td_target  = r_tot + self.gamma * bootstrap
 
-        # === 4. 带序列 mask 的 MSE loss ===
-        td_loss     = F.mse_loss(q_tot, td_target, reduction="none")   # (S, B)
-        mask_train  = mask[:, bi:].T                                    # (S, B)
-        denom       = mask_train.sum().clamp(min=1)
-        loss        = (td_loss * mask_train).sum() / denom
+        # === 4. 带序列 mask（+ 可选 active_mask）的 MSE loss ===
+        td_loss    = F.smooth_l1_loss(q_tot, td_target, reduction="none")  # (S, B)
+        mask_train = mask[:, bi:].T                                    # (S, B)
+        # 若 batch 含 active_mask，叠加过滤 ON_EDGE 步
+        raw_am = getattr(first_batch, "active_mask", None)
+        if raw_am is not None:
+            mask_train = mask_train * raw_am[:, bi:].T                 # (S, B)
+        denom = mask_train.sum().clamp(min=1)
+        loss  = (td_loss * mask_train).sum() / denom
 
         info = {
             "q_tot_mean": q_tot.detach().mean().item(),

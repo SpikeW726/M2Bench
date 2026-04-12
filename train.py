@@ -84,6 +84,48 @@ def _maybe_seed_vec_env(vec_env, seed: Optional[int]) -> None:
     vec_env.seed(seed)
 
 
+# WandB：同一进程内多次 train 时按 run.id 重新注册 step 轴
+_WANDB_ENV_STEP_AXIS_RUN_ID: Optional[str] = None
+
+
+def _configure_wandb_env_step_axis() -> None:
+    """注册 global_step 为自定义横轴指标；实际主横轴由 SimpleLogger 的 wandb.log(..., step=) 锁定为环境步数。
+
+    不传 step= 时 WandB 会对每次 log 自增内部计数 → 横轴变成 iteration，与 sweep/直连 train 路径均会不一致。
+    """
+    global _WANDB_ENV_STEP_AXIS_RUN_ID
+    import wandb
+
+    if wandb.run is None:
+        return
+    rid = getattr(wandb.run, "id", None)
+    if rid is None or rid == _WANDB_ENV_STEP_AXIS_RUN_ID:
+        return
+    wandb.define_metric("global_step")
+    wandb.define_metric("*", step_metric="global_step")
+    _WANDB_ENV_STEP_AXIS_RUN_ID = rid
+
+
+# =============================================================================
+#                          随机种子
+# =============================================================================
+
+
+def _set_training_random_seed(seed: int) -> None:
+    """固定 Python / NumPy / PyTorch RNG（训练可复现）。"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _maybe_seed_vec_env(vec_env, seed: Optional[int]) -> None:
+    if seed is None:
+        return
+    vec_env.seed(seed)
+
+
 # =============================================================================
 #                              Logger
 # =============================================================================
@@ -447,8 +489,10 @@ def _train_qtable(config: ExperimentConfig):
                 project=config.wandb_project,
                 name=config.run_name,
                 config=asdict(config),
-                sync_tensorboard=True,
+                # 与 sweep 一致：不同步 TB，避免重复曲线且横轴与 global_step 冲突
+                sync_tensorboard=False,
             )
+        _configure_wandb_env_step_axis()
 
     logger = SimpleLogger(tb_writer, use_wandb=config.track_wandb)
 
@@ -563,8 +607,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
                 project=config.wandb_project,
                 name=config.run_name,
                 config=asdict(config),
-                sync_tensorboard=True,
+                sync_tensorboard=False,
             )
+        _configure_wandb_env_step_axis()
 
     logger = SimpleLogger(tb_writer, use_wandb=config.track_wandb)
 
@@ -623,7 +668,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             device=str(device),
         )
 
-    # ---- 5. 加载预训练权重（仅 on-policy，off-policy 一般不预训练） ----
+    # ---- 5. 加载预训练权重 ----
     value_norm_config = None
     if trainer_type == "on_policy":
         value_norm_config = _load_pretrained(
@@ -631,6 +676,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             config.actor_path, config.critic_path,
             device,
         )
+    elif trainer_type == "off_policy" and config.actor_path and q_net is not None:
+        # off-policy 加载模仿学习预训练的 Q-network 权重（复用 actor_path 字段）
+        _load_pretrained(q_net, None, config.actor_path, None, device)
     else:
         print("[Train] Off-policy algorithm, skipping pretrained weight loading")
 

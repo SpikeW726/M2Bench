@@ -1,0 +1,44 @@
+# masup (VDPPO, MLP Actor) 模仿学习配置
+#
+# 模仿训练阶段用法:
+#   python trainers/imitator/imitation_trainer.py --config configs/imitator/masup_mlp_vdppo.yaml
+#
+# 预训练模式: actor_only
+#   - 只预训练 Actor（BC loss），跳过 Q-network / Mixer
+#   - VDPPO Q-network 采用 RNN 结构并依赖 prev_action，flat 训练意义有限；
+#     Mixer 随机初始化时 TD target 为噪声，Q-net 预训练无实际收益。
+#
+# 用法说明:
+#   预训练完成后，在 VDPPO 实验 YAML 中设置 actor_path 指向 _actor_best/policy.pt，
+#   RL 阶段从该权重热启动，Q-network 和 Mixer 随机初始化后由 RL 自行学习。
+
+# ----- 算法（决定预训练模式：actor_critic / actor_only / q_net）-----
+algo_name: vdppo
+
+# ----- 环境配置（用于自动推断 obs_dim / action_dim / state_dim / num_agents）-----
+env_type: masup
+env_config: configs/eval/masup/masup_grid.yaml
+
+# ----- 网络结构参数 -----
+actor_type: mlp
+
+# ActorMLP 配置
+actor:
+  hidden: [512, 256, 128]
+
+# actor_only 模式：无 critic 段
+
+# ----- 训练超参 -----
+actor_lr: 3.0e-4
+batch_size: 1024
+iteration: 30
+actor_patience: 5
+actor_min_delta: 1.0e-5
+use_value_norm: false
+
+# ----- 数据 & 日志 -----
+data_path: dataset/grid/mappo_masup_a6.h5
+save_dir: models/vdppo-masup-grid-imi
+exp_name: imi_masup_vdppo
+track: false
+wandb_project: MAP-imitation

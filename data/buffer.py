@@ -438,15 +438,8 @@ class SequenceReplayBuffer:
 
         self._total_steps += ep_len
 
-    def sample(self, batch_size: int) -> SequenceBatch:
-        """纯 numpy fancy indexing 采样，零 Python 循环。"""
-        if self._size == 0:
-            raise ValueError("SequenceReplayBuffer is empty")
-        if batch_size > self._size:
-            raise ValueError(f"batch_size ({batch_size}) > buffer size ({self._size})")
-
-        indices = np.random.choice(self._size, size=batch_size, replace=False)
-
+    def _build_seq_batch(self, indices: np.ndarray) -> SequenceBatch:
+        """按给定 indices 构建 SequenceBatch（内部共用逻辑）。"""
         result = SequenceBatch(
             obs=self.obs[indices].copy(),
             act=self.act[indices].copy(),
@@ -459,15 +452,25 @@ class SequenceReplayBuffer:
         if self.has_action_mask:
             result.action_mask = self.action_mask_buf[indices].copy()
             result.next_action_mask = self.next_action_mask_buf[indices].copy()
-
         if self.has_active_mask:
             result.active_mask = self.active_mask_buf[indices].copy()
-
         if self.has_state:
             result.state = self.state_buf[indices].copy()
             result.next_state = self.next_state_buf[indices].copy()
-
         return result
+
+    def sample(self, batch_size: int) -> SequenceBatch:
+        """随机采样，零 Python 循环。"""
+        if self._size == 0:
+            raise ValueError("SequenceReplayBuffer is empty")
+        if batch_size > self._size:
+            raise ValueError(f"batch_size ({batch_size}) > buffer size ({self._size})")
+        indices = np.random.choice(self._size, size=batch_size, replace=False)
+        return self._build_seq_batch(indices)
+
+    def sample_by_indices(self, indices: np.ndarray) -> SequenceBatch:
+        """按外部指定 indices 采样（供 shared_indices 模式使用）。"""
+        return self._build_seq_batch(indices)
 
     def __len__(self) -> int:
         return self._size

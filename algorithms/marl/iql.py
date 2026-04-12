@@ -145,10 +145,14 @@ class IQLAlgo(BaseAlgorithm):
                 )
                 q_next = next_q_target.max(dim=1)[0]
 
+            # clamp：action mask 全 False 时 max=-inf，避免后续 0*(-inf)=NaN
+            q_next = q_next.clamp(min=-1e9, max=1e9)
+            # where 替代 *(1-done)：done=1 时 0*(-inf)=NaN
+            bootstrap = torch.where(dones.bool(), torch.zeros_like(q_next), q_next)
             if gamma_power is not None:
-                td_target = rewards + gamma_power * (1.0 - dones) * q_next
+                td_target = rewards + gamma_power * bootstrap
             else:
-                td_target = rewards + self.gamma * (1.0 - dones) * q_next
+                td_target = rewards + self.gamma * bootstrap
 
         per_sample_loss = F.mse_loss(q_current, td_target, reduction='none')
 
@@ -200,48 +204,46 @@ class IQLAlgo(BaseAlgorithm):
 
         h0 = agent_policy.q_network.get_initial_hidden(B, device)
 
-        q_full, _ = agent_policy.q_network.forward_sequence(obs_seq, h0)  # (T, B, act_dim)
-        q_train = q_full[bi:]  # (S, B, act_dim), S = T - bi
+        T_total = T_total  # noqa: 显式记录原始序列长度，供切片使用
+        # 全序列拼接：[obs₀…obs_{T-1}] + [obs_T]，共享同一条 hidden state 链路
+        full_obs_seq = torch.cat([obs_seq, next_obs_seq[-1:]], dim=0)  # (T+1, B, D)
+        q_full_ext, _ = agent_policy.q_network.forward_sequence(full_obs_seq, h0)  # (T+1, B, act_dim)
+
+        # 训练 Q：output[bi:T]，hidden 链路与原实现完全一致
+        q_train = q_full_ext[bi:T_total]  # (S, B, act_dim)
         act_train = actions[:, bi:].T.unsqueeze(-1)  # (S, B, 1)
         q_current = q_train.gather(2, act_train).squeeze(-1)  # (S, B)
 
         with torch.no_grad():
             h0_target = target_policy.q_network.get_initial_hidden(B, device)
 
+            # _validate_q_action_mask 在 padding 位置（next_action_mask 全 False）
+            # 会抛 RuntimeError，padding 已由 mask_train=0 + clamp 保护，无需校验。
+            next_am = getattr(batch, 'next_action_mask', None)
+            mask_t = None
+            if next_am is not None:
+                next_am_train = next_am[:, bi:].transpose(0, 1)  # (S, B, act_dim)
+                mask_t = next_am_train.bool().to(device)
+
             if self.params.use_double_dqn:
-                next_q_online_full, _ = agent_policy.q_network.forward_sequence(next_obs_seq, h0)
-                next_q_online = next_q_online_full[bi:]
-                next_am = getattr(batch, 'next_action_mask', None)
-                if next_am is not None:
-                    next_am_train = next_am[:, bi:].transpose(0, 1)
-                    mask_t = (
-                        next_am_train.bool()
-                        if next_am_train.dtype != torch.bool
-                        else next_am_train
-                    ).to(device=next_q_online.device)
-                    agent_policy._validate_q_action_mask(
-                        next_q_online, mask_t, "IQL.sequence.DDQN.online_next_q"
-                    )
+                # online net 已跑过 full_obs_seq；bootstrap 区间 detach 阻断 backward
+                next_q_online = q_full_ext[bi + 1:T_total + 1].detach()  # (S, B, act_dim)
+                if mask_t is not None:
                     next_q_online = next_q_online.masked_fill(~mask_t, float("-inf"))
-                next_actions = next_q_online.argmax(dim=-1, keepdim=True)
-                next_q_target_full, _ = target_policy.q_network.forward_sequence(next_obs_seq, h0_target)
-                q_next = next_q_target_full[bi:].gather(2, next_actions).squeeze(-1)
+                next_actions = next_q_online.argmax(dim=-1, keepdim=True)  # (S, B, 1)
+
+                # target net 同样跑 full_obs_seq，取 bootstrap 区间 [bi+1:T+1]
+                next_q_tgt_ext, _ = target_policy.q_network.forward_sequence(full_obs_seq, h0_target)
+                q_next = next_q_tgt_ext[bi + 1:T_total + 1].gather(2, next_actions).squeeze(-1)
             else:
-                next_q_target_full, _ = target_policy.q_network.forward_sequence(next_obs_seq, h0_target)
-                next_q_target = next_q_target_full[bi:]
-                next_am = getattr(batch, 'next_action_mask', None)
-                if next_am is not None:
-                    next_am_train = next_am[:, bi:].transpose(0, 1)
-                    mask_t = (
-                        next_am_train.bool()
-                        if next_am_train.dtype != torch.bool
-                        else next_am_train
-                    ).to(device=next_q_target.device)
-                    agent_policy._validate_q_action_mask(
-                        next_q_target, mask_t, "IQL.sequence.target_next_q"
-                    )
+                next_q_tgt_ext, _ = target_policy.q_network.forward_sequence(full_obs_seq, h0_target)
+                next_q_target = next_q_tgt_ext[bi + 1:T_total + 1]  # (S, B, act_dim)
+                if mask_t is not None:
                     next_q_target = next_q_target.masked_fill(~mask_t, float("-inf"))
-                q_next = next_q_target.max(dim=-1)[0]
+                q_next = next_q_target.max(dim=-1)[0]  # (S, B)
+
+            # clamp：action mask 全 False 或 padding 步 max=-inf，避免 0*(-inf)=NaN
+            q_next = q_next.clamp(min=-1e9, max=1e9)
 
             rew_train = rewards[:, bi:].T  # (S, B)
             done_train = dones[:, bi:].T   # (S, B)
@@ -249,11 +251,14 @@ class IQLAlgo(BaseAlgorithm):
             active_mask = getattr(batch, 'active_mask', None)
             if active_mask is not None:
                 am_train = active_mask[:, bi:].transpose(0, 1)  # (S, B)
+                # _compute_multistep_td_targets 内部已通过 where(reset,...) 显式处理 done 边界，q_next 已 clamp
                 td_target = self._compute_multistep_td_targets(
                     rew_train, q_next, done_train, am_train,
                 )
             else:
-                td_target = rew_train + self.gamma * (1.0 - done_train) * q_next
+                # where 替代 *(1-done)：done=1 时 0*(-inf)=NaN
+                bootstrap = torch.where(done_train.bool(), torch.zeros_like(q_next), q_next)
+                td_target = rew_train + self.gamma * bootstrap
 
         td_loss = F.mse_loss(q_current, td_target, reduction='none')  # (S, B)
         mask_train = mask[:, bi:].transpose(0, 1)  # (S, B)
