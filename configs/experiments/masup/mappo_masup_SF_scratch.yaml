@@ -5,7 +5,7 @@ actor_type: mlp
 critic_type: mlp
 
 # ---- 实验元信息 ----
-exp_name: mappo-scratch-1a
+exp_name: mappo-scratch-3a
 graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
@@ -15,10 +15,10 @@ seed: 42
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
-  deltaT: 20.0
-  num_agents: 1
-  init_positions: [0]
-  # init_positions: [0, 5, 11]
+  deltaT: 1.0
+  num_agents: 3
+  # init_positions: [0]
+  init_positions: [0, 5, 11]
   episode_len: 3000
   custom_configs:
     T: 200.0
