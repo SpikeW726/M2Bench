@@ -55,7 +55,7 @@ class VDPPOAlgo(PPOBase):
         q_network: Optional[nn.Module] = None,
     ):
         super().__init__(policy, None, params, num_envs, value_norm_config=value_norm_config)
-        self.params = params
+        self.reward_global = params.reward_global
         self.n_agents = n_agents
         self.action_dim = action_dim
         self.state_dim = state_dim
@@ -188,7 +188,7 @@ class VDPPOAlgo(PPOBase):
         joint_actions = torch.stack(per_agent_act, dim=-1)          # (T*N, n_agents)
 
         # ---- 团队奖励 r_tot ----
-        if self.params.reward_global:
+        if self.reward_global:
             r_tot = per_agent_rew[0]                                 # 所有 agent reward 相同，取 agent_0
         else:
             r_tot = torch.stack(per_agent_rew, dim=-1).sum(dim=-1)  # 各 agent reward 求和

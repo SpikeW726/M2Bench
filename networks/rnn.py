@@ -74,6 +74,15 @@ class _BaseRNN(nn.Module):
 
         self.fc_out = layer_init(nn.Linear(hidden_size, output_dim), std=output_std)
 
+    def _apply(self, fn):
+        """.to(cuda) / load_state_dict 后 RNN 权重可能非连续，补一次 flatten 抑制 cuDNN 告警与额外拷贝。"""
+        ret = super()._apply(fn)
+        if hasattr(self.rnn, "flatten_parameters"):
+            p0 = next(self.rnn.parameters(), None)
+            if p0 is not None and p0.is_cuda:
+                self.rnn.flatten_parameters()
+        return ret
+
     # -- hidden state helpers ----------------------------------------------
 
     @property
@@ -101,9 +110,11 @@ class _BaseRNN(nn.Module):
 
     def _rnn_forward(self, x_features: torch.Tensor, hidden_state: torch.Tensor):
         """x_features: (seq_len, batch, hidden_size)"""
-        # cuDNN 要求 RNN 权重连续；deepcopy / load_state_dict / 优化器更新后可能碎片化，避免异常与 NaN
-        if x_features.is_cuda and hasattr(self.rnn, "flatten_parameters"):
-            self.rnn.flatten_parameters()
+        # cuDNN GRU：权重须连续；以 RNN 参数 device 为准（避免仅 x 在 cuda 时漏调）
+        if hasattr(self.rnn, "flatten_parameters"):
+            p0 = next(self.rnn.parameters(), None)
+            if p0 is not None and p0.is_cuda:
+                self.rnn.flatten_parameters()
         rnn_state = self._to_rnn_state(hidden_state)
         rnn_out, new_state = self.rnn(x_features, rnn_state)
         return rnn_out, self._from_rnn_state(new_state)

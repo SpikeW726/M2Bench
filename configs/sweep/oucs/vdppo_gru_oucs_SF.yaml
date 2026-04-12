@@ -1,0 +1,87 @@
+# VDPPO + GRU Actor/Q + OUCSEnv + SFcrimemap 超参数搜索
+# Base 与 SF 图、episode_len、num_agents 等与 eval/oucs/oucs_SF.yaml 对齐。
+#
+# 创建并跑 N 个 trial:
+#   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_SF.yaml \
+#                   --sweep-config configs/sweep/oucs/vdppo_gru_oucs_SF.yaml --count 40
+#
+# 仅创建 sweep（多终端并行 agent）:
+#   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_SF.yaml \
+#                   --sweep-config configs/sweep/oucs/vdppo_gru_oucs_SF.yaml --create-only
+#   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_SF.yaml \
+#                   --sweep-id <ID> --count 15
+
+method: bayes
+
+metric:
+  name: env/wi
+  goal: minimize
+
+parameters:
+  seed:
+    value: 42
+
+  actor_lr:
+    min: 0.000005
+    max: 0.001
+    distribution: log_uniform_values
+
+  q_lr:
+    min: 0.00001
+    max: 0.003
+    distribution: log_uniform_values
+
+  clip_range:
+    min: 0.1
+    max: 0.3
+
+  ent_coef:
+    min: 0.001
+    max: 0.2
+    distribution: log_uniform_values
+
+  vf_coef:
+    min: 0.1
+    max: 1.0
+
+  gamma:
+    value: 0.999
+
+  gae_lambda:
+    min: 0.9
+    max: 1.0
+
+  tau:
+    values: [0.01, 0.05]
+
+  target_update_freq:
+    value: 1
+
+  mixer_embed_dim:
+    values: [32, 64, 128]
+
+  data_chunk_length:
+    values: [8, 10, 16]
+
+  minibatch_size:
+    values: [512, 1024]
+
+  update_epochs:
+    values: [3, 5]
+
+  num_steps:
+    values: [512, 1024]
+
+  total_steps:
+    value: 40000000
+
+  save_interval:
+    value: 200
+
+early_terminate:
+  min_trial: 6
+  min_steps: 10000000
+  terminate_ratio: 0.4
+  early_stop_iters: 200
+  slope_horizons: [8, 32, 64]
+  slope_threshold: 1.0e-4
