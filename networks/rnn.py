@@ -137,20 +137,50 @@ class _BaseRNN(nn.Module):
         output = self._head(rnn_out.squeeze(0))         # (batch, output_dim)
         return output, new_hidden
 
-    def forward_sequence(self, obs_seq: torch.Tensor, hidden_state: torch.Tensor):
+    def forward_sequence(
+        self,
+        obs_seq: torch.Tensor,
+        hidden_state: torch.Tensor,
+        done_seq: Optional[torch.Tensor] = None,
+    ):
         """
         序列 forward。
         obs_seq: (seq_len, batch, input_dim)
         hidden_state: (recurrent_N, batch, hidden_size)
+        done_seq: 可选 (seq_len, batch) bool/float。若提供：在送入第 t>0 步前，
+                  对 done_seq[t-1]==1 的 batch 维将 hidden 置零（上一时刻已 episode 结束，
+                  当前步属于新 episode）。用于 rollout 内多段 episode 与 DRQN 对齐。
         Returns: output (seq_len, batch, output_dim), final_hidden
         """
         seq_len, batch, _ = obs_seq.shape
-        x = self.fc_in(obs_seq.reshape(seq_len * batch, -1))
-        x = x.view(seq_len, batch, -1)
-        rnn_out, final_hidden = self._rnn_forward(x, hidden_state)
-        output = self._head(rnn_out.reshape(seq_len * batch, -1))
-        output = output.view(seq_len, batch, -1)
-        return output, final_hidden
+        if done_seq is None:
+            x = self.fc_in(obs_seq.reshape(seq_len * batch, -1))
+            x = x.view(seq_len, batch, -1)
+            rnn_out, final_hidden = self._rnn_forward(x, hidden_state)
+            output = self._head(rnn_out.reshape(seq_len * batch, -1))
+            output = output.view(seq_len, batch, -1)
+            return output, final_hidden
+
+        if done_seq.shape != (seq_len, batch):
+            raise ValueError(
+                f"done_seq must be (seq_len, batch)={(seq_len, batch)}, got {tuple(done_seq.shape)}"
+            )
+
+        h = hidden_state.clone()
+        out_list: List[torch.Tensor] = []
+        for t in range(seq_len):
+            if t > 0:
+                d = done_seq[t - 1]
+                if d.dtype != torch.bool:
+                    d = d > 0.5
+                if d.any():
+                    h[:, d, :] = 0
+            xf = self.fc_in(obs_seq[t]).unsqueeze(0)  # (1, batch, enc_dim)
+            rnn_out, h = self._rnn_forward(xf, h)
+            out_t = self._head(rnn_out.squeeze(0))
+            out_list.append(out_t)
+        output = torch.stack(out_list, dim=0)
+        return output, h
 
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:
         return {
