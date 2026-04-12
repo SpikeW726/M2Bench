@@ -127,6 +127,21 @@ class RolloutBatch(BaseBatch):
     # 由 prepare_batch 在处理 RNN critic 序列时填充。
     critic_rnn_hidden: torch.Tensor | np.ndarray = None
 
+    def __getitem__(self, indices) -> Self:
+        """按 transition 索引 batch；boundary_global_state 为 (N, *) 非 (T*N, *)，不参与切片。"""
+        kwargs = {}
+        for f in fields(self):
+            val = getattr(self, f.name)
+            if val is None:
+                kwargs[f.name] = None
+            elif f.name == "boundary_global_state":
+                kwargs[f.name] = val
+            elif isinstance(val, (np.ndarray, torch.Tensor)):
+                kwargs[f.name] = val[indices]
+            else:
+                kwargs[f.name] = val
+        return self.__class__(**kwargs)
+
     # -----------------------------------------------------------------
     #  chunk_split: RNN chunk-based minibatch splitting
     # -----------------------------------------------------------------
@@ -208,6 +223,11 @@ class RolloutBatch(BaseBatch):
 
                 if f.name in ("final_global_state", "final_obs"):
                     kwargs[f.name] = None
+                    continue
+
+                # (N, state_dim)，与 T*N 步不对齐；各 minibatch 原样携带即可（如 VDPPO）
+                if f.name == "boundary_global_state":
+                    kwargs[f.name] = val
                     continue
 
                 if not isinstance(val, torch.Tensor):
