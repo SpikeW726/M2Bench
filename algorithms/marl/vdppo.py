@@ -18,6 +18,11 @@ from networks.mixing import QPLEXMixer
 from policies.marl.marl_base import MultiAgentPolicy
 
 
+def _as_q_logits(q_forward_ret):
+    """Q-network forward：QMLP 返回 Tensor；QRNN 等返回 (logits, hidden)。"""
+    return q_forward_ret[0] if isinstance(q_forward_ret, tuple) else q_forward_ret
+
+
 class VDPPOAlgo(PPOBase):
     """
     VDPPO: PPO actor 更新 + QPLEX 值分解 + 双优化器。
@@ -177,7 +182,7 @@ class VDPPOAlgo(PPOBase):
                 one_hot[:, i] = 1.0
                 q_in = torch.cat([global_state, one_hot], dim=-1)
 
-                Q_i = self.q_network(q_in)                          # (T*N, action_dim)
+                Q_i = _as_q_logits(self.q_network(q_in))            # (T*N, action_dim)
                 V_i = Q_i.max(dim=-1).values                        # (T*N,)
                 A_i = (
                     Q_i.gather(1, per_agent_act[i].unsqueeze(-1)).squeeze(-1) - V_i
@@ -213,8 +218,8 @@ class VDPPOAlgo(PPOBase):
                 one_hot[:, i] = 1.0
                 q_in = torch.cat([next_flat, one_hot], dim=-1)
 
-                greedy = self.q_network(q_in).argmax(dim=-1)        # (T*N,)
-                Q_tgt = self.target_q_network(q_in)                 # (T*N, action_dim)
+                greedy = _as_q_logits(self.q_network(q_in)).argmax(dim=-1)  # (T*N,)
+                Q_tgt = _as_q_logits(self.target_q_network(q_in))   # (T*N, action_dim)
                 V_tgt_i = Q_tgt.gather(1, greedy.unsqueeze(-1)).squeeze(-1)
                 target_v_next.append(V_tgt_i)
 
@@ -337,7 +342,7 @@ class VDPPOAlgo(PPOBase):
                     oh = torch.zeros(mb_len, self.n_agents, device=self.device)
                     oh[:, i] = 1.0
                     q_in = torch.cat([s_mb, oh], dim=-1)
-                    Q_i = self.q_network(q_in)
+                    Q_i = _as_q_logits(self.q_network(q_in))
                     V_i = Q_i.max(dim=-1).values
                     A_i = Q_i.gather(1, ja_mb[:, i].unsqueeze(-1)).squeeze(-1) - V_i
                     v_list.append(V_i)
@@ -526,7 +531,7 @@ class VDPPOAlgo(PPOBase):
             one_hot = torch.zeros(len(batch_states), num_agents, device=device)
             one_hot[:, agent_idx] = 1.0
             q_in = torch.cat([states_t, one_hot], dim=-1)
-            Q_i = self.q_network(q_in)
+            Q_i = _as_q_logits(self.q_network(q_in))
             V_i = Q_i.max(dim=-1).values
 
             for vi, k in enumerate(valid_k_indices):
