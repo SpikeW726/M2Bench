@@ -653,13 +653,11 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             device=str(device),
         )
     if config.q_type and config.q_network is not None:
-        if config.algo_name == "vdppo" and config.q_type == "rnn":
-            # VDPPO RNN Q-network 额外输入 prev_action one-hot
-            q_input_dim = dims["state_dim"] + dims["num_agents"] + dims["action_dim"]
-        elif get_policy_type(config.algo_name) == "actor":
-            q_input_dim = dims["state_dim"] + dims["num_agents"]
-        else:
-            q_input_dim = dims["obs_dim"]
+        q_input_dim = (
+            dims["state_dim"] + dims["num_agents"]
+            if get_policy_type(config.algo_name) == "actor"
+            else dims["obs_dim"]
+        )
         q_net = create_q_network(
             q_type=config.q_type,
             q_config=config.q_network,

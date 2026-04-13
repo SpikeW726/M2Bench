@@ -31,28 +31,29 @@ env:
 
 # ---- 算法 ----
 algo:
-  lr: 1.0e-4
-  gamma: 0.99
+  lr: 0.00004552319235447177
+  gamma: 0.98
   tau: 1.0
-  target_update_freq: 200
+  target_update_freq: 100
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_steps: 598
+  epsilon_decay_steps: 500000
   use_double_dqn: true
   shared_policy: true
   reward_global: true
+  max_grad_norm: 1
 
 # ---- 训练 ----
 training:
   num_envs: 24
   use_subproc: true
-  num_steps: 64
+  num_steps: 128
   total_steps: 10000000
   save_interval: 500
   batch_size: 256
   warmup_steps: 5000
   buffer_size: 50000
-  collect_per_step: 24
+  collect_per_step: 16
   update_per_step: 1
 
 # ---- Q-network ----

@@ -1,10 +1,10 @@
-# VDPPO (MLP) + MASUPEnv (SF / SFcrimemap)
+# VDPPO + MASUPEnv (SF / SFcrimemap) + MASUP 异构预处理（Actor MLP + Q GRU）
 # 用法: python train.py configs/experiments/masup/vdppo_masup_SF.yaml
 
 algo_name: vdppo
 env_type: masup
-actor_type: mlp
-q_type: rnn
+actor_type: masup_mlp
+q_type: masup_vdppo_rnn
 
 exp_name: vdppo-SF
 graph_name: SF
@@ -15,7 +15,8 @@ seed: 42
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
-  deltaT: 0.333
+  deltaT: 20.0
+  norm_reward: true
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
@@ -54,8 +55,26 @@ training:
   update_epochs: 5
 
 actor:
+  # MASUP 异构预处理（须与 env.custom_configs 一致）
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  num_nodes: 12
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 200.0
   hidden: [256, 256]
+
 q_network:
+  # state 段预处理器；one_hot / prev_act 段直通（内部 role 占位为 agent-index）
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  num_nodes: 12
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 200.0
   rnn_type: gru
   hidden_size: 64
   num_layers: 1

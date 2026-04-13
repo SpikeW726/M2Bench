@@ -32,15 +32,15 @@ env:
 # ---- 算法 ----
 algo:
   use_active_mask: true
-  actor_lr: 5.0e-4
-  q_lr: 5.0e-4
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  vf_coef: 0.5
-  ent_coef: 0.01
+  actor_lr: 0.0008729125567828052
+  q_lr: 0.00023306508346791785
+  gamma: 0.999
+  gae_lambda: 0.9727239324876372
+  clip_range: 0.13870308892931396
+  vf_coef: 0.7376251138119195
+  ent_coef: 0.01491300639494596
   target_kl: 0.3
-  tau: 0.1
+  tau: 0.04216615809781592
   target_update_freq: 1
   q_clip_range: null
   mixer_embed_dim: 64
@@ -54,7 +54,7 @@ training:
   total_steps: 10000000
   save_interval: 1000
   minibatch_size: 4096
-  update_epochs: 5
+  update_epochs: 10
 
 # ---- 网络 ----
 actor:

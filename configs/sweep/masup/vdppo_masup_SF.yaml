@@ -1,4 +1,8 @@
-# VDPPO + MASUP SF 超参数搜索（MLP actor）
+# VDPPO + MASUP SF 超参数搜索
+# 基线 configs/experiments/masup/vdppo_masup_SF.yaml 已含：
+#   masup_mlp / masup_vdppo_rnn、env.norm_reward、actor/q_network 预处理字段。
+# sweep 仅覆盖 algo / training / custom_configs.*（见 apply_sweep_overrides）。
+#
 # 用法:
 #   python sweep.py --base-config configs/experiments/masup/vdppo_masup_SF.yaml \
 #                   --sweep-config configs/sweep/masup/vdppo_masup_SF.yaml --count 40
@@ -12,6 +16,13 @@ metric:
 parameters:
   seed:
     value: 42
+
+  # 与基线 YAML 一致（MASUP 预处理 + VDPPO RNN Q）；勿改为 mlp/rnn 以免与 actor/q_network 段不匹配
+  actor_type:
+    value: masup_mlp
+  q_type:
+    value: masup_vdppo_rnn
+
   actor_lr:
     min: 1.0e-6
     max: 0.002
