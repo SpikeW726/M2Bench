@@ -4,7 +4,7 @@ from typing import Any, List
 import numpy as np
 
 from envs.venvs import BaseVectorEnv
-from utils.log_utils import RunningMeanStd
+from utils.log_utils import RunningMeanStd as NumpyRMS
 
 
 class VectorEnvWrapper(BaseVectorEnv):
@@ -75,7 +75,7 @@ class VectorEnvNormObs(VectorEnvWrapper):
     ):
         super().__init__(venv)
         self.update_obs_rms = update_obs_rms
-        self.obs_rms = RunningMeanStd(clip_max=clip_max)
+        self.obs_rms = NumpyRMS(clip_max=clip_max)
     
     def reset(self, env_id=None, **kwargs):
         obs, info = self.venv.reset(env_id, **kwargs)
@@ -89,10 +89,49 @@ class VectorEnvNormObs(VectorEnvWrapper):
             self.obs_rms.update(obs)
         return self.obs_rms.norm(obs), rew, term, trunc, info
     
-    def set_obs_rms(self, obs_rms: RunningMeanStd) -> None:
+    def set_obs_rms(self, obs_rms: NumpyRMS) -> None:
         """设置观测统计量（用于加载已保存的统计）。"""
         self.obs_rms = obs_rms
     
-    def get_obs_rms(self) -> RunningMeanStd:
+    def get_obs_rms(self) -> NumpyRMS:
         """获取观测统计量（用于保存）。"""
         return self.obs_rms
+
+
+class VectorEnvNormReward(VectorEnvWrapper):
+    """
+    奖励标准差缩放包装器。
+
+    只除以运行标准差，不减均值，保留 MDP 核心逻辑（生存惩罚等绝对语义）。
+
+    Args:
+        venv: 被包装的向量化环境
+        update_rew_rms: 是否在 step 时更新统计量
+        clip_max: 缩放后裁剪范围，None 表示不裁剪
+    """
+
+    def __init__(
+        self,
+        venv: BaseVectorEnv,
+        update_rew_rms: bool = True,
+        clip_max: float | None = None,
+    ):
+        super().__init__(venv)
+        self.update_rew_rms = update_rew_rms
+        # clip_max=None 不裁剪；初始 std=1 保证启动时无缩放
+        self.rew_rms = NumpyRMS(clip_max=clip_max)
+
+    def step(self, actions, env_id=None):
+        obs, rew, term, trunc, info = self.venv.step(actions, env_id)
+        if self.update_rew_rms:
+            self.rew_rms.update(rew)
+        normed = rew / np.sqrt(self.rew_rms.var + self.rew_rms.eps)
+        return obs, normed, term, trunc, info
+
+    def set_reward_rms(self, rms: NumpyRMS) -> None:
+        """设置奖励统计量（用于加载已保存的统计）。"""
+        self.rew_rms = rms
+
+    def get_reward_rms(self) -> NumpyRMS:
+        """获取奖励统计量（用于保存）。"""
+        return self.rew_rms

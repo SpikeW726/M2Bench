@@ -43,6 +43,10 @@ class RunningMeanStd(nn.Module):
         self.var = new_var
         self.count = tot_count
 
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        """归一化：(x - mean) / std，供网络内 obs 字段预处理使用。"""
+        return (x - self.mean) / torch.sqrt(self.var + self.epsilon)
+
     @property
     def std(self):
         return torch.sqrt(self.var + self.epsilon)

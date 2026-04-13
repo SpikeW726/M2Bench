@@ -24,6 +24,11 @@ from configs.training_configs import (
 )
 from configs.network_configs import (
     NetworkConfig, MLPConfig, RNNConfig, QMLPConfig, QRNNConfig, SUNConfig, MPNNConfig, SAGEConfig,
+    MASUPBaseConfig,
+    MASUPActorConfig, MASUPActorRNNConfig,
+    MASUPCriticConfig, MASUPCriticRNNConfig,
+    MASUPQConfig, MASUPQRNNConfig,
+    MASUPVDPPOQConfig, MASUPVDPPOQRNNConfig,
 )
 from configs.exp_configs import ExperimentConfig
 
@@ -169,17 +174,28 @@ ACTOR_REGISTRY: Dict[str, Dict[str, Any]] = {
     "sun": {"module": "networks.custom.suns", "class_name": "SUNActor", "config_class": SUNConfig},
     "mpnn": {"module": "networks.gnn", "class_name": "MPNNActor", "config_class": MPNNConfig},
     "sage": {"module": "networks.gnn", "class_name": "GraphSageActor", "config_class": SAGEConfig},
+    # MASUP 专供网络
+    "masup_mlp": {"module": "networks.custom.masup_nets", "class_name": "MASUPActorMLP", "config_class": MASUPActorConfig},
+    "masup_rnn": {"module": "networks.custom.masup_nets", "class_name": "MASUPActorRNN", "config_class": MASUPActorRNNConfig},
 }
 
 CRITIC_REGISTRY: Dict[str, Dict[str, Any]] = {
     "mlp": {"module": "networks.mlp", "class_name": "CriticMLP", "config_class": MLPConfig},
     "rnn": {"module": "networks.rnn", "class_name": "CriticRNN", "config_class": RNNConfig},
     "sun": {"module": "networks.custom.suns", "class_name": "SUNCritic", "config_class": SUNConfig},
+    # MASUP 专供网络
+    "masup_mlp": {"module": "networks.custom.masup_nets", "class_name": "MASUPCriticMLP", "config_class": MASUPCriticConfig},
+    "masup_rnn": {"module": "networks.custom.masup_nets", "class_name": "MASUPCriticRNN", "config_class": MASUPCriticRNNConfig},
 }
 
 Q_NETWORK_REGISTRY: Dict[str, Dict[str, Any]] = {
     "mlp": {"module": "networks.mlp", "class_name": "QMLP", "config_class": QMLPConfig},
     "rnn": {"module": "networks.rnn", "class_name": "QRNN", "config_class": QRNNConfig},
+    # MASUP 专供网络
+    "masup_q_mlp": {"module": "networks.custom.masup_nets", "class_name": "MASUPQMLP", "config_class": MASUPQConfig},
+    "masup_q_rnn": {"module": "networks.custom.masup_nets", "class_name": "MASUPQRNN", "config_class": MASUPQRNNConfig},
+    "masup_vdppo_mlp": {"module": "networks.custom.masup_nets", "class_name": "MASUPVDPPOQmlp", "config_class": MASUPVDPPOQConfig},
+    "masup_vdppo_rnn": {"module": "networks.custom.masup_nets", "class_name": "MASUPVDPPOQrnn", "config_class": MASUPVDPPOQRNNConfig},
 }
 
 # ---- 训练器 (运行时实例) ----
@@ -316,11 +332,42 @@ def create_actor(
     action_dim: int,
     device: str = "cpu",
 ) -> nn.Module:
-    """创建 Actor 网络 (ActorMLP / ActorRNN / SUNActor)。"""
+    """创建 Actor 网络 (ActorMLP / ActorRNN / SUNActor / MASUP 专供)。"""
     entry = ACTOR_REGISTRY[actor_type]
     cls = _import_class(entry["module"], entry["class_name"])
 
-    if isinstance(actor_config, SUNConfig):
+    if isinstance(actor_config, MASUPActorRNNConfig):
+        return cls(
+            graph_path=actor_config.graph_path,
+            num_agents=actor_config.num_agents,
+            num_nodes=actor_config.num_nodes,
+            role_imformation=actor_config.role_imformation,
+            gpe_dim=actor_config.gpe_dim,
+            proj_dim=actor_config.proj_dim,
+            use_log_idleness=actor_config.use_log_idleness,
+            T_time=actor_config.T_time,
+            hidden_size=actor_config.hidden_size,
+            output_dim=action_dim,
+            input_dim=obs_dim,
+            num_layers=actor_config.num_layers,
+            rnn_type=actor_config.rnn_type,
+            fc_hidden=actor_config.fc_hidden or None,
+        ).to(device)
+    elif isinstance(actor_config, MASUPActorConfig):
+        return cls(
+            graph_path=actor_config.graph_path,
+            num_agents=actor_config.num_agents,
+            num_nodes=actor_config.num_nodes,
+            role_imformation=actor_config.role_imformation,
+            gpe_dim=actor_config.gpe_dim,
+            proj_dim=actor_config.proj_dim,
+            use_log_idleness=actor_config.use_log_idleness,
+            T_time=actor_config.T_time,
+            hidden=actor_config.hidden,
+            output_dim=action_dim,
+            input_dim=obs_dim,
+        ).to(device)
+    elif isinstance(actor_config, SUNConfig):
         return cls(
             obs_dim=obs_dim,
             num_nodes=actor_config.num_nodes,
@@ -350,11 +397,42 @@ def create_critic(
     critic_input_dim: int,
     device: str = "cpu",
 ) -> nn.Module:
-    """创建 Critic 网络 (CriticMLP / CriticRNN / SUNCritic)。"""
+    """创建 Critic 网络 (CriticMLP / CriticRNN / SUNCritic / MASUP 专供)。"""
     entry = CRITIC_REGISTRY[critic_type]
     cls = _import_class(entry["module"], entry["class_name"])
 
-    if isinstance(critic_config, SUNConfig):
+    if isinstance(critic_config, MASUPCriticRNNConfig):
+        return cls(
+            graph_path=critic_config.graph_path,
+            num_agents=critic_config.num_agents,
+            num_nodes=critic_config.num_nodes,
+            role_imformation=critic_config.role_imformation,
+            gpe_dim=critic_config.gpe_dim,
+            proj_dim=critic_config.proj_dim,
+            use_log_idleness=critic_config.use_log_idleness,
+            T_time=critic_config.T_time,
+            hidden_size=critic_config.hidden_size,
+            input_dim=critic_input_dim,
+            input_mode=critic_config.input_mode,
+            num_layers=critic_config.num_layers,
+            rnn_type=critic_config.rnn_type,
+            fc_hidden=critic_config.fc_hidden or None,
+        ).to(device)
+    elif isinstance(critic_config, MASUPCriticConfig):
+        return cls(
+            graph_path=critic_config.graph_path,
+            num_agents=critic_config.num_agents,
+            num_nodes=critic_config.num_nodes,
+            role_imformation=critic_config.role_imformation,
+            gpe_dim=critic_config.gpe_dim,
+            proj_dim=critic_config.proj_dim,
+            use_log_idleness=critic_config.use_log_idleness,
+            T_time=critic_config.T_time,
+            hidden=critic_config.hidden,
+            input_dim=critic_input_dim,
+            input_mode=critic_config.input_mode,
+        ).to(device)
+    elif isinstance(critic_config, SUNConfig):
         return cls(
             obs_dim=critic_input_dim,
             num_nodes=critic_config.num_nodes,
@@ -383,12 +461,76 @@ def create_q_network(
     action_dim: int,
     device: str = "cpu",
 ) -> nn.Module:
-    """创建 Q-network (QMLP / QRNN)。"""
+    """创建 Q-network (QMLP / QRNN / MASUP 专供)。"""
     entry = Q_NETWORK_REGISTRY[q_type]
     cls = _import_class(entry["module"], entry["class_name"])
     dueling = getattr(q_config, "dueling", False)
 
-    if isinstance(q_config, QRNNConfig):
+    if isinstance(q_config, MASUPVDPPOQRNNConfig):
+        return cls(
+            graph_path=q_config.graph_path,
+            num_agents=q_config.num_agents,
+            num_nodes=q_config.num_nodes,
+            gpe_dim=q_config.gpe_dim,
+            proj_dim=q_config.proj_dim,
+            use_log_idleness=q_config.use_log_idleness,
+            T_time=q_config.T_time,
+            hidden_size=q_config.hidden_size,
+            output_dim=action_dim,
+            input_dim=input_dim,
+            num_layers=q_config.num_layers,
+            rnn_type=q_config.rnn_type,
+            dueling=dueling,
+            fc_hidden=q_config.fc_hidden or None,
+        ).to(device)
+    elif isinstance(q_config, MASUPVDPPOQConfig):
+        return cls(
+            graph_path=q_config.graph_path,
+            num_agents=q_config.num_agents,
+            num_nodes=q_config.num_nodes,
+            gpe_dim=q_config.gpe_dim,
+            proj_dim=q_config.proj_dim,
+            use_log_idleness=q_config.use_log_idleness,
+            T_time=q_config.T_time,
+            hidden=q_config.hidden,
+            output_dim=action_dim,
+            input_dim=input_dim,
+            dueling=dueling,
+        ).to(device)
+    elif isinstance(q_config, MASUPQRNNConfig):
+        return cls(
+            graph_path=q_config.graph_path,
+            num_agents=q_config.num_agents,
+            num_nodes=q_config.num_nodes,
+            role_imformation=q_config.role_imformation,
+            gpe_dim=q_config.gpe_dim,
+            proj_dim=q_config.proj_dim,
+            use_log_idleness=q_config.use_log_idleness,
+            T_time=q_config.T_time,
+            hidden_size=q_config.hidden_size,
+            output_dim=action_dim,
+            input_dim=input_dim,
+            num_layers=q_config.num_layers,
+            rnn_type=q_config.rnn_type,
+            dueling=dueling,
+            fc_hidden=q_config.fc_hidden or None,
+        ).to(device)
+    elif isinstance(q_config, MASUPQConfig):
+        return cls(
+            graph_path=q_config.graph_path,
+            num_agents=q_config.num_agents,
+            num_nodes=q_config.num_nodes,
+            role_imformation=q_config.role_imformation,
+            gpe_dim=q_config.gpe_dim,
+            proj_dim=q_config.proj_dim,
+            use_log_idleness=q_config.use_log_idleness,
+            T_time=q_config.T_time,
+            hidden=q_config.hidden,
+            output_dim=action_dim,
+            input_dim=input_dim,
+            dueling=dueling,
+        ).to(device)
+    elif isinstance(q_config, QRNNConfig):
         return cls(
             input_dim=input_dim,
             hidden_size=q_config.hidden_size,

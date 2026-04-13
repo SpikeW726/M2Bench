@@ -49,6 +49,12 @@ def _get_class_registry() -> Dict[str, type]:
     from networks.rnn import ActorRNN, CriticRNN, QRNN
     from networks.custom.suns import SUNActor, SUNCritic
     from networks.gnn import MPNNActor, GraphSageActor
+    from networks.custom.masup_nets import (
+        MASUPActorMLP, MASUPActorRNN,
+        MASUPCriticMLP, MASUPCriticRNN,
+        MASUPQMLP, MASUPQRNN,
+        MASUPVDPPOQmlp, MASUPVDPPOQrnn,
+    )
 
     return {
         "ActorMLP": ActorMLP,
@@ -61,6 +67,15 @@ def _get_class_registry() -> Dict[str, type]:
         "SUNCritic": SUNCritic,
         "MPNNActor": MPNNActor,
         "GraphSageActor": GraphSageActor,
+        # MASUP 专供网络
+        "MASUPActorMLP": MASUPActorMLP,
+        "MASUPActorRNN": MASUPActorRNN,
+        "MASUPCriticMLP": MASUPCriticMLP,
+        "MASUPCriticRNN": MASUPCriticRNN,
+        "MASUPQMLP": MASUPQMLP,
+        "MASUPQRNN": MASUPQRNN,
+        "MASUPVDPPOQmlp": MASUPVDPPOQmlp,
+        "MASUPVDPPOQrnn": MASUPVDPPOQrnn,
     }
 
 
