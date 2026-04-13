@@ -328,7 +328,7 @@ class OffPolicyTrainer(BaseTrainer):
             if self.collector.can_sample(self.batch_size):
                 for _ in range(self.update_per_step):
                     batch = self.collector.sample(self.batch_size)
-                    stats = self.algorithm.update(batch)
+                    stats = self.algorithm.update(batch, global_step=self.total_steps)
                     all_stats.append(stats)
 
         iter_result: Dict[str, Any] = {

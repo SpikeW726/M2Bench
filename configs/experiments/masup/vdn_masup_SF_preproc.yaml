@@ -1,12 +1,11 @@
-# VDN + MASUPEnv (SF / SFcrimemap)，Q-network 为 QRNN (DRQN 风格序列训练)
-# 用法: python train.py configs/experiments/masup/vdn_masup_SF.yaml
+# VDN + MASUPEnv (SF / SFcrimemap) + MASUP 异构预处理
+# 用法: python train.py configs/experiments/masup/vdn_masup_SF_preproc.yaml
 
 algo_name: vdn
 env_type: masup
-# q_type: rnn
-q_type: mlp
+q_type: masup_q_mlp
 
-exp_name: vdn-SF
+exp_name: vdn-SF-preproc
 graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
@@ -15,7 +14,8 @@ seed: 42
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
-  deltaT: 0.333
+  deltaT: 20.0
+  norm_reward: true
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
@@ -29,34 +29,38 @@ env:
 
 algo:
   lr: 1.0e-6
-  gamma: 0.99
+  gamma: 0.995
   tau: 1.0
   target_update_freq: 200
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_steps: 59914
-  use_double_dqn: false
+  epsilon_decay_steps: 8000000
+  use_double_dqn: true
   shared_policy: true
   reward_global: false
-  # # RNN Q-network：EpisodeReplayBuffer + 固定长度子序列训练
-  # seq_len: 20
-  # max_episodes: 5000
 
 training:
-  num_envs: 64
+  num_envs: 108
   use_subproc: true
-  num_steps: 512
-  total_steps: 10000000
+  num_steps: 64
+  total_steps: 20000000
   save_interval: 500
-  batch_size: 256
+  batch_size: 512
   warmup_steps: 5000
-  buffer_size: 50000
-  collect_per_step: 16
+  buffer_size: 100000
+  collect_per_step: 64
   update_per_step: 1
 
 q_network:
-  # rnn_type: gru
-  # hidden_size: 128
-  # num_layers: 1
+  # ===== MASUP 异构预处理参数 =====
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  num_nodes: 12
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 200.0
+  # ===== Q-network 主干参数 =====
   hidden: [256, 256]
   dueling: false

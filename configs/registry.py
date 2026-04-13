@@ -554,8 +554,13 @@ def create_vec_env(
     num_envs: int,
     use_subproc: bool = True,
 ):
-    """创建向量化环境。"""
+    """创建向量化环境。
+
+    当 env_config.norm_reward=True 时，外包 VectorEnvNormReward：
+    仅按运行标准差缩放 reward，不减均值。
+    """
     from envs.venvs import DummyVectorEnv, SubprocVectorEnv
+    from envs.venv_wrappers import VectorEnvNormReward
 
     entry = ENV_REGISTRY[env_type]
     env_cls = _import_class(entry["module"], entry["class_name"])
@@ -564,8 +569,14 @@ def create_vec_env(
     env_fns = [lambda: env_cls(cfg_dict, **custom_dict) for _ in range(num_envs)]
 
     if use_subproc:
-        return SubprocVectorEnv(env_fns)
-    return DummyVectorEnv(env_fns)
+        vec_env = SubprocVectorEnv(env_fns)
+    else:
+        vec_env = DummyVectorEnv(env_fns)
+
+    if getattr(env_config, "norm_reward", False):
+        vec_env = VectorEnvNormReward(vec_env)
+
+    return vec_env
 
 
 def create_algorithm(

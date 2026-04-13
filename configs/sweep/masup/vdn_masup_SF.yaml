@@ -56,8 +56,8 @@ parameters:
   #   0.9995 → ~6000 updates（~94 轮，~14% 总步数）后触底：适合中等探索期
   #   0.9998 → ~15000 updates（~234 轮，~36% 总步数）后触底：适合长探索期
   # SF 全连接图随机策略覆盖所有方向，探索效率优于稀疏图；中快衰减即可
-  epsilon_decay:
-    values: [0.9990, 0.9995, 0.9998]
+  epsilon_decay_steps:
+    values: [2995, 5990, 14978]
 
   max_grad_norm:
     value: 1.0

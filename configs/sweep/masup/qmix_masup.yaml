@@ -50,9 +50,9 @@ parameters:
     max: 0.1
     distribution: uniform
 
-  epsilon_decay:
-    min: 0.9993
-    max: 0.9996
+  epsilon_decay_steps:
+    min: 3000
+    max: 12000
     distribution: uniform
 
   max_grad_norm:

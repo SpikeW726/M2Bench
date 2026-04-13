@@ -24,6 +24,10 @@ class EnvConfig(ToStringMixin):
     episode_len: int = 300             # step 数或最大时间 (取决于 truncate_by_time)
     max_time_for_obs: Optional[float] = None
 
+    # 奖励预处理开关：True 时使用 VectorEnvNormReward（只除 std，不减 mean）
+    # False 时保持当前 pipeline 行为不变（默认）
+    norm_reward: bool = False
+
     # 边上运动时间随机扰动（双轨设计：obs 始终用名义时间，物理到达由扰动时间驱动）
     edge_time_jitter: bool = False              # 是否开启扰动
     edge_time_jitter_frac: float = 0.1         # 扰动幅度 ε，实际时间 ∈ [T*(1-ε), T*(1+ε)]

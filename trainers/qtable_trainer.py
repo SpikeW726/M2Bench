@@ -99,7 +99,7 @@ class QTableTrainer:
             self.total_steps += ep_result["steps"]
             episode_rewards.append(ep_result["mean_reward"])
 
-            self.algo.decay_epsilon()
+            self.algo.update_epsilon(self.total_steps)
 
             if ep_result["mean_reward"] > self.best_reward:
                 self.best_reward = ep_result["mean_reward"]
@@ -428,7 +428,7 @@ class JointQTableTrainer:
             self.total_steps += ep_result["steps"]
             episode_rewards.append(ep_result["mean_reward"])
 
-            self.algo.decay_epsilon()
+            self.algo.update_epsilon(self.total_steps)
 
             if ep_result["mean_reward"] > self.best_reward:
                 self.best_reward = ep_result["mean_reward"]

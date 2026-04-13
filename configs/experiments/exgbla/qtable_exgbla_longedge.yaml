@@ -1,33 +1,28 @@
-# Q-table + ExGBLA 环境 (LongEdge) — 3 agents
-# episode_len=100 → N_ep≈10M/(4*100)=25000；epsilon_decay 接近 1
-# 用法: python train.py configs/experiments/exgbla/qtable_ex_gbla_longedge.yaml
-
 algo_name: qtable
 env_type: ex_gbla
-
 exp_name: qtable-ex_gbla-longedge
 graph_name: long_edge
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
-
 env:
   graph_path: graphs/long_edge.json
   enable_wait: false
   num_agents: 3
-  init_positions: [0, 1, 2]
+  init_positions:
+  - 0
+  - 1
+  - 2
   episode_len: 100
   custom_configs:
     truncate_by_time: true
-
 algo:
   lr: 0.1
   gamma: 0.99
   epsilon_start: 0.1
   epsilon_end: 0.05
-  epsilon_decay: 0.99996
   sync_update: true
-
+  epsilon_decay_steps: 6931600
 training:
   num_envs: 4
   use_subproc: false

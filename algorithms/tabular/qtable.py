@@ -71,8 +71,9 @@ class QTableAlgo:
         self.gamma = params.gamma
         self.epsilon_start = params.epsilon_start
         self.epsilon_end = params.epsilon_end
-        self.epsilon_decay = params.epsilon_decay
-        self._episode = 0
+        self.epsilon_decay_steps = max(1, int(params.epsilon_decay_steps))
+        for pol in self.policies.values():
+            pol.set_epsilon(self.epsilon_start)
 
     def update_step(
         self,
@@ -104,11 +105,10 @@ class QTableAlgo:
 
         q[action] += self.alpha * (td_target - q[action])
 
-    def decay_epsilon(self):
-        """指数衰减 epsilon（per episode），所有 agent 统一。"""
-        self._episode += 1
-        first_pol = next(iter(self.policies.values()))
-        new_eps = max(self.epsilon_end, first_pol.epsilon * self.epsilon_decay)
+    def update_epsilon(self, global_step: int):
+        """按 global-step 线性衰减 epsilon（所有 agent 统一）。"""
+        progress = min(1.0, max(0.0, global_step / self.epsilon_decay_steps))
+        new_eps = self.epsilon_start + (self.epsilon_end - self.epsilon_start) * progress
         for pol in self.policies.values():
             pol.set_epsilon(new_eps)
 

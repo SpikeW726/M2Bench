@@ -1,47 +1,32 @@
-# Q-table 超参数搜索 — BBLA（与 gbla/exgbla/nep 下同名文件搜索空间一致，按实验目录选用）
-# 用法:
-#   python sweep.py --base-config configs/experiments/bbla/qtable_bbla_tsp12.yaml \
-#                   --sweep-config configs/sweep/bbla/qtable_hparam.yaml --count 40
-#
-# 并行:
-#   python sweep.py --base-config configs/experiments/bbla/qtable_bbla_tsp12.yaml \
-#                   --sweep-config configs/sweep/bbla/qtable_hparam.yaml --create-only
-#   python sweep.py --base-config configs/experiments/bbla/qtable_bbla_tsp12.yaml \
-#                   --sweep-id <ID> --count 15
-
 method: bayes
-
 metric:
   name: env/wi
   goal: minimize
-
 parameters:
   seed:
     value: 42
-  # ---- algo params (映射到 QTableParams) ----
   lr:
     min: 0.01
     max: 0.9
     distribution: log_uniform_values
-
   gamma:
-    values: [0.9, 0.99, 0.999]
-
+    values:
+    - 0.9
+    - 0.99
+    - 0.999
   epsilon_start:
-    values: [0.05, 0.1, 0.2, 0.5]  # 加入低探索起点；避免episode预算不足时长期随机
-
+    values:
+    - 0.05
+    - 0.1
+    - 0.2
+    - 0.5
   epsilon_end:
     min: 0.01
     max: 0.1
     distribution: uniform
-
-  epsilon_decay:
-    min: 0.990   # longedge ep_len=100: N_ep≈6k(16env)~25k(4env)，短episode需高decay(≈0.99996~0.99999)
-    max: 0.99999
-    distribution: uniform
-
-  # ---- training params (映射到 TrainerConfig) ----
-  # total_steps 由 base_config 控制，sweep 不硬编码
-
   save_interval:
     value: 1000
+  epsilon_decay_steps:
+    min: 1000
+    max: 500000000
+    distribution: uniform

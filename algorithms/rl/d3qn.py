@@ -50,9 +50,7 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
         # epsilon 衰减参数（调度逻辑在算法中，当前值同步到 policy）
         self.epsilon_start = params.epsilon_start
         self.epsilon_end = params.epsilon_end
-        self.epsilon_decay = params.epsilon_decay
-        self.exploration_fraction = params.exploration_fraction
-        self.epsilon_decay_by_step = params.epsilon_decay_by_step
+        self.epsilon_decay_steps = max(1, int(params.epsilon_decay_steps))
         self._current_epsilon = params.epsilon_start
         self.policy.set_epsilon(self._current_epsilon)
 
@@ -185,11 +183,10 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
     # ====================================================================
 
     def update(self, batch: BaseBatch, **kwargs) -> TrainingStats:
-        """基类 update + epsilon 衰减（同步到 ValuePolicy）。"""
+        """基类 update + 按 global-step 线性 epsilon 衰减。"""
         stats = super().update(batch, **kwargs)
-
-        if not self.epsilon_decay_by_step:
-            self._decay_epsilon_exp()
+        global_step = int(kwargs.get("global_step", 0))
+        self._update_epsilon_linear(global_step)
 
         return stats
 
@@ -197,24 +194,12 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
     #                       Epsilon 衰减调度
     # ====================================================================
 
-    def _decay_epsilon_exp(self):
-        """指数衰减（per update）。"""
-        if self._current_epsilon > self.epsilon_end:
-            self._current_epsilon = max(
-                self._current_epsilon * self.epsilon_decay, self.epsilon_end,
-            )
-            self.policy.set_epsilon(self._current_epsilon)
-
-    def update_epsilon_by_step(self, step: int, total_steps: int):
-        """线性衰减（per env step），需由外部 Trainer 调用。"""
-        decay_steps = int(total_steps * self.exploration_fraction)
-        if step < decay_steps:
-            progress = step / decay_steps
-            self._current_epsilon = self.epsilon_start - progress * (
-                self.epsilon_start - self.epsilon_end
-            )
-        else:
-            self._current_epsilon = self.epsilon_end
+    def _update_epsilon_linear(self, global_step: int):
+        """线性衰减：由 [epsilon_start, epsilon_end, epsilon_decay_steps] 控制。"""
+        progress = min(1.0, max(0.0, global_step / self.epsilon_decay_steps))
+        self._current_epsilon = self.epsilon_start + (
+            self.epsilon_end - self.epsilon_start
+        ) * progress
         self.policy.set_epsilon(self._current_epsilon)
 
     def set_epsilon(self, epsilon: float):

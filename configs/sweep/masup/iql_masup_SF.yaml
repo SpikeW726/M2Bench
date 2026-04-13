@@ -46,8 +46,8 @@ parameters:
     values: [0.05, 0.01]
 
   # SF 需较慢 per-update 衰减；与 QMIX SF 同量级
-  epsilon_decay:
-    values: [0.9995, 0.9998, 0.99985]
+  epsilon_decay_steps:
+    values: [5990, 14978, 19971]
 
   max_grad_norm:
     values: [0.5, 1.0]

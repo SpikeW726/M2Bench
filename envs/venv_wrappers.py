@@ -16,6 +16,16 @@ class VectorEnvWrapper(BaseVectorEnv):
     
     def __len__(self) -> int:
         return len(self.venv)
+
+    @property
+    def is_parallel_env(self) -> bool:
+        """透传底层环境类型（Gym / PettingZoo Parallel）。"""
+        return self.venv.is_parallel_env
+
+    @property
+    def agents(self):
+        """透传并行环境 agent 列表（Gym 环境为 None）。"""
+        return self.venv.agents
     
     @property
     def num_envs(self) -> int:
@@ -44,6 +54,10 @@ class VectorEnvWrapper(BaseVectorEnv):
     
     def get_env_attr(self, key: str, env_id=None) -> List[Any]:
         return self.venv.get_env_attr(key, env_id)
+
+    def call_env_method(self, method_name: str, *args, env_id=None, **kwargs):
+        """透传调用底层环境方法（如 state()）。"""
+        return self.venv.call_env_method(method_name, *args, env_id=env_id, **kwargs)
     
     def set_env_attr(self, key: str, value: Any, env_id=None) -> None:
         self.venv.set_env_attr(key, value, env_id)
@@ -121,11 +135,32 @@ class VectorEnvNormReward(VectorEnvWrapper):
         # clip_max=None 不裁剪；初始 std=1 保证启动时无缩放
         self.rew_rms = NumpyRMS(clip_max=clip_max)
 
+    def _collect_reward_batch(self, rew):
+        """将不同结构的 reward 展平为 1D batch，用于更新 RMS。"""
+        if isinstance(rew, dict):
+            parts = []
+            for value in rew.values():
+                arr = np.asarray(value, dtype=np.float32).reshape(-1)
+                if arr.size > 0:
+                    parts.append(arr)
+            if parts:
+                return np.concatenate(parts, axis=0)
+            return np.asarray([0.0], dtype=np.float32)
+        return np.asarray(rew, dtype=np.float32).reshape(-1)
+
+    def _normalize_reward(self, rew, scale: float):
+        """按相同标准差缩放 reward，保持输入结构不变（dict 或 ndarray）。"""
+        if isinstance(rew, dict):
+            return {k: np.asarray(v, dtype=np.float32) / scale for k, v in rew.items()}
+        return np.asarray(rew, dtype=np.float32) / scale
+
     def step(self, actions, env_id=None):
         obs, rew, term, trunc, info = self.venv.step(actions, env_id)
         if self.update_rew_rms:
-            self.rew_rms.update(rew)
-        normed = rew / np.sqrt(self.rew_rms.var + self.rew_rms.eps)
+            reward_batch = self._collect_reward_batch(rew)
+            self.rew_rms.update(reward_batch)
+        scale = float(np.sqrt(self.rew_rms.var + self.rew_rms.eps))
+        normed = self._normalize_reward(rew, scale)
         return obs, normed, term, trunc, info
 
     def set_reward_rms(self, rms: NumpyRMS) -> None:

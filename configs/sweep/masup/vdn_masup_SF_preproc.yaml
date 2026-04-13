@@ -1,0 +1,88 @@
+# VDN + MASUPEnv(SF) + MASUP 异构预处理 超参数搜索
+#
+# 用法:
+#   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF_preproc.yaml \
+#                   --sweep-config configs/sweep/masup/vdn_masup_SF_preproc.yaml --count 32
+#
+# 并行（先 create-only 再多机跑）:
+#   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF_preproc.yaml \
+#                   --sweep-config configs/sweep/masup/vdn_masup_SF_preproc.yaml --create-only
+#   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF_preproc.yaml \
+#                   --sweep-id <ID> --count 32
+
+method: random
+
+metric:
+  name: env/wi_fromT
+  goal: minimize
+
+parameters:
+  seed:
+    value: 42
+
+  # ---- algo (VDNParams) ----
+  lr:
+    min: 1.0e-6
+    max: 5.0e-4
+    distribution: log_uniform_values
+
+  gamma:
+    value: 0.999
+
+  tau:
+    value: 1.0
+
+  target_update_freq:
+    values: [100, 200, 500]
+
+  epsilon_start:
+    value: 1.0
+
+  epsilon_end:
+    value: 0.05
+
+  epsilon_decay_steps:
+    values: [8000000, 15000000]
+
+  max_grad_norm:
+    value: [5.0, 10.0]
+
+  use_double_dqn:
+    value: true
+
+  reward_global:
+    values: [false, true]
+
+  # ---- training (OffPolicyTrainerConfig) ----
+  batch_size:
+    values: [256, 512]
+
+  buffer_size:
+    values: [50000, 100000]
+
+  warmup_steps:
+    value: 5000
+
+  update_per_step:
+    value: 1
+
+  collect_per_step:
+    value: 108
+
+  num_steps:
+    value: 512
+
+  total_steps:
+    value: 50000000
+
+  save_interval:
+    value: 500
+
+# ---- 自定义早停 ----
+early_terminate:
+  min_trial: 6
+  min_steps: 10000000
+  terminate_ratio: 0.4
+  early_stop_iters: 200
+  slope_horizons: [8, 32, 64]
+  slope_threshold: 1.0e-4

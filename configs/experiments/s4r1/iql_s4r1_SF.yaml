@@ -35,7 +35,7 @@ algo:
   target_update_freq: 1
   epsilon_start: 0.95
   epsilon_end: 0.005
-  epsilon_decay: 0.99985
+  epsilon_decay_steps: 34978
   use_double_dqn: true
   shared_policy: false
 

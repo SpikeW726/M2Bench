@@ -43,8 +43,8 @@ parameters:
   # 离散化衰减档位：避免连续区间在少量 trial 下覆盖不足
   # 参考：每轮 ~64 次 update (num_envs=24, num_steps=64, collect_per_step=24)
   # 0.9993^600≈0.67, 0.9995^600≈0.74, 0.9997^600≈0.83 → 探索期长度明显不同
-  epsilon_decay:
-    values: [0.9993, 0.9995, 0.9997]
+  epsilon_decay_steps:
+    values: [4279, 5990, 9985]
 
   max_grad_norm:
     value: 1.0

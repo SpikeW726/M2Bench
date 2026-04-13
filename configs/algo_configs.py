@@ -164,12 +164,10 @@ class OffPolicyParams(AlgoParams):
 class D3QNParams(OffPolicyParams):
     """D3QN (Double Dueling DQN) 特有超参"""
     lr: float = 1e-4
-    # Epsilon-greedy 衰减
+    # Epsilon-greedy 线性衰减（按 global step）
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
-    epsilon_decay: float = 0.992       # 指数衰减系数（per update）
-    epsilon_decay_by_step: bool = False  # True=按环境步数线性衰减, False=按 update 指数衰减
-    exploration_fraction: float = 0.1    # 线性衰减模式下，衰减到 epsilon_end 的步数占比
+    epsilon_decay_steps: int = 1_000_000  # 达到 epsilon_end 的 global step
     use_double_dqn: bool = True
 
 
@@ -205,5 +203,5 @@ class QTableParams(AlgoParams):
     gamma: float = 0.99
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
-    epsilon_decay: float = 0.9995  # 指数衰减（per episode）
+    epsilon_decay_steps: int = 1_000_000  # 线性衰减：达到 epsilon_end 的 global step
     sync_update: bool = False      # 同步更新: 决策→到达折叠为一次 Q-update

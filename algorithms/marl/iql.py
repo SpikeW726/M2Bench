@@ -73,20 +73,7 @@ class IQLAlgo(BaseAlgorithm):
         # ---- epsilon 衰减参数 ----
         self.epsilon_start = params.epsilon_start
         self.epsilon_end = params.epsilon_end
-        self.epsilon_decay = params.epsilon_decay
-        self.epsilon_decay_by_step = params.epsilon_decay_by_step
-        self.exploration_fraction = params.exploration_fraction
-
-        if self.epsilon_decay_by_step:
-            if total_updates <= 0:
-                raise ValueError(
-                    "epsilon_decay_by_step=True 需要 total_updates > 0，"
-                    "请确保 train.py 正确传递了 total_updates。"
-                )
-            self._exploration_updates = max(
-                1, int(self.exploration_fraction * total_updates)
-            )
-        self._total_updates = total_updates
+        self.epsilon_decay_steps = max(1, int(params.epsilon_decay_steps))
 
         for aid in policy.agent_ids:
             policy.get_policy(aid).set_epsilon(params.epsilon_start)
@@ -375,17 +362,10 @@ class IQLAlgo(BaseAlgorithm):
             all_q_max.append(info["q_max"])
             all_td_error.append(info["td_error"])
 
-        # ---- epsilon 衰减（所有 agent 统一调度） ----
-        if self.epsilon_decay_by_step:
-            progress = min(1.0, self._update_count / self._exploration_updates)
-            new_eps = self.epsilon_start + (
-                self.epsilon_end - self.epsilon_start
-            ) * progress
-        else:
-            first_vp = self.policy.get_policy(self.policy.agent_ids[0])
-            new_eps = max(
-                first_vp.get_epsilon() * self.epsilon_decay, self.epsilon_end
-            )
+        # ---- epsilon 线性衰减（所有 agent 统一调度） ----
+        global_step = int(kwargs.get("global_step", 0))
+        progress = min(1.0, max(0.0, global_step / self.epsilon_decay_steps))
+        new_eps = self.epsilon_start + (self.epsilon_end - self.epsilon_start) * progress
 
         for aid in self.policy.agent_ids:
             self.policy.get_policy(aid).set_epsilon(new_eps)

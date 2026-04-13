@@ -576,8 +576,13 @@ def test_qtable_policy(
     print(f"Mode: {'ParallelEnv (per-agent Q-table)' if is_parallel else 'GymnasiumEnv (joint Q-table)'}")
 
     # 评估时 epsilon=0（纯 greedy），lr/gamma 不影响 eval，填默认值即可
-    dummy_params = QTableParams(lr=0.0, gamma=0.99,
-                                epsilon_start=0.0, epsilon_end=0.0, epsilon_decay=1.0)
+    dummy_params = QTableParams(
+        lr=0.0,
+        gamma=0.99,
+        epsilon_start=0.0,
+        epsilon_end=0.0,
+        epsilon_decay_steps=1,
+    )
     policies = {aid: QTablePolicy(action_dim, epsilon=0.0) for aid in agent_ids}
     algo = QTableAlgo(policies, dummy_params)
 

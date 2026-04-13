@@ -1,15 +1,10 @@
-# Q-table + GBLA 环境 (TSP12) — 3 agents
-# 用法: python train.py configs/experiments/qtable_gbla_tsp12.yaml
-
 algo_name: qtable
 env_type: gbla
-
 exp_name: qtable-gbla
 graph_name: TSP12
-track_wandb: True
+track_wandb: true
 wandb_project: MAP-RL
 seed: 42
-
 env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: false
@@ -17,15 +12,13 @@ env:
   episode_len: 10000
   custom_configs:
     truncate_by_time: true
-
 algo:
   lr: 0.1
   gamma: 0.99
-  epsilon_start: 0.1   # ~1250个episode预算，0.9995^1250≈0.54，epsilon无法衰减到合理水平
+  epsilon_start: 0.1
   epsilon_end: 0.05
-  epsilon_decay: 0.999  # 1250 episode后约衰减至0.03，触达epsilon_end
   sync_update: true
-
+  epsilon_decay_steps: 27720000
 training:
   num_envs: 4
   use_subproc: false

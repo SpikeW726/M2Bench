@@ -40,9 +40,9 @@ parameters:
     distribution: uniform
 
   # grid episodes shorter -- epsilon can decay faster
-  epsilon_decay:
-    min: 0.990
-    max: 0.998
+  epsilon_decay_steps:
+    min: 300
+    max: 3000
     distribution: uniform
 
   max_grad_norm:

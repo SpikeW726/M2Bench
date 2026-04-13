@@ -48,9 +48,9 @@ parameters:
   epsilon_end:
     values: [0.01, 0.05]
 
-  epsilon_decay:
-    min: 0.999
-    max: 0.99995
+  epsilon_decay_steps:
+    min: 3000
+    max: 60000
     distribution: uniform
 
   max_grad_norm:
