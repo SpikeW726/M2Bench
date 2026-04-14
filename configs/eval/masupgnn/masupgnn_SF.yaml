@@ -7,7 +7,7 @@ env_type: masup_gnn
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
-  deltaT: 0.333
+  deltaT: 20.0
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000

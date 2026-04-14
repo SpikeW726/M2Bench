@@ -132,6 +132,7 @@ class OnPolicyTrainer(BaseTrainer):
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
         stop_fn: Optional[Callable[[float], bool]] = None,
         logger: Optional[Any] = None,
+        eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
     ):
         super().__init__(
             algorithm=algorithm,
@@ -141,6 +142,7 @@ class OnPolicyTrainer(BaseTrainer):
             log_extra_fn=log_extra_fn,
             stop_fn=stop_fn,
             logger=logger,
+            eval_fn=eval_fn,
         )
         # On-policy 特有参数
         self.minibatch_size = config.minibatch_size
@@ -292,6 +294,7 @@ class OffPolicyTrainer(BaseTrainer):
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
         stop_fn: Optional[Callable[[float], bool]] = None,
         logger: Optional[Any] = None,
+        eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
     ):
         super().__init__(
             algorithm=algorithm,
@@ -301,6 +304,7 @@ class OffPolicyTrainer(BaseTrainer):
             log_extra_fn=log_extra_fn,
             stop_fn=stop_fn,
             logger=logger,
+            eval_fn=eval_fn,
         )
         self.collect_per_step = config.collect_per_step
         self.update_per_step = config.update_per_step
