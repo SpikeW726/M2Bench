@@ -1,0 +1,41 @@
+# QTable + GBLAEnv (SF / SFcrimemap)
+# 用法: python train.py configs/experiments/gbla/qtable_gbla_SF.yaml
+#
+# SF 图特性:
+#   12 节点，全连通（max_neighbors=11），边权 6.1~53.9
+#   obs_space: Box(int32, 4+max_neighbors=15) → 含邻居意图扩展
+#   action_space: Discrete(max_neighbors+1=12)
+#   GBLA 在 BBLA 基础上加入 intention 向量（记录邻居目标节点），
+#   SF 全连通图下每个 agent 可直接到达所有 11 个邻居，意图表达能力最强
+
+algo_name: qtable
+env_type: gbla
+exp_name: qtable-gbla-SF
+graph_name: SF
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/SFcrimemap.json
+  enable_wait: false
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 10000
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.1
+  gamma: 0.99
+  epsilon_start: 0.2
+  epsilon_end: 0.05
+  sync_update: true
+  # SF obs_dim=15（含 max_neighbors=11 的意图向量），较 TSP12 更高维，适当延长探索
+  epsilon_decay_steps: 500000
+
+training:
+  num_envs: 8
+  use_subproc: true
+  total_steps: 50000000
+  save_interval: 1000

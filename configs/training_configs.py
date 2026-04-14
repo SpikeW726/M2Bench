@@ -17,6 +17,10 @@ class TrainerConfig(ToStringMixin):
     total_steps: Optional[int] = None    # 环境交互步数预算（RL：ceil 推导 max_iterations；Q-table：累计步数达预算即停）
     save_interval: int = 100           # 每隔多少轮保存 checkpoint
     verbose: bool = True
+    # Inline eval：每隔 eval_interval 个 iteration 用当前权重跑 eval_episodes 个 episode 评估
+    # 0 = 禁用；需在实验 YAML 中提供 eval_config_path 才能生效
+    eval_interval: int = 0
+    eval_episodes: int = 5
 
     @property
     def step_per_iteration(self) -> int:

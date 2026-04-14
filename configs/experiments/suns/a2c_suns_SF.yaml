@@ -52,6 +52,7 @@ training:
   save_interval: 200
   minibatch_size: 2048
   update_epochs: 1
+  eval_interval: 10
 
 # ---- 网络 (SUN: f1 2→4→1, f2 3→6→1) ----
 # SF: 12 节点，node_feat_dim=2

@@ -361,7 +361,8 @@ class VDNAlgo(BaseAlgorithm):
         self.optimizer.step()
 
         global_step = int(kwargs.get("global_step", 0))
-        self._update_epsilon_linear(global_step)
+        warmup_steps = int(kwargs.get("warmup_steps", 0))
+        self._update_epsilon_linear(global_step, warmup_steps)
 
         self._update_count += 1
         if self._update_count % self.target_update_freq == 0:
@@ -389,9 +390,14 @@ class VDNAlgo(BaseAlgorithm):
         else:
             self.target_q_network.load_state_dict(self.q_network.state_dict())
 
-    def _update_epsilon_linear(self, global_step: int):
-        """按 global-step 线性衰减 epsilon。"""
-        progress = min(1.0, max(0.0, global_step / self.epsilon_decay_steps))
+    def _update_epsilon_linear(self, global_step: int, warmup_steps: int = 0):
+        """按 global-step 线性衰减 epsilon。
+        
+        warmup_steps 期间（global_step < warmup_steps）epsilon 保持 epsilon_start，
+        之后再按 epsilon_decay_steps 线性衰减到 epsilon_end。
+        """
+        effective_step = max(0, global_step - warmup_steps)
+        progress = min(1.0, effective_step / self.epsilon_decay_steps)
         new_eps = self.epsilon_start + (self.epsilon_end - self.epsilon_start) * progress
         for aid in self.policy.agent_ids:
             vp: ValuePolicy = self.policy.get_policy(aid)

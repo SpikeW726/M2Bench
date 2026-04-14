@@ -53,6 +53,7 @@ training:
   save_interval: 500
   minibatch_size: 2048
   update_epochs: 5
+  eval_interval: 10
 
 actor:
   hidden: [512, 256, 128]

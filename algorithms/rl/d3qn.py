@@ -186,7 +186,8 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
         """基类 update + 按 global-step 线性 epsilon 衰减。"""
         stats = super().update(batch, **kwargs)
         global_step = int(kwargs.get("global_step", 0))
-        self._update_epsilon_linear(global_step)
+        warmup_steps = int(kwargs.get("warmup_steps", 0))
+        self._update_epsilon_linear(global_step, warmup_steps)
 
         return stats
 
@@ -194,9 +195,14 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
     #                       Epsilon 衰减调度
     # ====================================================================
 
-    def _update_epsilon_linear(self, global_step: int):
-        """线性衰减：由 [epsilon_start, epsilon_end, epsilon_decay_steps] 控制。"""
-        progress = min(1.0, max(0.0, global_step / self.epsilon_decay_steps))
+    def _update_epsilon_linear(self, global_step: int, warmup_steps: int = 0):
+        """线性衰减：由 [epsilon_start, epsilon_end, epsilon_decay_steps] 控制。
+        
+        warmup_steps 期间（global_step < warmup_steps）epsilon 保持 epsilon_start，
+        之后再按 epsilon_decay_steps 线性衰减到 epsilon_end。
+        """
+        effective_step = max(0, global_step - warmup_steps)
+        progress = min(1.0, effective_step / self.epsilon_decay_steps)
         self._current_epsilon = self.epsilon_start + (
             self.epsilon_end - self.epsilon_start
         ) * progress

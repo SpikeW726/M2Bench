@@ -14,7 +14,7 @@
 method: bayes
 
 metric:
-  name: env/wi
+  name: eval/wi
   goal: minimize
 
 parameters:
@@ -83,5 +83,5 @@ early_terminate:
   min_steps: 10000000
   terminate_ratio: 0.4
   early_stop_iters: 200
-  slope_horizons: [8, 32, 64]
-  slope_threshold: 1.0e-4
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5

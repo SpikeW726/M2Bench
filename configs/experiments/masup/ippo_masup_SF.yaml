@@ -19,6 +19,7 @@ env:
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
+  edge_time_jitter: false
   custom_configs:
     T: 200.0
     role_imformation: decision
@@ -45,6 +46,7 @@ training:
   save_interval: 200
   minibatch_size: 4096
   update_epochs: 5
+  eval_interval: 10
 
 actor:
   hidden: [256, 256]

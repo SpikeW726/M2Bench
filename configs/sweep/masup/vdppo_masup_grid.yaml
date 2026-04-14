@@ -10,7 +10,7 @@
 method: bayes
 
 metric:
-  name: env/wi_fromT
+  name: eval/wi_fromT
   goal: minimize
 
 # ---- 自定义早停（与 mappo_masup_grid 等 on-policy sweep 对齐）----
@@ -19,8 +19,8 @@ early_terminate:
   min_steps: 5000000
   terminate_ratio: 0.4
   early_stop_iters: 100   # on-policy：与 MAPPO/IPPO/VDPPO sweep 一致
-  slope_horizons: [8, 32, 64]
-  slope_threshold: 1.0e-4
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
 
 parameters:
   seed:

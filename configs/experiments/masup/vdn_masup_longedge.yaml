@@ -55,6 +55,7 @@ training:
   buffer_size: 50000
   collect_per_step: 16
   update_per_step: 1
+  eval_interval: 25
 
 # ---- Q-network ----
 q_network:

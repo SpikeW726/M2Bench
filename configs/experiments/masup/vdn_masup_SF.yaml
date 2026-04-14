@@ -19,6 +19,8 @@ env:
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
+  edge_time_jitter: false
+  norm_reward: true
   custom_configs:
     T: 200.0
     role_imformation: decision
@@ -34,7 +36,8 @@ algo:
   target_update_freq: 200
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_steps: 59914
+  # global env step 线性衰减至 epsilon_end（与 IQL/QMIX 一致语义）
+  epsilon_decay_steps: 2500000
   use_double_dqn: false
   shared_policy: true
   reward_global: false
@@ -53,6 +56,7 @@ training:
   buffer_size: 50000
   collect_per_step: 16
   update_per_step: 1
+  eval_interval: 25
 
 q_network:
   # rnn_type: gru

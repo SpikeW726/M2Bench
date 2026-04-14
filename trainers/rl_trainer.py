@@ -32,6 +32,8 @@ class BaseTrainer(ABC):
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
         stop_fn: Optional[Callable[[float], bool]] = None,
         logger: Optional[Any] = None,
+        # Inline eval callback：() -> Dict[str, float]，返回指标由 trainer 负责记录
+        eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
     ):
         self.algorithm = algorithm
         self.collector = collector
@@ -41,18 +43,23 @@ class BaseTrainer(ABC):
         self.step_per_iteration = config.step_per_iteration
         self.save_interval = config.save_interval
         self.verbose = config.verbose
+        self.eval_interval = getattr(config, "eval_interval", 0)
 
         # Callbacks
         self.save_checkpoint_fn = save_checkpoint_fn
         self.log_extra_fn = log_extra_fn
         self.stop_fn = stop_fn
         self.logger = logger
+        self.eval_fn = eval_fn
 
         # State
         self.iteration = 0
         self.total_steps = 0
         self.best_reward = -float('inf')
         self.start_time: float = 0.0
+        # eval 完成时的外部 hook：(metrics: dict, total_steps: int) -> None
+        # 由 train.py 注入，用于将 eval 指标实时喂给 SweepEarlyStopper
+        self.on_eval_complete: Optional[Callable] = None
 
     @abstractmethod
     def train(self) -> Dict[str, float]:
@@ -77,6 +84,31 @@ class BaseTrainer(ABC):
     def _log(self, data: Dict[str, float]):
         if self.logger is not None:
             self.logger.log(data, step=self.total_steps)
+
+    def _maybe_run_eval(self):
+        """若配置了 eval_fn 且当前 iteration 命中间隔，则执行 inline eval 并记录指标。"""
+        if not self.eval_fn or self.eval_interval <= 0:
+            return
+        if self.iteration % self.eval_interval != 0:
+            return
+        if self.verbose:
+            print(f"[Eval] Running inline eval at iteration {self.iteration} ...")
+        self.algorithm.set_training_mode(False)
+        try:
+            eval_metrics = self.eval_fn()
+        except Exception as e:
+            print(f"[Eval] Inline eval failed: {e}")
+            eval_metrics = {}
+        finally:
+            self.algorithm.set_training_mode(True)
+        if eval_metrics:
+            self._log(eval_metrics)
+            # 将 eval 指标喂给 early stopper（供 cross-trial 和 slope 判断）
+            if self.on_eval_complete is not None:
+                self.on_eval_complete(eval_metrics, self.total_steps)
+            if self.verbose:
+                parts = ", ".join(f"{k}={v:.4f}" for k, v in eval_metrics.items())
+                print(f"[Eval] {parts}")
 
 
 class OnPolicyTrainer(BaseTrainer):
@@ -129,6 +161,9 @@ class OnPolicyTrainer(BaseTrainer):
 
             # Log
             self._log_iteration(iter_result)
+
+            # Inline eval
+            self._maybe_run_eval()
 
             # Early stop
             mean_reward = iter_result.get("mean_reward")
@@ -277,6 +312,7 @@ class OffPolicyTrainer(BaseTrainer):
         self.start_time = time.time()
 
         # ---- Warmup: 填充 buffer 但不训练 ----
+        # warmup 步数计入 total_steps，以便 epsilon 衰减能正确以 warmup 为偏移量起算
         if self.warmup_steps > 0:
             if self.verbose:
                 print(f"Warming up buffer with {self.warmup_steps} steps...")
@@ -285,6 +321,7 @@ class OffPolicyTrainer(BaseTrainer):
             while warmup_collected < self.warmup_steps:
                 result = self.collector.collect(n_steps=self.collect_per_step)
                 warmup_collected += result.n_steps
+                self.total_steps += result.n_steps
             if self.verbose:
                 print(f"Warmup done, collected {warmup_collected} steps")
 
@@ -295,6 +332,9 @@ class OffPolicyTrainer(BaseTrainer):
 
             iter_result = self._train_iteration()
             self._log_iteration(iter_result)
+
+            # Inline eval
+            self._maybe_run_eval()
 
             mean_reward = iter_result.get("mean_reward")
             if mean_reward is not None and self.stop_fn and self.stop_fn(mean_reward):
@@ -328,7 +368,11 @@ class OffPolicyTrainer(BaseTrainer):
             if self.collector.can_sample(self.batch_size):
                 for _ in range(self.update_per_step):
                     batch = self.collector.sample(self.batch_size)
-                    stats = self.algorithm.update(batch, global_step=self.total_steps)
+                    stats = self.algorithm.update(
+                        batch,
+                        global_step=self.total_steps,
+                        warmup_steps=self.warmup_steps,
+                    )
                     all_stats.append(stats)
 
         iter_result: Dict[str, Any] = {

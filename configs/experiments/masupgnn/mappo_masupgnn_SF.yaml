@@ -79,6 +79,7 @@ training:
   save_interval: 400
   minibatch_size: 2048
   update_epochs: 5
+  eval_interval: 10
 
 # ---- 网络 ----
 # SF: 12 节点，全连通（1跳可达所有邻居），gnn_layers=3 提供足够表达力

@@ -1,0 +1,41 @@
+# QTable + ExGBLAEnv (SF / SFcrimemap)
+# 用法: python train.py configs/experiments/exgbla/qtable_exgbla_SF.yaml
+#
+# SF 图特性:
+#   12 节点，全连通（max_neighbors=11），边权 6.1~53.9
+#   obs_space: Box(int32, 2+2*max_neighbors=24) → 扩展 GBLA，含邻居当前位置+意图
+#   action_space: Discrete(max_neighbors+1=12)
+#   ExGBLA 在 GBLA 基础上进一步扩展观测（邻居精确位置），SF 全连通图下
+#   obs_dim=24，状态空间比 GBLA 更大，需要更多训练步数
+
+algo_name: qtable
+env_type: ex_gbla
+exp_name: qtable-ex_gbla-SF
+graph_name: SF
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/SFcrimemap.json
+  enable_wait: false
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 10000
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.1
+  gamma: 0.99
+  epsilon_start: 0.2
+  epsilon_end: 0.05
+  sync_update: true
+  # SF obs_dim=24（含双倍 max_neighbors 的邻居信息），状态组合最多，充分探索需更长衰减
+  epsilon_decay_steps: 1000000
+
+training:
+  num_envs: 4
+  use_subproc: false
+  total_steps: 50000000
+  save_interval: 1000

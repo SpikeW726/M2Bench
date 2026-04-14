@@ -828,6 +828,95 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
 
 
 # =============================================================================
+#                 内存内 inline eval（训练循环中定期调用，无需 checkpoint）
+# =============================================================================
+
+def eval_policy_inline(
+    policy,
+    env_type: str,
+    env_config,
+    num_episodes: int = 5,
+    device=None,
+) -> dict:
+    """用内存中的当前 policy 直接评估，不保存/加载 checkpoint，不生成图表。
+
+    Args:
+        policy:       训练中的 MultiAgentPolicy 实例（共享内存，无需序列化）。
+        env_type:     环境类型字符串（如 "masup"）。
+        env_config:   EnvConfig 实例（从 eval yaml 读取）。
+        num_episodes: 评估 episode 数量。
+        device:       torch.device；None 时从 policy 自动检测。
+
+    Returns:
+        dict, key 均带 "eval/" 前缀，可直接传入 logger.log。
+        指标包含 igi / agi / iwi / wi（及 masup 专属 wi_fromT）的 episode 均值。
+    """
+    if device is None:
+        device = getattr(policy, "device", torch.device("cpu"))
+
+    env = _create_env(env_type, env_config)
+    is_masup_like = env_type in _MASUP_LIKE_ENV_TYPES
+    cfg_dict, _ = _env_config_to_dicts(env_config)
+    episode_time = cfg_dict.get("episode_len", None)
+
+    is_recurrent = getattr(policy, "is_recurrent", False)
+    episode_metrics_list = []
+    wi_fromT_finals = []
+
+    for _ in range(num_episodes):
+        obs, infos = env.reset()
+        hidden_state = None
+
+        while env.agents:
+            if episode_time is not None and env.world.current_time >= episode_time:
+                break
+
+            action_masks = {
+                aid: torch.as_tensor(
+                    info["action_mask"], dtype=torch.bool, device=device
+                )
+                for aid, info in infos.items()
+            }
+            obs_tensor = {
+                aid: torch.as_tensor(o, dtype=torch.float32, device=device)
+                for aid, o in obs.items()
+            }
+
+            with torch.no_grad():
+                outputs = policy.forward(
+                    obs_tensor, state_dict=hidden_state, action_mask=action_masks
+                )
+            actions = {aid: out["act"].cpu().numpy() for aid, out in outputs.items()}
+
+            if is_recurrent:
+                hidden_state = {
+                    aid: out["state"]
+                    for aid, out in outputs.items()
+                    if out.get("state") is not None
+                }
+
+            obs, _, _, _, infos = env.step(actions)
+
+        final_metrics = env.world.current_metrics
+        episode_metrics_list.append(final_metrics)
+        if is_masup_like:
+            wi_fromT_finals.append(
+                float(getattr(env, "worst_idleness_fromT", 0.0))
+            )
+
+    result = {
+        "eval/igi": float(np.mean([m.igi for m in episode_metrics_list])),
+        "eval/agi": float(np.mean([m.agi for m in episode_metrics_list])),
+        "eval/iwi": float(np.mean([m.iwi for m in episode_metrics_list])),
+        "eval/wi":  float(np.mean([m.wi  for m in episode_metrics_list])),
+    }
+    if is_masup_like and wi_fromT_finals:
+        result["eval/wi_fromT"] = float(np.mean(wi_fromT_finals))
+
+    return result
+
+
+# =============================================================================
 #                              CLI 入口
 # =============================================================================
 

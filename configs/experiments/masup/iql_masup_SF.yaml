@@ -18,6 +18,8 @@ env:
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
+  edge_time_jitter: false
+  norm_reward: true
   custom_configs:
     T: 200.0
     role_imformation: decision
@@ -29,26 +31,29 @@ env:
 algo:
   sync_replay: true
   lr: 1.0e-4
-  gamma: 0.99
+  gamma: 0.999
   tau: 0.005
   target_update_freq: 1
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_steps: 5990
+  # global env step 线性衰减至 epsilon_end（非 iteration / 非 per-update）
+  epsilon_decay_steps: 10000000
   use_double_dqn: true
   shared_policy: false
 
 training:
-  num_envs: 24
+  num_envs: 64
   use_subproc: true
   num_steps: 64
-  total_steps: 10000000
+  total_steps: 40000000
   save_interval: 500
   batch_size: 256
   warmup_steps: 5000
   buffer_size: 50000
-  collect_per_step: 24
+  collect_per_step: 64
   update_per_step: 1
+  eval_interval: 25
+  eval_episodes: 1
 
 q_network:
   hidden: [256, 256]

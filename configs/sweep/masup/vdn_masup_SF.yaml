@@ -4,7 +4,7 @@
 #   - 12 节点全连接，每节点出度 11，有效动作空间约 12（含 wait）
 #   - 边权均值 27.3（deltaT=0.333 → 单边约耗 82 步），agent 大量时间在边上移动
 #   - episode_len=3000，T=200，远比其他地图复杂
-#   - reward_global=true，VDN 使用全局奖励
+#   - reward_global 由 base experiment 决定（vdn_masup_SF.yaml 为 false）
 #
 # 用法:
 #   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF.yaml \
@@ -19,7 +19,7 @@
 method: random
 
 metric:
-  name: env/wi_fromT
+  name: eval/wi_fromT
   goal: minimize
 
 parameters:
@@ -50,14 +50,10 @@ parameters:
   epsilon_end:
     value: 0.05
 
-  # per-update 指数衰减；每轮约 64 次 update（num_steps=64, collect_per_step=24）
-  # 全程约 416,640 次 update（total_steps=10M）
-  #   0.9990 → ~1000 updates（~16 轮，~1.5% 总步数）后触底：适合快速转入利用
-  #   0.9995 → ~6000 updates（~94 轮，~14% 总步数）后触底：适合中等探索期
-  #   0.9998 → ~15000 updates（~234 轮，~36% 总步数）后触底：适合长探索期
-  # SF 全连接图随机策略覆盖所有方向，探索效率优于稀疏图；中快衰减即可
+  # epsilon_decay_steps = global env step 数，线性衰减至 epsilon_end（VDNAlgo._update_epsilon_linear）
+  # total_steps=20M：取 5% / 12.5% / 25% 量级
   epsilon_decay_steps:
-    values: [2995, 5990, 14978]
+    values: [1000000, 2500000, 5000000]
 
   max_grad_norm:
     value: 1.0
@@ -100,5 +96,5 @@ early_terminate:
   min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
   terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
   early_stop_iters: 200  # trial 内至少运行 N iters 后启用 slope 检查
-  slope_horizons: [8, 32, 64]
-  slope_threshold: 1.0e-4
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5

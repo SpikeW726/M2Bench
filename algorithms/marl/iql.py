@@ -363,8 +363,11 @@ class IQLAlgo(BaseAlgorithm):
             all_td_error.append(info["td_error"])
 
         # ---- epsilon 线性衰减（所有 agent 统一调度） ----
+        # warmup_steps 由 trainer 传入；warmup 阶段 global_step < warmup_steps，effective_step=0，epsilon=1.0
         global_step = int(kwargs.get("global_step", 0))
-        progress = min(1.0, max(0.0, global_step / self.epsilon_decay_steps))
+        warmup_steps = int(kwargs.get("warmup_steps", 0))
+        effective_step = max(0, global_step - warmup_steps)
+        progress = min(1.0, effective_step / self.epsilon_decay_steps)
         new_eps = self.epsilon_start + (self.epsilon_end - self.epsilon_start) * progress
 
         for aid in self.policy.agent_ids:

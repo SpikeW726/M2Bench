@@ -59,6 +59,7 @@ training:
   save_interval: 800
   minibatch_size: 8192
   update_epochs: 5
+  eval_interval: 10
 
 # ---- 网络 ----
 actor:

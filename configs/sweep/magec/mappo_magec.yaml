@@ -18,7 +18,7 @@
 method: bayes
 
 metric:
-  name: env/wi
+  name: eval/wi
   goal: minimize
 
 parameters:

@@ -59,6 +59,7 @@ training:
   save_interval: 400
   minibatch_size: 2048
   update_epochs: 5
+  eval_interval: 10
 
 # ---- 网络 ----
 # GraphSageActor (Neighbor Scoring 模式):

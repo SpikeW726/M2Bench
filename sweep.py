@@ -72,6 +72,7 @@ def apply_sweep_overrides(config: ExperimentConfig, sweep_cfg: dict):
 _BASE_CONFIG_PATH: str = ""
 _SWEEP_ID: str = ""
 _SWEEP_RAW_CONFIG: dict = {}   # 完整 sweep YAML（含 early_terminate 块）
+_EVAL_CONFIG_PATH: str = ""    # eval YAML 路径；非空时 inline eval 在每个 trial 中生效
 
 
 def sweep_train():
@@ -121,7 +122,8 @@ def sweep_train():
             if not key.startswith("_"):
                 print(f"  {key}: {value}")
 
-        train(config, early_stopper=early_stopper)
+        train(config, eval_config_path=_EVAL_CONFIG_PATH or None,
+              early_stopper=early_stopper)
 
         # 训练完成后记录 save_dir，供 eval_best_runs 事后查询
         final_dir = str(config.save_dir / "final")
@@ -377,7 +379,7 @@ def main():
       python sweep.py --base-config configs/experiments/masup/mappo_masup_tsp12_imi.yaml \\
                       --sweep-id abc12345 --count 10
     """
-    global _BASE_CONFIG_PATH, _SWEEP_ID, _SWEEP_RAW_CONFIG
+    global _BASE_CONFIG_PATH, _SWEEP_ID, _SWEEP_RAW_CONFIG, _EVAL_CONFIG_PATH
 
     parser = argparse.ArgumentParser(description="WandB Sweep 超参数搜索")
 
@@ -413,6 +415,7 @@ def main():
 
     args = parser.parse_args()
     _BASE_CONFIG_PATH = args.base_config
+    _EVAL_CONFIG_PATH = args.eval_config or ""
     project = _resolve_project(args)
 
     # 加载 sweep YAML 供 early_terminate 使用（create_sweep 内过滤后再传给 wandb）

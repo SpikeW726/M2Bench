@@ -20,7 +20,7 @@
 method: bayes
 
 metric:
-  name: env/wi_fromT
+  name: eval/wi_fromT
   goal: minimize
 
 

@@ -10,7 +10,7 @@
 method: random
 
 metric:
-  name: env/wi_fromT
+  name: eval/wi_fromT
   goal: minimize
 
 # ---- 自定义早停 ----
@@ -19,64 +19,65 @@ early_terminate:
   min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
   terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
   early_stop_iters: 500    # SF 死区长、Q 传播慢，过小的 iter 易误判「平坦」早停
-  slope_horizons: [8, 32, 64]
-  slope_threshold: 1.0e-4
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
 
 parameters:
   seed:
     value: 42
   lr:
     min: 5.0e-6
-    max: 5.0e-4
+    max: 1.0e-3
     distribution: log_uniform_values
 
   gamma:
-    values: [0.98, 0.99, 0.995]
+    values: [0.99, 0.999]
 
   tau:
-    values: [0.005, 0.05]
+    value: 1.0
 
   target_update_freq:
-    value: 1
+    values: [500, 1000]
 
   epsilon_start:
     value: 1.0
 
   epsilon_end:
-    values: [0.05, 0.01]
+    value: 0.05
 
+  # epsilon_decay_steps = global env step 数（与 IQL 一致）；total_steps=20M
   epsilon_decay_steps:
-    values: [5990, 14978, 19971]
+    values: [1000000, 2500000, 5000000]
 
   max_grad_norm:
-    value: 1.0
+    values: [1.0, 10.0]
 
   use_double_dqn:
     value: true
 
   mixer_embed_dim:
-    values: [16, 32, 64]
+    values: [32, 64]
 
   batch_size:
     values: [512, 1024]
 
   buffer_size:
-    values: [50000, 100000]
+    value: 1000000
 
   warmup_steps:
-    values: [5000, 10000]
+    value: 10000
 
   update_per_step:
-    values: [1, 2]
+    value: 1
 
   collect_per_step:
-    value: 24
+    value: 108
 
   num_steps:
     value: 512
 
   total_steps:
-    value: 20000000
+    value: 40000000
 
   save_interval:
-    value: 1000
+    value: 200

@@ -18,6 +18,8 @@ env:
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
+  edge_time_jitter: false
+  norm_reward: true
   custom_configs:
     T: 200.0
     role_imformation: decision
@@ -33,14 +35,15 @@ algo:
   target_update_freq: 200
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_steps: 5990
+  # global env step 线性衰减至 epsilon_end（非 iteration / 非 per-update）
+  epsilon_decay_steps: 2500000
   use_double_dqn: true
   shared_policy: true
   reward_global: true
   mixer_embed_dim: 32
 
 training:
-  num_envs: 24
+  num_envs: 108
   use_subproc: true
   num_steps: 64
   total_steps: 10000000
@@ -48,8 +51,10 @@ training:
   batch_size: 256
   warmup_steps: 5000
   buffer_size: 50000
-  collect_per_step: 24
+  collect_per_step: 108
   update_per_step: 1
+  eval_interval: 25
+  eval_episodes: 1
 
 q_network:
   hidden: [256, 256]

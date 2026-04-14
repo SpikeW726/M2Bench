@@ -788,6 +788,31 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         return {}
 
     # ---- 10. 构建 Trainer ----
+    # 若配置了 eval_config_path 且 eval_interval > 0，构建 inline eval 回调
+    inline_eval_fn = None
+    if eval_config_path and tc.eval_interval > 0:
+        from evaluators.test import eval_policy_inline
+        from configs.registry import load_eval_config
+        _eval_env_type, _eval_env_cfg = load_eval_config(eval_config_path)
+        # 用训练时的 custom_configs 覆盖 eval yaml，保持 idi_scale 等参数一致
+        _train_custom = dict(config.env.custom_configs or {})
+        if _train_custom:
+            _eval_env_cfg.custom_configs = {
+                **(_eval_env_cfg.custom_configs or {}),
+                **_train_custom,
+            }
+        _eval_episodes = tc.eval_episodes
+        _eval_device = device
+
+        def inline_eval_fn():
+            return eval_policy_inline(
+                policy=policy,
+                env_type=_eval_env_type,
+                env_config=_eval_env_cfg,
+                num_episodes=_eval_episodes,
+                device=_eval_device,
+            )
+
     trainer = create_trainer(
         algo_name=config.algo_name,
         algorithm=algorithm,
@@ -796,9 +821,10 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         save_checkpoint_fn=save_checkpoint_fn,
         log_extra_fn=log_extra_fn,
         logger=logger,
+        eval_fn=inline_eval_fn,
     )
 
-    # ---- 10.5. 若提供 early_stopper，patch trainer 的 log_extra_fn ----
+    # ---- 10.5. 若提供 early_stopper，patch trainer 的 log_extra_fn + on_eval_complete ----
     if early_stopper is not None:
         _orig_lef = trainer.log_extra_fn
         def _patched_lef():
@@ -809,6 +835,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             early_stopper.check_and_maybe_raise(trainer.total_steps)
             return metrics
         trainer.log_extra_fn = _patched_lef
+        # 将 inline eval 产生的 eval/... 指标也喂给 early stopper
+        # 这样当 sweep metric 为 eval/wi_fromT 时，cross-trial 和 slope 检查均有数据来源
+        trainer.on_eval_complete = early_stopper.record_metrics
 
     # ---- 11. 训练 ----
     print(f"\n[Train] Starting {config.algo_name.upper()} training")

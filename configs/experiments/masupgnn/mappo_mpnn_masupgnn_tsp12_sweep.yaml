@@ -87,6 +87,7 @@ training:
   save_interval: 760
   minibatch_size: 4096
   update_epochs: 5
+  eval_interval: 10
 
 # ---- 网络 ----
 # 结构须与预训练模型 config.yaml 完全对齐

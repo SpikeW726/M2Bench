@@ -50,6 +50,7 @@ training:
   buffer_size: 100000
   collect_per_step: 64
   update_per_step: 1
+  eval_interval: 25
 
 q_network:
   # ===== MASUP 异构预处理参数 =====

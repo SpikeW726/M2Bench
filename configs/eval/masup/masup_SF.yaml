@@ -23,12 +23,12 @@ env:
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/SF/mappo_masup_3a_test/best_eval.png
+  save_plot: evaluators/results/SF/qmix_masup_3a/best_eval.png
   show_plot: false
   animation: true
   event_driven: true
   max_frames: 1500
   log_action_logits: true
   log_action_logits_max_lines: 5
-  action_logits_csv: evaluators/results/SF/mappo_masup_3a_test/action_logits.csv
+  action_logits_csv: evaluators/results/SF/qmix_masup_3a/action_logits.csv
   action_logits_active_only: true
