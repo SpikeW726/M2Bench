@@ -648,6 +648,7 @@ class MAOffPolicyCollector(BaseCollector):
         sync_mode: bool = False,
         gamma: float = 0.99,
         shared_indices: Optional[bool] = None,
+        shared_sync_mode: bool = False,
     ):
         if not env.is_parallel_env:
             raise ValueError(
@@ -663,6 +664,7 @@ class MAOffPolicyCollector(BaseCollector):
         # 调用方应根据算法语义显式传入该参数。
         self._shared_indices = collect_state if shared_indices is None else shared_indices
         self._sync_mode = sync_mode
+        self._shared_sync_mode = shared_sync_mode
         self._gamma = gamma
         self._hidden: Optional[Dict[str, torch.Tensor]] = None
         super().__init__(algorithm, env)
@@ -691,6 +693,11 @@ class MAOffPolicyCollector(BaseCollector):
                 agent: [None] * getattr(self, 'num_envs', 0)
                 for agent in getattr(self, 'agents', [])
             }
+        if getattr(self, '_shared_sync_mode', False) and not getattr(self, '_is_recurrent', False):
+            self._vtd_pending: Dict[str, List[Optional[dict]]] = {
+                agent: [None] * getattr(self, 'num_envs', 0)
+                for agent in getattr(self, 'agents', [])
+            }
 
     def reset(self, **kwargs):
         result = super().reset(**kwargs)
@@ -702,6 +709,11 @@ class MAOffPolicyCollector(BaseCollector):
             }
         if self._sync_mode and not self._is_recurrent:
             self._pending = {
+                agent: [None] * self.num_envs
+                for agent in self.agents
+            }
+        if self._shared_sync_mode and not self._is_recurrent:
+            self._vtd_pending = {
                 agent: [None] * self.num_envs
                 for agent in self.agents
             }
@@ -811,6 +823,12 @@ class MAOffPolicyCollector(BaseCollector):
                     cur_action_masks, cur_active_masks, next_active_masks,
                     cur_state, next_state,
                 )
+            elif self._shared_sync_mode:
+                self._collect_shared_sync_mlp(
+                    actions, rew, next_obs, term, trunc, info,
+                    cur_action_masks, cur_active_masks, next_active_masks,
+                    cur_state, next_state,
+                )
             else:
                 for agent in self.agents:
                     # TD 语义：截断≠真实终止，done 只由 term 决定；
@@ -887,6 +905,104 @@ class MAOffPolicyCollector(BaseCollector):
                 episode["next_state"] = np.stack(eb["next_state"]).astype(np.float32)
             self.buffers[agent].add_episode(episode)
             self._episode_buffers[agent][env_idx] = self._init_ep_buf(agent)
+
+    def _collect_shared_sync_mlp(
+        self,
+        actions: Dict[str, np.ndarray],
+        rew: Dict[str, np.ndarray],
+        next_obs: Dict[str, np.ndarray],
+        term: Dict[str, np.ndarray],
+        trunc: Dict[str, np.ndarray],
+        info: Dict[str, np.ndarray],
+        cur_action_masks: Dict[str, Optional[np.ndarray]],
+        cur_active_masks: Dict[str, Optional[np.ndarray]],
+        next_active_masks: Dict[str, Optional[np.ndarray]],
+        cur_state: Optional[np.ndarray],
+        next_state: Optional[np.ndarray],
+    ):
+        """VDN/QMIX MLP：每步每 env 槽位仍 add 一条（shared-index），READY 槽位延迟 overwrite 累积 r 与 γ^k。"""
+        gamma = self._gamma
+        for agent in self.agents:
+            done_td = term[agent].astype(np.float32)
+            next_obs_td = next_obs[agent].copy()
+            for i in range(self.num_envs):
+                if trunc[agent][i] and isinstance(info[agent][i], dict):
+                    fo = info[agent][i].get("final_obs")
+                    if fo is not None:
+                        next_obs_td[i] = fo
+            next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
+            am = cur_active_masks[agent]
+            next_am_arr = next_active_masks[agent]
+
+            for i in range(self.num_envs):
+                was_active = (am[i] > 0.5) if am is not None else True
+                new_active = (next_am_arr[i] > 0.5) if next_am_arr is not None else True
+                is_done = float(done_td[i]) > 0.5 or bool(trunc[agent][i])
+
+                pend = self._vtd_pending[agent][i]
+                if pend is not None and pend.get("ptr") is not None:
+                    pend["acc_reward"] += pend["gamma_power"] * rew[agent][i]
+                    pend["gamma_power"] *= gamma
+
+                if pend is not None and pend.get("ptr") is not None and (
+                    new_active or is_done
+                ):
+                    self.buffers[agent].overwrite(
+                        pend["ptr"],
+                        rew=pend["acc_reward"],
+                        next_obs=next_obs_td[i].copy(),
+                        gamma_power=pend["gamma_power"],
+                        active_mask=1.0,
+                        next_action_mask=(
+                            next_am[i].copy() if next_am is not None else None
+                        ),
+                        next_state=(
+                            next_state[i].copy()
+                            if next_state is not None
+                            else None
+                        ),
+                        done=float(done_td[i]),
+                    )
+                    self._vtd_pending[agent][i] = None
+
+                cur_am_f = float(am[i]) if am is not None else 1.0
+                ptr_slot = self.buffers[agent].peek_write_index()
+                self.buffers[agent].add(
+                    obs=self._obs[agent][i],
+                    act=actions[agent][i],
+                    rew=rew[agent][i],
+                    next_obs=next_obs_td[i].copy(),
+                    done=float(done_td[i]),
+                    action_mask=(
+                        cur_action_masks[agent][i].copy()
+                        if cur_action_masks[agent] is not None
+                        else None
+                    ),
+                    next_action_mask=(
+                        next_am[i].copy() if next_am is not None else None
+                    ),
+                    state=cur_state[i].copy() if cur_state is not None else None,
+                    next_state=(
+                        next_state[i].copy()
+                        if next_state is not None
+                        else None
+                    ),
+                    active_mask=cur_am_f,
+                    gamma_power=float(gamma),
+                )
+
+                if was_active:
+                    self._vtd_pending[agent][i] = {
+                        "ptr": ptr_slot,
+                        "acc_reward": 0.0,
+                        "gamma_power": 1.0,
+                    }
+                    p2 = self._vtd_pending[agent][i]
+                    p2["acc_reward"] += p2["gamma_power"] * rew[agent][i]
+                    p2["gamma_power"] *= gamma
+
+                if is_done:
+                    self._vtd_pending[agent][i] = None
 
     def _collect_sync_mlp(
         self,

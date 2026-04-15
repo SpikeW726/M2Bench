@@ -152,7 +152,7 @@ class OffPolicyParams(AlgoParams):
     max_grad_norm: float = 0.5
     tau: float = 0.005                # soft update 混合系数
     target_update_freq: int = 1       # target 更新周期（update 调用次数）
-    # 经验回放同步（仅 IQL 生效，VDN/QMIX 不支持）
+    # 经验回放同步（仅 IQL 生效）；VDN/QMIX 用 shared_sync 代替
     sync_replay: bool = False
     # RNN 序列训练参数（MLP 时忽略）
     seq_len: int = 20                 # RNN 训练序列长度
@@ -184,6 +184,11 @@ class VDNParams(IQLParams):
     # True: 环境对所有 agent 返回相同奖励（取 agent_0 的值作为全局奖励）
     # False: 各 agent 奖励不同，对全体 agent 奖励求和得到全局奖励
     reward_global: bool = False
+    # VDN/QMIX MLP：多步 TD 到下一 READY，保留 shared-index；不压缩 buffer（与 IQL sync_replay 不同）
+    shared_sync: bool = False
+    # QRNN 序列训练：Peng’s Q(λ)（PyMARL build_q_lambda_targets 同构）；仅 _compute_loss_seq 生效
+    peng_q_lambda: bool = False
+    peng_lambda: float = 0.6  # λ，与 PyMARL qmix.yaml 中 td_lambda 角色相同
 
 
 @dataclass(kw_only=True)

@@ -8,45 +8,128 @@ This is a **Multi-Agent Patrolling (MAP) imitation learning framework** for stud
 
 ## Core Architecture
 
-### Three-Layer Separation Design
+This section describes how the repository is organized, how subsystems connect, and the **end-to-end data flows** used for MARL training, imitation learning, and evaluation—suitable material for a thesis **Platform** chapter.
+
+### Repository map (modules and responsibilities)
+
+| Area | Primary paths | Role |
+|------|----------------|------|
+| **Configuration** | `configs/registry.py`, `configs/exp_configs.py`, `configs/*_configs.py`, `configs/experiments/*.yaml` | YAML → dataclasses (`ExperimentConfig`); factory creation of env, nets, algorithm, trainer. |
+| **World / MDP** | `envs/mdps/patrol_core.py`, `envs/mdps/base_envs.py`, `envs/mdps/*.py` | `PatrolWorld` simulates the graph; concrete envs subclass `BaseEnv` / `EventDrivenEnv` / `FixedStepEnv` and implement obs/reward/info. |
+| **Vectorization** | `envs/venvs.py`, `envs/workers/` | `BaseVectorEnv` runs N copies via `DummyEnvWorker` or `SubprocEnvWorker`; supports PettingZoo `ParallelEnv` dict I/O and single-agent Gymnasium ndarray I/O. |
+| **Policies (runtime)** | `policies/rl/`, `policies/marl/` | `ActorPolicy` / `ValuePolicy` wrap networks; `MultiAgentPolicy` fans out per agent for parallel MARL. |
+| **Policies (experts)** | `policies/heuritic/` | Heuristic controllers (ER, HPCC, …) for data collection and baselines—not used inside `train.py` unless wired by scripts. |
+| **Networks** | `networks/mlp.py`, `networks/rnn.py`, `networks/mixing.py`, `networks/gnn.py`, `networks/custom/` | Actor / critic / Q / mixer implementations; checkpoint protocol via `get_config_dict` / `from_config_dict`. |
+| **Algorithms** | `algorithms/rl/`, `algorithms/marl/`, `algorithms/algorithm_base.py` | PPO-family, value-based MARL, VDPPO, tabular Q; shared batch prep / training hooks. |
+| **Data plane** | `data/collector.py`, `data/buffer.py`, `data/batch.py` | Rollouts, replay buffers, sequence buffers; bridges env I/O to tensor batches. |
+| **Training orchestration** | `train.py`, `trainers/rl_trainer.py`, `trainers/qtable_trainer.py`, `sweep.py` | Wires vec env → policy → algorithm → collector → trainer loop; optional WandB / checkpoints / inline eval. |
+| **Imitation** | `trainers/imitator/` | Expert rollouts to HDF5/NPZ; BC pretraining independent of RL loop. |
+| **Evaluation** | `evaluators/` | Loads saved `config.yaml` + weights; runs episodes with same env contract as training. |
+| **Assets** | `graphs/*.json` | Graph topology, edge weights, optional node weights `phi` consumed by `PatrolWorld`. |
+
+### Layered system view (conceptual stack)
+
+The codebase separates **what to optimize** (policies / value functions), **where transitions come from** (patrolling MDPs), and **shared domain mechanics** (graph + metrics). The **orchestration layer** (`train.py` + trainers) is not a fourth “domain” layer but the glue that instantiates everything from config and runs the optimization loop.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Policy Layer                            │
-│  /policies/heuritic/      Heuristic policies (ER, HPCC)     │
-│  /policies/rl/           RL policies (ActorPolicy)         │
-│  /policies/marl/         Multi-agent policies              │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Environment Layer                         │
-│  EventDrivenEnv          Event-driven sync base class       │
-│  MASUPEnv                Main environment implementation    │
-│  PatrolWorld             Physical world simulator          │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Core Layer                              │
-│  Graph                   Graph structure                    │
-│  EpisodeMetricsTracker   Metric tracking (IGI, AGI, IWI, WI)│
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Orchestration: train.py → OnPolicyTrainer / OffPolicyTrainer / Q-table   │
+│   (logging, checkpoints, optional eval_fn, sweep early-stop hooks)         │
+└──────────────────────────────────────────────────────────────────────────┘
+         │ collects / samples                    │ optimizer steps
+         ▼                                       ▼
+┌─────────────────────────────┐       ┌─────────────────────────────────────┐
+│ Policy + Algorithm           │       │ Networks (actor / critic / Q /    │
+│ policies/* + algorithms/*    │◀─────▶│ mixer) + optimizers inside algo    │
+└─────────────────────────────┘       └─────────────────────────────────────┘
+         │ action logits / Q-values
+         ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Environment API: PettingZoo ParallelEnv (per-agent dict) OR Gymnasium      │
+│ BaseVectorEnv (N workers) → step / reset / state() / get_episode_metrics   │
+└──────────────────────────────────────────────────────────────────────────┘
+         ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ MDP implementations (MASUP, OUCS, BBLA family, SUNS, GNN MASUP, …)        │
+│ BaseEnv: PatrolWorld + PettingZoo contract; EventDrivenEnv / FixedStepEnv │
+└──────────────────────────────────────────────────────────────────────────┘
+         ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ PatrolWorld + Graph + EpisodeMetricsTracker (IGI, AGI, IWI, WI, …)       │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Key Design Patterns
+### Environment stack and transition semantics
 
-**1. Event-Driven Decision Making**
+1. **Static graph** — JSON under `graphs/` is parsed into the internal `Graph` used by `PatrolWorld` (`envs/mdps/patrol_core.py`).
+2. **PatrolWorld** — Maintains continuous-time-style dynamics: agents on nodes vs edges, travel timers, optional wait, node idleness. Exposes `tick(dt)` or `tick_to_next_event()` depending on the env base class.
+3. **BaseEnv** (`envs/mdps/base_envs.py`) — PettingZoo `ParallelEnv` shell: `possible_agents`, per-agent `observation_space` / `action_space`, abstract `_build_obs`, `_build_info`, `_compute_rewards`, `_action_to_target`, and **`state()`** for centralized critics / mixers.
+4. **Time advancement** — **`EventDrivenEnv`** (used by `MASUPEnv`, etc.) calls `world.tick_to_next_event()` so one RL “step” is one **decision event** (arrival or wait end), not a fixed Δt. **`FixedStepEnv`** uses `world.tick(dt=1.0)` for synchronous fixed-step MDPs.
+5. **Action application** — On each env `step`, only agents with `world.is_ready(agent_id)` consume their discrete action (move to neighbor / wait when enabled). Others are logically on edges and receive masked or no-op semantics at the policy/collector level.
+6. **Info contract** — `_build_info` supplies `action_mask` (valid discrete choices) and **`active_mask`** (1 = READY decision point, 0 = ON_EDGE). Collectors forward `active_mask` into batches so on-policy algorithms can apply **transparent GAE** and loss masking (see dedicated subsection later in this file).
 
-The environment advances to "next event" (agent arrival or wait completion) rather than fixed timesteps. Only agents in `READY` state need decisions - agents on edges don't receive actions.
+### Neural RL training pipeline (`train.py`)
 
-**2. Sequential Decision Protocol**
+The main path builds a closed loop from YAML to checkpoints:
 
-Heuristic policies use sequential decision: Agent 0 → Agent 1 → Agent 2 → ... Each agent's intention is immediately recorded to `er_intention_eta`, so subsequent agents can avoid conflicts.
+1. **`load_config(path)`** — Parses experiment YAML into `ExperimentConfig` (env, algo, training, optional actor/critic/q_network sections).
+2. **`create_vec_env(env_type, env_config, num_envs, use_subproc)`** — Instantiates `ENV_REGISTRY[env_type]` inside `BaseVectorEnv` workers (`DummyEnvWorker` in-process or `SubprocEnvWorker` multiprocessing).
+3. **Dimension inference** — `_infer_dims` probes spaces and `state()`; sets `obs_dim`, `action_dim`, `state_dim`, and **critic input width** (e.g. MAPPO/VDPPO: `state_dim + n_agents` for agent one-hot; IPPO: per-agent `obs_dim`).
+4. **Networks** — `create_actor` / `create_critic` / `create_q_network` select implementations from `ACTOR_REGISTRY` / `CRITIC_REGISTRY` / `Q_NETWORK_REGISTRY` based on `actor_type`, `critic_type`, `q_type`.
+5. **Optional warm-start** — On-policy: `actor_path` / `critic_path` load weights and may restore value-normalization stats from sidecar `config.yaml`. Off-policy: `actor_path` can load a BC-pretrained Q-network into `q_net`.
+6. **Policy object** — `_build_policy`: parallel envs → `MultiAgentPolicy` over `ActorPolicy` or `ValuePolicy`; single-agent Gymnasium → bare policy instance.
+7. **Algorithm** — `create_algorithm(algo_name, policy, algo_params, **context_kwargs)` uses `inspect` to pass only kwargs matching the concrete algo `__init__` (critic, q_network, `num_envs`, horizons, etc.).
+8. **Collector** — `_build_collector` chooses `MAOnPolicyCollector` / `OnPolicyCollector` vs `MAOffPolicyCollector` / `OffPolicyCollector`, and for off-policy selects `ReplayBuffer` vs per-agent `SequenceReplayBuffer` when the Q-network is recurrent.
+9. **Trainer** — `create_trainer` returns `OnPolicyTrainer` or `OffPolicyTrainer`, which repeatedly **collect → prepare_batch (on-policy) → algorithm.update → log → checkpoint**.
 
-**3. Modular Configuration System**
+### Data flow: on-policy vs off-policy
 
-YAML-based configuration with registry pattern factory methods. All components (environments, algorithms, networks, trainers) are registered in `configs/registry.py` and created via factory functions.
+**On-policy (PPO / MAPPO / IPPO / VDPPO / A2C / MAA2C)**
+
+```
+VectorEnv.reset → initial obs, info
+loop:
+  policy(obs, action_mask, …) → actions per agent
+  vec_env.step(actions) → next obs, rewards, dones, infos
+  collector appends tensors + masks + (optional) RNN hiddens / active_mask
+after n_steps:
+  CollectResult → algorithm.prepare_batch (GAE, advantage norm, …)
+  algorithm.update for multiple epochs / minibatches
+  collector buffer cleared
+```
+
+**Off-policy (D3QN / IQL / VDN / QMIX)**
+
+```
+VectorEnv interaction as above, but transitions are pushed into
+ReplayBuffer (MLP Q) or SequenceReplayBuffer (QRNN / DRQN-style)
+Trainer drives: collect_per_step / step_per_iteration → sample batch → update → target sync (per algo)
+```
+
+VDN/QMIX use **shared replay indices** across agents (`shared_indices=True` in `MAOffPolicyCollector`) so joint mixing sees time-aligned tuples. IQL optionally enables **`sync_replay`** (collector-side compression of ON_EDGE steps) with algorithm-side support for `gamma_power` / sequence `active_mask`; this path is documented later and is **not** applied to VDN/QMIX.
+
+### Imitation learning and expert data (parallel pipeline)
+
+- **Expert generation** — `trainers/imitator/heuristic_sampler.py` rolls out registered heuristic policies against the same MDP family, writing structured demonstrations (HDF5/NPZ: obs, actions, masks, returns, critic_states, …).
+- **Behavior cloning** — `trainers/imitator/imitation_trainer.py` reads that dataset, routes by `algo_name` to actor-only, actor–critic, or Q-network objectives (including flat RNN BC as documented elsewhere in this file).
+- **RL fine-tuning** — Experiment YAML points `actor_path` (and optionally `critic_path`) into `train.py` so the online RL run starts from BC weights.
+
+This pipeline is **orthogonal** to the RL trainer: no gradient flows from BC into `OffPolicyTrainer` unless you explicitly load weights in step 5 above.
+
+### Evaluation and training–eval symmetry
+
+- Training checkpoints are written via `utils/model_io.save_model` to `save_dir/iter_*` or `final`, bundling **tensor weights** and **`config.yaml`** produced from each network’s `get_config_dict`.
+- `evaluators/test.py` reconstructs modules using `from_config_dict` registry entries in `utils/model_io._get_class_registry` and runs rollouts under `configs/eval/*.yaml`, with training `custom_configs` optionally merged from the checkpoint for fair comparison.
+
+### Key design patterns (summary)
+
+**1. Event-driven decision making (patrolling MDPs)** — In `EventDrivenEnv`, the world advances to the next **event** (e.g. arrival); only `READY` agents should commit meaningful discrete choices. `active_mask` propagates this semantics into RL losses.
+
+**2. Sequential heuristic decisions** — Expert policies in `policies/heuritic/` often decide in agent index order and write coordination structures (e.g. intention tables) so later agents avoid conflicts.
+
+**3. Modular configuration and registries** — `configs/registry.py` centralizes `ALGO_REGISTRY` (e.g. `ppo`, `mappo`, `ippo`, `vdppo`, `d3qn`, `iql`, `vdn`, `qmix`, `a2c`, `maa2c`, `qtable`), `ENV_REGISTRY` (e.g. `masup`, `oucs`, `bbla`, `gbla`, `ex_gbla`, `suns`, `masup_gnn`, `magec`, …), the three **independent** network registries, and `TRAINER_REGISTRY`. Experiments remain declarative YAML while code stays closed for modification under normal use.
+
+For deeper single-topic designs (GAE + `active_mask`, synchronized replay for IQL, network checkpoint contracts), see the dedicated sections later in this document.
 
 ## Running Commands
 
@@ -89,13 +172,11 @@ The framework uses a centralized configuration system in `configs/`:
 
 ### Registry Pattern
 
-All components are registered in `configs/registry.py`:
-- `ALGO_REGISTRY`: PPO, MAPPO, IPPO, VDPPO, D3QN, IQL, VDN, QMIX
-- `ENV_REGISTRY`: MASUP, OUCS, S4R1 environments
-- `ACTOR_REGISTRY`: ActorMLP, ActorRNN
-- `CRITIC_REGISTRY`: CriticMLP, CriticRNN
-- `Q_NETWORK_REGISTRY`: QMLP, QRNN
-- `TRAINER_REGISTRY`: On-policy, Off-policy trainers
+All components are registered in `configs/registry.py` (overview; see **Core Architecture** for data-flow context):
+- `ALGO_REGISTRY`: A2C, MAA2C, PPO, MAPPO, IPPO, VDPPO, D3QN, IQL, VDN, QMIX, Q-table
+- `ENV_REGISTRY`: MASUP, OUCS, S4R1, BBLA/GBLA/ExGBLA, SUNS, NEP, MASUP graph (`masup_gnn`), MAGEC, …
+- `ACTOR_REGISTRY` / `CRITIC_REGISTRY` / `Q_NETWORK_REGISTRY`: MLP/RNN plus SUN, MPNN/SAGE, MASUP-specific heads
+- `TRAINER_REGISTRY`: On-policy, Off-policy trainers (`trainers/rl_trainer.py`)
 
 Factory functions automatically instantiate components from YAML config:
 ```python

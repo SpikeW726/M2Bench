@@ -16,7 +16,7 @@ metric:
 # ---- 自定义早停 ----
 early_terminate:
   min_trial: 6             # 前 N 个 trial 仅建立 milestone 基准
-  min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
+  min_steps: 18000000       # 达到该 env steps 后做 cross-trial 比较
   terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
   early_stop_iters: 500    # SF 死区长、Q 传播慢，过小的 iter 易误判「平坦」早停
   slope_horizons: [16, 64, 128]
@@ -31,7 +31,7 @@ parameters:
     distribution: log_uniform_values
 
   gamma:
-    values: [0.99, 0.999]
+    value: 0.999
 
   tau:
     value: 1.0
@@ -47,7 +47,7 @@ parameters:
 
   # epsilon_decay_steps = global env step 数（与 IQL 一致）；total_steps=20M
   epsilon_decay_steps:
-    values: [1000000, 2500000, 5000000]
+    value: 16000000
 
   max_grad_norm:
     values: [1.0, 10.0]
@@ -56,13 +56,13 @@ parameters:
     value: true
 
   mixer_embed_dim:
-    values: [32, 64]
+    value: 256
 
   batch_size:
     values: [512, 1024]
 
   buffer_size:
-    value: 1000000
+    value: 500000
 
   warmup_steps:
     value: 10000
@@ -81,3 +81,6 @@ parameters:
 
   save_interval:
     value: 200
+
+  peng_lambda:
+    values: [0.3, 0.5]

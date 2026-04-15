@@ -387,6 +387,12 @@ def _build_collector(
             getattr(config.algo, "sync_replay", False)
             and config.algo_name == "iql"
         )
+        # VDN/QMIX MLP：shared_sync 与 IQL sync_replay 互斥（collector 路径二选一）
+        shared_sync_vdq = (
+            getattr(config.algo, "shared_sync", False)
+            and needs_shared_indices
+            and not is_q_recurrent
+        )
 
         if is_parallel:
             if is_q_recurrent:
@@ -418,7 +424,7 @@ def _build_collector(
                         has_state=needs_state,
                         state_dim=dims["state_dim"] if needs_state else 0,
                         has_active_mask=not sync_replay,
-                        has_gamma_power=sync_replay,
+                        has_gamma_power=(sync_replay or shared_sync_vdq),
                     )
                     for aid in dims["agent_ids"]
                 }
@@ -429,6 +435,7 @@ def _build_collector(
                 sync_mode=sync_replay and not is_q_recurrent,
                 gamma=gamma,
                 shared_indices=needs_shared_indices,
+                shared_sync_mode=shared_sync_vdq,
             )
         else:
             if is_q_recurrent:

@@ -19,6 +19,35 @@ import torch.nn.functional as F
 from algorithms.algorithm_base import BaseAlgorithm, TrainingStats
 from configs.algo_configs import VDNParams
 from data.batch import TransitionBatch, SequenceBatch
+
+
+def _build_q_lambda_targets_seq(
+    rewards: torch.Tensor,
+    terminated: torch.Tensor,
+    mask: torch.Tensor,
+    exp_qvals: torch.Tensor,
+    qvals: torch.Tensor,
+    gamma: float,
+    lam: float,
+) -> torch.Tensor:
+    """Peng’s Q(λ) 反向 λ-return，与 PyMARL `utils.rl_utils.build_q_lambda_targets` 同构；时间维为 dim0 (S, B)。"""
+    S, B = rewards.shape
+    if S == 0:
+        return rewards
+    term = terminated.float() if terminated.dtype != torch.float32 else terminated
+    ret = torch.zeros_like(exp_qvals)
+    ret[S - 1] = exp_qvals[S - 1] * (1.0 - term[S - 1])
+    if S >= 2:
+        for t in range(S - 2, -1, -1):
+            reward_eff = rewards[t] + exp_qvals[t] - qvals[t]
+            ret[t] = lam * gamma * ret[t + 1] + mask[t] * (
+                reward_eff
+                + (1.0 - lam) * gamma * exp_qvals[t + 1] * (1.0 - term[t])
+            )
+    else:
+        # S==1：无多步 λ 混合，退化为单步 TD（不在此施加 Peng 修正，避免边界双计）
+        ret[0] = rewards[0] + gamma * exp_qvals[0] * (1.0 - term[0])
+    return ret
 from networks.mixing import QMIXMixer, SumMixer
 from policies.marl.marl_base import MultiAgentPolicy
 from policies.rl.rl_base import ValuePolicy
@@ -184,7 +213,12 @@ class VDNAlgo(BaseAlgorithm):
 
             # where 替代 *(1-done)：done=1 时 0*(-inf)=NaN，显式置 0 更安全
             bootstrap = torch.where(done.bool(), torch.zeros_like(q_tot_target), q_tot_target)
-            td_target = r_tot + self.gamma * bootstrap
+            gamma_pow = getattr(first_batch, "gamma_power", None)
+            if gamma_pow is not None:
+                gamma_pow = gamma_pow.to(r_tot.device).float()
+            else:
+                gamma_pow = torch.full_like(r_tot, self.gamma, dtype=torch.float32)
+            td_target = r_tot + gamma_pow * bootstrap
 
         # Huber TD loss：较 MSE 对大误差更温和，与 D3QN 一致，利于 QRNN 等多步 bootstrap 稳定
         per_sample_loss = F.smooth_l1_loss(q_tot, td_target, reduction="none")
@@ -313,13 +347,35 @@ class VDNAlgo(BaseAlgorithm):
                 r_tot = rew_train.sum(dim=-1)      # 各 agent 奖励之和
 
             done_train = done[:, bi:].T            # (S, B)
-            # where 替代 *(1-done)：done=1 时 0*(-inf)=NaN，显式置 0 更安全
-            bootstrap = torch.where(done_train.bool(), torch.zeros_like(q_tot_target), q_tot_target)
-            td_target  = r_tot + self.gamma * bootstrap
+            mask_train = mask[:, bi:].T            # (S, B)，提前供 Peng Q(λ) 与 loss 共用
+
+            if getattr(self.params, "peng_q_lambda", False):
+                # 行为策略 Q_tot(s_{t+1}, a_{t+1})：前 S-1 步用 act_train[s+1]，末步无 a_{t+1} 则用 greedy Q（与 exp 一致 → Peng 修正为 0）
+                beh_ag = torch.zeros(S, B, N, device=device, dtype=q_next_tgt.dtype)
+                if S >= 2:
+                    beh_ag[:-1] = q_next_tgt[:-1].gather(3, act_train[1:]).squeeze(-1)
+                beh_ag[-1] = q_next_chosen[-1]
+                q_tot_beh = target_mixer(
+                    beh_ag.reshape(S * B, N), next_state_flat,
+                ).view(S, B)
+                lam = float(getattr(self.params, "peng_lambda", 0.6))
+                td_target = _build_q_lambda_targets_seq(
+                    r_tot,
+                    done_train,
+                    mask_train,
+                    q_tot_target,
+                    q_tot_beh,
+                    self.gamma,
+                    lam,
+                )
+            else:
+                # where 替代 *(1-done)：done=1 时 0*(-inf)=NaN，显式置 0 更安全
+                bootstrap = torch.where(done_train.bool(), torch.zeros_like(q_tot_target), q_tot_target)
+                td_target = r_tot + self.gamma * bootstrap
 
         # === 4. 带序列 mask（+ 可选 active_mask）的 MSE loss ===
         td_loss    = F.smooth_l1_loss(q_tot, td_target, reduction="none")  # (S, B)
-        mask_train = mask[:, bi:].T                                    # (S, B)
+        # mask_train 已在目标计算处构造 (S, B)
         # 若 batch 含 active_mask，叠加过滤 ON_EDGE 步
         raw_am = getattr(first_batch, "active_mask", None)
         if raw_am is not None:

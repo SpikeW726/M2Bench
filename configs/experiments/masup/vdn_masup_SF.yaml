@@ -41,6 +41,7 @@ algo:
   use_double_dqn: false
   shared_policy: true
   reward_global: false
+  shared_sync: true
   # # RNN Q-network：EpisodeReplayBuffer + 固定长度子序列训练
   # seq_len: 20
   # max_episodes: 5000

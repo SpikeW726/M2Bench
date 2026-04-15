@@ -35,6 +35,7 @@ algo:
   use_double_dqn: true
   shared_policy: true
   reward_global: true
+  shared_sync: true
 
 training:
   num_envs: 16

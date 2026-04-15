@@ -82,6 +82,38 @@ class ReplayBuffer:
         self._ptr = 0
         self._size = 0
 
+    def peek_write_index(self) -> int:
+        """下一次 add 将写入的槽位下标（循环数组）。"""
+        return self._ptr
+
+    def overwrite(
+        self,
+        idx: int,
+        rew: float,
+        next_obs: np.ndarray,
+        gamma_power: float,
+        active_mask: float,
+        next_action_mask: Optional[np.ndarray] = None,
+        next_state: Optional[np.ndarray] = None,
+        done: Optional[float] = None,
+    ) -> None:
+        """回填 idx 槽位的 rew / next_obs / gamma_power / active_mask（shared_sync 延迟 finalize）。"""
+        self.rew[idx] = rew
+        self.next_obs[idx] = next_obs
+        if done is not None:
+            self.done[idx] = float(done)
+        if self.has_gamma_power:
+            self.gamma_power[idx] = gamma_power
+        if self.has_active_mask:
+            self.active_mask[idx] = active_mask
+        if self.has_action_mask:
+            if next_action_mask is not None:
+                self.next_action_mask[idx] = next_action_mask
+            else:
+                self.next_action_mask[idx] = True
+        if self.has_state and next_state is not None:
+            self.next_state[idx] = next_state
+
     def add(
         self,
         obs: np.ndarray,

@@ -41,6 +41,7 @@ algo:
   use_double_dqn: true
   shared_policy: true
   reward_global: true
+  shared_sync: true
   mixer_embed_dim: 32
 
 # ---- 训练 ----

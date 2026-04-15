@@ -3,7 +3,7 @@
 
 algo_name: qmix
 env_type: masup
-q_type: mlp
+q_type: rnn
 
 exp_name: qmix-SF
 graph_name: SF
@@ -40,22 +40,31 @@ algo:
   use_double_dqn: true
   shared_policy: true
   reward_global: true
-  mixer_embed_dim: 32
+  shared_sync: false
+  mixer_embed_dim: 256
+  peng_q_lambda: true
+  peng_lambda: 0.5
+  seq_len: 20
+  max_episodes: 2000
+  burn_in_len: 0
 
 training:
   num_envs: 108
   use_subproc: true
-  num_steps: 64
+  num_steps: 512
   total_steps: 10000000
   save_interval: 500
   batch_size: 256
   warmup_steps: 5000
-  buffer_size: 50000
+  buffer_size: 500000
   collect_per_step: 108
   update_per_step: 1
   eval_interval: 25
   eval_episodes: 1
 
 q_network:
-  hidden: [256, 256]
+  # hidden: [256, 256]
+  rnn_type: gru
+  hidden_size: 256
+  num_layers: 1
   dueling: false
