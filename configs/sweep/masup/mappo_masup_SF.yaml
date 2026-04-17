@@ -1,4 +1,4 @@
-# MAPPO + MASUP SF 超参数搜索（WandB Sweep）
+# MAPPO + MASUP SF 超参数搜索（WandB Sweep；基线 YAML 已启用 masup_mlp 异构预处理）
 # 用法:
 #   python sweep.py --base-config configs/experiments/masup/mappo_masup_SF_scratch.yaml \
 #                   --sweep-config configs/sweep/masup/mappo_masup_SF.yaml --count 40

@@ -10,6 +10,81 @@ This is a **Multi-Agent Patrolling (MAP) imitation learning framework** for stud
 
 This section describes how the repository is organized, how subsystems connect, and the **end-to-end data flows** used for MARL training, imitation learning, and evaluation—suitable material for a thesis **Platform** chapter.
 
+### Abstract layered architecture (thesis figure scaffold)
+
+This is a **publication-oriented** decomposition: layer labels and box titles are **functional categories** (suitable for a figure caption), not file paths. The ASCII block below encodes the intended visual layout directly—six horizontal bands, each containing one or more rounded rectangles, with a visually distinct **backend strip** at the bottom. Recreate in a drawing tool with rounded corners, light fills, and a slightly different tint / dashed border for the backend band. Do **not** copy any specific color palette or grouping from third-party figures.
+
+```
+┌──────────────┬────────────────────────────────────────────────────────────────────────────────────────────┐
+│              │  ┌──────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐  │
+│              │  │  Benchmarks & Protocols  │  │  Comparative &           │  │  Qualitative             │  │
+│ Application  │  │  - Fixed graph suites    │  │  Sensitivity Studies     │  │  Inspection              │  │
+│   Layer      │  │  - Idleness-based        │  │  - Hyper-parameter       │  │  - Rollout playback      │  │
+│              │  │    patrol metrics        │  │    sweeps                │  │  - Trajectory            │  │
+│              │  │  - Reproducible seeds    │  │  - Cross-run aggregation │  │    animations            │  │
+│              │  └──────────────────────────┘  └──────────────────────────┘  └──────────────────────────┘  │
+├──────────────┼────────────────────────────────────────────────────────────────────────────────────────────┤
+│              │  ┌──────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐  │
+│              │  │  Lifecycle Coordination  │  │  Observation &           │  │  Artifact Management     │  │
+│ Experiment   │  │  - Config → instantiate  │  │  Provenance              │  │  - Versioned checkpoints │  │
+│ Orchestration│  │    → train → persist     │  │  - Scalar / time-series  │  │  - Network & env meta    │  │
+│  & Tooling   │  │  - Mid-training eval     │  │    logging               │  │    for faithful reload   │  │
+│              │  │  - Early stop & best-of  │  │  - Env-step aligned axis │  │                          │  │
+│              │  └──────────────────────────┘  └──────────────────────────┘  └──────────────────────────┘  │
+├──────────────┼────────────────────────────────────────────────────────────────────────────────────────────┤
+│              │  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐ ┌────────────────┐ ┌──────────┐  │
+│              │  │ On-Policy      │ │ Value-Based    │ │ Hybrid Actor – │ │ Imitation &    │ │ Tabular  │  │
+│  Learning    │  │ Actor-Critic   │ │ MARL           │ │ Decomposed Q   │ │ Warm-Start     │ │ Baselines│  │
+│   Core       │  │ - Centralized  │ │ - DQN-style    │ │ - Actor + team │ │ - Offline      │ │ - Q-table│  │
+│              │  │   or factored  │ │   updates      │ │   Q factorize  │ │   demos        │ │   sanity │  │
+│              │  │ - Recurrent    │ │ - Linear /     │ │   for improved │ │ - Supervised   │ │   checks │  │
+│              │  │   variants     │ │   monotone mix │ │   gradient     │ │   pretraining  │ │          │  │
+│              │  └────────────────┘ └────────────────┘ └────────────────┘ └────────────────┘ └──────────┘  │
+├──────────────┼────────────────────────────────────────────────────────────────────────────────────────────┤
+│              │  ┌──────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐  │
+│              │  │  Rollout Acquisition     │  │  Replay & Sequences      │  │  Batched Learning        │  │
+│ Experience   │  │  - N parallel simulators │  │  - Uniform replay        │  │  Tensors                 │  │
+│  Interface   │  │  - Per-agent action      │  │  - Episode-structured    │  │  - obs / act / rew / done│  │
+│              │  │    validity masks        │  │    storage for recurrent │  │  - Action & decision     │  │
+│              │  │  - Decision-active flags │  │    value models          │  │    masks, team state     │  │
+│              │  └──────────────────────────┘  └──────────────────────────┘  └──────────────────────────┘  │
+├──────────────┼────────────────────────────────────────────────────────────────────────────────────────────┤
+│              │  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐ ┌────────────────────────────┐  │
+│              │  │ Graph-Centric  │ │ Time Semantics │ │ Team Obs.      │ │ Domain Metric Engine       │  │
+│ Patrolling   │  │ Dynamics       │ │ - Event-driven │ │ Interface      │ │ - Running idleness stats   │  │
+│  World &     │  │ - Token-on-    │ │   (next        │ │ - Per-agent    │ │   (IGI / AGI / IWI / WI)   │  │
+│  Metrics     │  │   graph model  │ │   decision)    │ │   local view   │ │ - Episode-level summaries  │  │
+│              │  │ - Travel &     │ │ - Fixed clock  │ │ - Global state │ │   exported to upper layers │  │
+│              │  │   wait actions │ │   (Δt mode)    │ │ - Action masks │ │                            │  │
+│              │  └────────────────┘ └────────────────┘ └────────────────┘ └────────────────────────────┘  │
+╞══════════════╪════════════════════════════════════════════════════════════════════════════════════════════╡
+│              │  ╔══════════════════════════╗  ╔══════════════════════════╗  ╔══════════════════════════╗  │
+│              │  ║ Differentiable Computing ║  ║ Standard RL Env APIs     ║  ║ Problem Instance Data    ║  │
+│   Backend    │  ║ - Autodiff + GPU tensors ║  ║ - Parallel multi-agent   ║  ║ - Declarative graphs     ║  │
+│ (external)   │  ║   for networks & losses  ║  ║   step / reset contracts ║  ║   (topology, costs,      ║  │
+│              │  ║                          ║  ║ - Single- or multi-proc  ║  ║    optional node weights)║  │
+│              │  ║                          ║  ║   vectorization          ║  ║                          ║  │
+│              │  ╚══════════════════════════╝  ╚══════════════════════════╝  ╚══════════════════════════╝  │
+└──────────────┴────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Legend: solid rectangles = platform-internal modules; double-lined rectangles (backend strip) = **external dependencies** the platform builds on (in a real figure, render this band with a distinct fill/dashed outline).
+
+**Optional caption line for the thesis**
+
+> *Figure: Conceptual layers of the multi-agent patrolling RL platform. Upper layers concern experiments and learning objectives; middle layers mediate data between algorithms and simulators; the lowest functional layer encodes graph patrol dynamics and metrics; the backend strip denotes external libraries and static instance data.*
+
+**Mapping to this repository (for authors only; omit from the thesis figure)**
+
+| Abstract box / layer | Where it lives in code (pointer) |
+|----------------------|----------------------------------|
+| Layer 1 | `sweep.py`, `evaluators/`, experiment YAMLs under `configs/experiments/` |
+| Layer 2 | `train.py`, `trainers/rl_trainer.py`, `trainers/qtable_trainer.py`, logging utilities |
+| Layer 3 | `algorithms/`, `trainers/imitator/imitation_trainer.py` |
+| Layer 4 | `data/collector.py`, `data/buffer.py`, `data/batch.py`, `policies/` |
+| Layer 5 | `envs/mdps/` (`patrol_core`, `base_envs`, concrete MDPs), `graphs/` |
+| Layer 6 | PyTorch; PettingZoo / Gymnasium; JSON graphs |
+
 ### Repository map (modules and responsibilities)
 
 | Area | Primary paths | Role |

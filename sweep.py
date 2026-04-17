@@ -57,6 +57,10 @@ def apply_sweep_overrides(config: ExperimentConfig, sweep_cfg: dict):
             setattr(config.training, key, value)
         elif key in top_fields:
             setattr(config, key, value)
+        elif key == "custom_configs" and isinstance(value, dict):
+            if config.env.custom_configs is None:
+                config.env.custom_configs = {}
+            config.env.custom_configs = {**config.env.custom_configs, **value}
         elif key.startswith("custom_configs."):
             sub_key = key[len("custom_configs."):]
             if config.env.custom_configs is None:

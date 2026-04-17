@@ -1,11 +1,12 @@
+# MAPPO + MASUP(SF) + MASUP 异构预处理（与 vdn_masup_SF_preproc / vdppo_masup_SF 对齐）
 # ---- 分发字段 ----
 algo_name: mappo
 env_type: masup
-actor_type: mlp
-critic_type: mlp
+actor_type: masup_mlp
+critic_type: masup_mlp
 
 # ---- 实验元信息 ----
-exp_name: mappo-scratch-3a
+exp_name: mappo-SF-preproc
 graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
@@ -16,6 +17,7 @@ env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
   deltaT: 20.0
+  norm_reward: true
   num_agents: 3
   # init_positions: [0]
   init_positions: [0, 5, 11]
@@ -52,8 +54,26 @@ training:
   update_epochs: 5
   eval_interval: 10
 
-# ---- 网络 ----
+# ---- 网络（须与 env.custom_configs 中 T / role_imformation 一致）----
 actor:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  num_nodes: 12
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 200.0
   hidden: [256, 256]
+
 critic:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  num_nodes: 12
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 200.0
+  input_mode: state
   hidden: [256, 256]
