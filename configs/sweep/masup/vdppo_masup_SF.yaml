@@ -25,12 +25,12 @@ parameters:
 
   actor_lr:
     min: 1.0e-6
-    max: 0.002
+    max: 0.0002
     distribution: log_uniform_values
 
   q_lr:
     min: 1.0e-6
-    max: 0.003
+    max: 0.0003
     distribution: log_uniform_values
 
   clip_range:
@@ -38,16 +38,15 @@ parameters:
     max: 0.3
 
   ent_coef:
-    min: 0.001
+    min: 0.0
     max: 0.05
-    distribution: log_uniform_values
 
   vf_coef:
-    min: 0.1
-    max: 1.0
+    min: 0.5
+    max: 2.0
 
   gamma:
-    values: [0.99, 0.995, 0.999]
+    value: 0.999
 
   gae_lambda:
     min: 0.9
@@ -62,7 +61,7 @@ parameters:
     value: 1
 
   mixer_embed_dim:
-    values: [32, 64, 128]
+    value: 256
 
   data_chunk_length:
     value: 10
@@ -71,22 +70,22 @@ parameters:
     values: [2048, 4096, 8192]
 
   update_epochs:
-    values: [3, 5, 10]
+    values: [3, 5]
 
   num_steps:
     values: [2048, 4096]
 
   total_steps:
-    value: 20000000
+    value: 40000000
 
   save_interval:
     value: 500
 
 # ---- 自定义早停 ----
 early_terminate:
-  min_trial: 6             # 前 N 个 trial 仅建立 milestone 基准
-  min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
-  terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
+  min_trial: 4             # 前 N 个 trial 仅建立 milestone 基准
+  min_steps: 10000000       # 达到该 env steps 后做 cross-trial 比较
+  terminate_ratio: 0.5     # 指标不在前 40% 则早停（可根据地图特性调整）
   early_stop_iters: 100  # trial 内至少运行 N iters 后启用 slope 检查
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
