@@ -50,6 +50,7 @@ from configs.registry import (
     load_eval_config,
     _env_config_to_dicts,
 )
+from policies.marl.marl_base import MultiAgentPolicy
 from utils.model_io import load_policy_for_eval, get_model_config
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
 from utils.autodl_paths import (
@@ -862,40 +863,75 @@ def eval_policy_inline(
     is_recurrent = getattr(policy, "is_recurrent", False)
     episode_metrics_list = []
     wi_fromT_finals = []
+    is_multi = isinstance(policy, MultiAgentPolicy)
 
     for _ in range(num_episodes):
         obs, infos = env.reset()
         hidden_state = None
 
-        while env.agents:
-            if episode_time is not None and env.world.current_time >= episode_time:
-                break
+        if is_multi:
+            # PettingZoo ParallelEnv：obs / infos 为 per-agent dict
+            while env.agents:
+                if episode_time is not None and env.world.current_time >= episode_time:
+                    break
 
-            action_masks = {
-                aid: torch.as_tensor(
-                    info["action_mask"], dtype=torch.bool, device=device
-                )
-                for aid, info in infos.items()
-            }
-            obs_tensor = {
-                aid: torch.as_tensor(o, dtype=torch.float32, device=device)
-                for aid, o in obs.items()
-            }
-
-            with torch.no_grad():
-                outputs = policy.forward(
-                    obs_tensor, state_dict=hidden_state, action_mask=action_masks
-                )
-            actions = {aid: out["act"].cpu().numpy() for aid, out in outputs.items()}
-
-            if is_recurrent:
-                hidden_state = {
-                    aid: out["state"]
-                    for aid, out in outputs.items()
-                    if out.get("state") is not None
+                action_masks = {
+                    aid: torch.as_tensor(
+                        info["action_mask"], dtype=torch.bool, device=device
+                    )
+                    for aid, info in infos.items()
+                }
+                obs_tensor = {
+                    aid: torch.as_tensor(o, dtype=torch.float32, device=device)
+                    for aid, o in obs.items()
                 }
 
-            obs, _, _, _, infos = env.step(actions)
+                with torch.no_grad():
+                    outputs = policy.forward(
+                        obs_tensor, state_dict=hidden_state, action_mask=action_masks
+                    )
+                actions = {aid: out["act"].cpu().numpy() for aid, out in outputs.items()}
+
+                if is_recurrent:
+                    hidden_state = {
+                        aid: out["state"]
+                        for aid, out in outputs.items()
+                        if out.get("state") is not None
+                    }
+
+                obs, _, _, _, infos = env.step(actions)
+        else:
+            # Gymnasium 单智能体（如 SUNSGymEnv）：obs 为 ndarray，infos 为扁平 dict
+            terminated = False
+            truncated = False
+            while not (terminated or truncated):
+                if episode_time is not None and getattr(env, "world", None) is not None:
+                    if env.world.current_time >= episode_time:
+                        break
+
+                am = infos.get("action_mask")
+                if am is None:
+                    raise KeyError(
+                        "inline eval 需要 info['action_mask']；请在环境 _build_info 中提供"
+                    )
+                action_mask_t = torch.as_tensor(
+                    np.asarray(am), dtype=torch.bool, device=device,
+                ).unsqueeze(0)
+                obs_t = torch.as_tensor(
+                    np.asarray(obs), dtype=torch.float32, device=device,
+                ).unsqueeze(0)
+
+                with torch.no_grad():
+                    out = policy.forward(
+                        obs_t, state=hidden_state, action_mask=action_mask_t,
+                    )
+                act = int(out["act"].cpu().numpy().reshape(-1)[0])
+                if is_recurrent and out.get("state") is not None:
+                    hidden_state = out["state"]
+
+                obs, _rew, terminated, truncated, infos = env.step(act)
+                terminated = bool(terminated)
+                truncated = bool(truncated)
 
         final_metrics = env.world.current_metrics
         episode_metrics_list.append(final_metrics)
