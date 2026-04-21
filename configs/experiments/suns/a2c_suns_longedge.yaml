@@ -18,6 +18,7 @@ seed: 42
 env:
   graph_path: graphs/long_edge.json
   enable_wait: false
+  norm_reward: true
   num_agents: 1
   init_positions: [0]
   episode_len: 100

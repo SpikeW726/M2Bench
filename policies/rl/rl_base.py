@@ -200,6 +200,12 @@ class ActorPolicy(RLBasePolicy):
             if action_mask is not None:
                 mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
                 logits = logits.masked_fill(~mask_t, float("-inf"))
+            if not torch.isfinite(logits).all():
+                nan_frac = (~torch.isfinite(logits)).float().mean().item()
+                raise RuntimeError(
+                    f"evaluate_actions logits 含非有限值: obs shape={obs.shape}, "
+                    f"logits shape={logits.shape}, bad_frac={nan_frac:.3f}"
+                )
             dist = torch.distributions.Categorical(logits=logits)
         else:
             out = self.actor(obs)
@@ -256,6 +262,13 @@ class ActorPolicy(RLBasePolicy):
                     idx = all_masked.nonzero(as_tuple=True)
                     mask_t[idx[0], idx[1], 0] = True
                 logits_seq = logits_seq.masked_fill(~mask_t, float("-inf"))
+            if not torch.isfinite(logits_seq).all():
+                nan_frac = (~torch.isfinite(logits_seq)).float().mean().item()
+                raise RuntimeError(
+                    f"evaluate_actions_sequence logits 含非有限值: "
+                    f"obs_seq shape={obs_seq.shape}, logits shape={logits_seq.shape}, "
+                    f"bad_frac={nan_frac:.3f}"
+                )
             dist = torch.distributions.Categorical(logits=logits_seq)
             log_prob = dist.log_prob(act_seq)
             entropy = dist.entropy()

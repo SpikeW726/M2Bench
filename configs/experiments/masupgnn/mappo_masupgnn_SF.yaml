@@ -36,6 +36,7 @@ seed: 42
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: true
+  norm_reward: true
   deltaT: 20.0
   num_agents: 3
   init_positions: [0, 5, 11]

@@ -28,6 +28,7 @@ seed: 42
 # SF: 12 节点全连通，phi 各异（犯罪热力权重），truncate_by_time=true
 env:
   graph_path: graphs/SFcrimemap.json
+  norm_reward: true
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000

@@ -12,6 +12,7 @@ actor_path: models/vdn-masup-grid-imi/imi_masup_vdn__1775780286_final/policy.pt
 env:
   graph_path: graphs/grid.json
   enable_wait: true
+  norm_reward: true
   deltaT: 0.5
   num_agents: 6
   init_positions: [1, 9, 17, 25, 33, 41]

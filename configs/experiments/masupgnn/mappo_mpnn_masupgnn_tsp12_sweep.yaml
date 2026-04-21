@@ -44,6 +44,7 @@ critic_path: models/masup-gnn-imitation/imi_masup_gnn_tsp12__1773573425_final/cr
 env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: true
+  norm_reward: true
   deltaT: 0.333
   num_agents: 3
   init_positions: [0, 5, 11]

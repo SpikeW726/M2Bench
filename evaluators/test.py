@@ -543,6 +543,8 @@ def test_trained_policy(
                 plot_stem=anim_plot_stem,
             )
 
+    if hasattr(env, "close"):
+        env.close()
     return episode_metrics
 
 
@@ -778,6 +780,8 @@ def test_qtable_policy(
                 plot_stem=anim_plot_stem,
             )
 
+    if hasattr(env, "close"):
+        env.close()
     return episode_metrics
 
 
@@ -852,10 +856,16 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
 
     print(f"\n[Eval] model_dir={model_dir}, config={eval_config_path}")
     if algo_name == "qtable":
+        # 过滤掉 DRL 专属字段，test_qtable_policy 不支持这些参数
+        _QTABLE_SUPPORTED = {
+            "num_episodes", "save_plot", "show_plot", "record_animation",
+            "event_driven", "max_frames", "save_animation_dir",
+        }
+        qtable_params = {k: v for k, v in eval_params.items() if k in _QTABLE_SUPPORTED}
         episode_metrics = test_qtable_policy(
             model_dir=model_dir,
             env_config_path=eval_config_path,
-            **eval_params,
+            **qtable_params,
         )
     else:
         episode_metrics = test_trained_policy(
@@ -983,113 +993,112 @@ def eval_policy_inline(
     # 裸 ActorPolicy/ValuePolicy 使用 forward(obs_t, state, action_mask) 接口。
     is_multi_policy = isinstance(policy, MultiAgentPolicy)
 
-    for _ in range(num_episodes):
-        obs, infos = env.reset()
-        hidden_state = None
+    try:
+        for _ in range(num_episodes):
+            obs, infos = env.reset()
+            hidden_state = None
 
-        if is_pettingzoo:
-            # PettingZoo ParallelEnv 分支（多智能体，无论 policy 是否为 MultiAgentPolicy）
-            while env.agents:
-                if episode_time is not None and env.world.current_time >= episode_time:
-                    break
-
-                action_masks = {
-                    aid: torch.as_tensor(
-                        info["action_mask"], dtype=torch.bool, device=device
-                    )
-                    for aid, info in infos.items()
-                }
-                # obs 归一化：若训练时开启了 norm_obs，使用相同 RMS 统计量
-                if obs_rms is not None:
-                    obs_normed = {aid: obs_rms.norm(np.asarray(o)) for aid, o in obs.items()}
-                else:
-                    obs_normed = obs
-                obs_tensor = {
-                    aid: torch.as_tensor(o, dtype=torch.float32, device=device)
-                    for aid, o in obs_normed.items()
-                }
-
-                if is_multi_policy:
-                    # 多智能体 policy：统一 forward(obs_dict, state_dict, action_mask_dict)
-                    with torch.no_grad():
-                        outputs = policy.forward(
-                            obs_tensor, state_dict=hidden_state, action_mask=action_masks
-                        )
-                    actions = {aid: out["act"].cpu().numpy() for aid, out in outputs.items()}
-                    if is_recurrent:
-                        hidden_state = {
-                            aid: out["state"]
-                            for aid, out in outputs.items()
-                            if out.get("state") is not None
-                        }
-                else:
-                    # 裸单智能体 policy 部署到多 agent：为每个 agent 单独 forward，共享同一套权重
-                    # 典型场景：suns_gym(1 agent) 训练 → suns(3 agents) eval
-                    actions = {}
-                    new_hidden = {} if is_recurrent else None
-                    for aid in list(obs_tensor.keys()):
-                        obs_t = obs_tensor[aid].unsqueeze(0)
-                        am_t = action_masks[aid].unsqueeze(0)
-                        h = hidden_state.get(aid) if (is_recurrent and hidden_state) else None
-                        with torch.no_grad():
-                            out = policy.forward(obs_t, state=h, action_mask=am_t)
-                        actions[aid] = out["act"].cpu().numpy()
-                        if is_recurrent and out.get("state") is not None:
-                            new_hidden[aid] = out["state"]
-                    if is_recurrent:
-                        hidden_state = new_hidden
-
-                obs, _, _, _, infos = env.step(actions)
-        else:
-            # Gymnasium 单智能体（如 SUNSGymEnv）：obs 为 ndarray，infos 为扁平 dict
-            terminated = False
-            truncated = False
-            while not (terminated or truncated):
-                if episode_time is not None and getattr(env, "world", None) is not None:
-                    if env.world.current_time >= episode_time:
+            if is_pettingzoo:
+                # PettingZoo ParallelEnv 分支（多智能体，无论 policy 是否为 MultiAgentPolicy）
+                while env.agents:
+                    if episode_time is not None and env.world.current_time >= episode_time:
                         break
 
-                am = infos.get("action_mask")
-                if am is None:
-                    raise KeyError(
-                        "inline eval 需要 info['action_mask']；请在环境 _build_info 中提供"
-                    )
-                action_mask_t = torch.as_tensor(
-                    np.asarray(am), dtype=torch.bool, device=device,
-                ).unsqueeze(0)
-                # obs 归一化：若训练时开启了 norm_obs，使用相同 RMS 统计量
-                obs_np = obs_rms.norm(np.asarray(obs)) if obs_rms is not None else np.asarray(obs)
-                obs_t = torch.as_tensor(obs_np, dtype=torch.float32, device=device).unsqueeze(0)
+                    action_masks = {
+                        aid: torch.as_tensor(
+                            info["action_mask"], dtype=torch.bool, device=device
+                        )
+                        for aid, info in infos.items()
+                    }
+                    # obs 归一化：若训练时开启了 norm_obs，使用相同 RMS 统计量
+                    if obs_rms is not None:
+                        obs_normed = {aid: obs_rms.norm(np.asarray(o)) for aid, o in obs.items()}
+                    else:
+                        obs_normed = obs
+                    obs_tensor = {
+                        aid: torch.as_tensor(o, dtype=torch.float32, device=device)
+                        for aid, o in obs_normed.items()
+                    }
 
-                with torch.no_grad():
-                    out = policy.forward(
-                        obs_t, state=hidden_state, action_mask=action_mask_t,
-                    )
-                act = int(out["act"].cpu().numpy().reshape(-1)[0])
-                if is_recurrent and out.get("state") is not None:
-                    hidden_state = out["state"]
+                    if is_multi_policy:
+                        with torch.no_grad():
+                            outputs = policy.forward(
+                                obs_tensor, state_dict=hidden_state, action_mask=action_masks
+                            )
+                        actions = {aid: out["act"].cpu().numpy() for aid, out in outputs.items()}
+                        if is_recurrent:
+                            hidden_state = {
+                                aid: out["state"]
+                                for aid, out in outputs.items()
+                                if out.get("state") is not None
+                            }
+                    else:
+                        actions = {}
+                        new_hidden = {} if is_recurrent else None
+                        for aid in list(obs_tensor.keys()):
+                            obs_t = obs_tensor[aid].unsqueeze(0)
+                            am_t = action_masks[aid].unsqueeze(0)
+                            h = hidden_state.get(aid) if (is_recurrent and hidden_state) else None
+                            with torch.no_grad():
+                                out = policy.forward(obs_t, state=h, action_mask=am_t)
+                            actions[aid] = out["act"].cpu().numpy()
+                            if is_recurrent and out.get("state") is not None:
+                                new_hidden[aid] = out["state"]
+                        if is_recurrent:
+                            hidden_state = new_hidden
 
-                obs, _rew, terminated, truncated, infos = env.step(act)
-                terminated = bool(terminated)
-                truncated = bool(truncated)
+                    obs, _, _, _, infos = env.step(actions)
+            else:
+                terminated = False
+                truncated = False
+                while not (terminated or truncated):
+                    if episode_time is not None and getattr(env, "world", None) is not None:
+                        if env.world.current_time >= episode_time:
+                            break
 
-        final_metrics = env.world.current_metrics
-        episode_metrics_list.append(final_metrics)
-        if is_masup_like:
-            wi_fromT_finals.append(
-                float(getattr(env, "worst_idleness_fromT", 0.0))
-            )
+                    am = infos.get("action_mask")
+                    if am is None:
+                        raise KeyError(
+                            "inline eval 需要 info['action_mask']；请在环境 _build_info 中提供"
+                        )
+                    action_mask_t = torch.as_tensor(
+                        np.asarray(am), dtype=torch.bool, device=device,
+                    ).unsqueeze(0)
+                    obs_np = obs_rms.norm(np.asarray(obs)) if obs_rms is not None else np.asarray(obs)
+                    obs_t = torch.as_tensor(obs_np, dtype=torch.float32, device=device).unsqueeze(0)
 
-    result = {
-        "eval/igi": float(np.mean([m.igi for m in episode_metrics_list])),
-        "eval/agi": float(np.mean([m.agi for m in episode_metrics_list])),
-        "eval/iwi": float(np.mean([m.iwi for m in episode_metrics_list])),
-        "eval/wi":  float(np.mean([m.wi  for m in episode_metrics_list])),
-    }
-    if is_masup_like and wi_fromT_finals:
-        result["eval/wi_fromT"] = float(np.mean(wi_fromT_finals))
+                    with torch.no_grad():
+                        out = policy.forward(
+                            obs_t, state=hidden_state, action_mask=action_mask_t,
+                        )
+                    act = int(out["act"].cpu().numpy().reshape(-1)[0])
+                    if is_recurrent and out.get("state") is not None:
+                        hidden_state = out["state"]
 
-    return result
+                    obs, _rew, terminated, truncated, infos = env.step(act)
+                    terminated = bool(terminated)
+                    truncated = bool(truncated)
+
+            final_metrics = env.world.current_metrics
+            episode_metrics_list.append(final_metrics)
+            if is_masup_like:
+                wi_fromT_finals.append(
+                    float(getattr(env, "worst_idleness_fromT", 0.0))
+                )
+
+        result = {
+            "eval/igi": float(np.mean([m.igi for m in episode_metrics_list])),
+            "eval/agi": float(np.mean([m.agi for m in episode_metrics_list])),
+            "eval/iwi": float(np.mean([m.iwi for m in episode_metrics_list])),
+            "eval/wi":  float(np.mean([m.wi  for m in episode_metrics_list])),
+        }
+        if is_masup_like and wi_fromT_finals:
+            result["eval/wi_fromT"] = float(np.mean(wi_fromT_finals))
+
+        return result
+    finally:
+        if hasattr(env, "close"):
+            env.close()
 
 
 # =============================================================================

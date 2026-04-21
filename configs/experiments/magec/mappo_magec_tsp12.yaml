@@ -20,6 +20,7 @@ seed: 42
 # TSP12: 12 节点, max_degree=5, action_dim=6, state_dim=156
 env:
   graph_path: graphs/simple_TSP_12.json
+  norm_reward: true
   num_agents: 3
   episode_len: 300
   custom_configs:

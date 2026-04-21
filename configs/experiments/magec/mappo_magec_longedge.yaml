@@ -19,6 +19,7 @@ seed: 42
 # state_dim = num_nodes + num_nodes^2 = 4 + 16 = 20
 env:
   graph_path: graphs/long_edge.json
+  norm_reward: true
   num_agents: 3
   init_positions: [0, 1, 2]
   episode_len: 100

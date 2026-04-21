@@ -7,6 +7,7 @@ env_type: masup_gnn
 env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: true
+  norm_reward: true
   deltaT: 0.333
   num_agents: 3
   init_positions: [0, 5, 11]

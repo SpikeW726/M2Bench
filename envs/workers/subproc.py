@@ -174,5 +174,17 @@ class SubprocEnvWorker(EnvWorker):
         except (BrokenPipeError, EOFError, AttributeError):
             pass
         finally:
-            if self.process.is_alive():
-                self.process.terminate()
+            try:
+                if self.process.is_alive():
+                    self.process.terminate()
+                    self.process.join(timeout=1)
+            except Exception:
+                pass
+            try:
+                self.parent_conn.close()
+            except Exception:
+                pass
+            try:
+                self.process.close()
+            except Exception:
+                pass
