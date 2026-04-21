@@ -11,6 +11,7 @@ env_type: ex_gbla
 env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: false
+  norm_reward: true
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 300

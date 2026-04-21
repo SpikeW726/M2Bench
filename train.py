@@ -470,7 +470,11 @@ def _build_collector(
 #                          Q-table 独立训练路径
 # =============================================================================
 
-def _train_qtable(config: ExperimentConfig):
+def _train_qtable(
+    config: ExperimentConfig,
+    eval_config_path: str = None,
+    early_stopper=None,
+):
     """Q-table 独立训练路径：复用日志/环境，绕过 nn.Module 流水线。
 
     根据环境类型自动分派：
@@ -522,6 +526,27 @@ def _train_qtable(config: ExperimentConfig):
             pass
         return {}
 
+    inline_eval_fn = None
+    if eval_config_path and tc.eval_interval > 0:
+        from evaluators.test import eval_qtable_inline
+        from configs.registry import load_eval_config
+        _eval_env_type, _eval_env_cfg = load_eval_config(eval_config_path)
+        _train_custom = dict(config.env.custom_configs or {})
+        if _train_custom:
+            _eval_env_cfg.custom_configs = {
+                **(_eval_env_cfg.custom_configs or {}),
+                **_train_custom,
+            }
+        _eval_episodes = tc.eval_episodes
+
+        def inline_eval_fn():
+            return eval_qtable_inline(
+                algo=algo,
+                env_type=_eval_env_type,
+                env_config=_eval_env_cfg,
+                num_episodes=_eval_episodes,
+            )
+
     if vec_env.is_parallel_env:
         # ParallelEnv：每个 agent 独立 Q-table
         action_dim = list(vec_env.action_space.values())[0].n
@@ -536,6 +561,7 @@ def _train_qtable(config: ExperimentConfig):
         trainer = QTableTrainer(
             algo=algo, vec_env=vec_env, config=tc,
             save_dir=config.save_dir, logger=logger, log_extra_fn=log_extra_fn,
+            eval_fn=inline_eval_fn,
         )
     else:
         # Gymnasium Env：单一集中式 Q-table，虚拟 key "agent_0"
@@ -547,7 +573,21 @@ def _train_qtable(config: ExperimentConfig):
         trainer = JointQTableTrainer(
             algo=algo, vec_env=vec_env, config=tc,
             save_dir=config.save_dir, logger=logger, log_extra_fn=log_extra_fn,
+            eval_fn=inline_eval_fn,
         )
+
+    if early_stopper is not None:
+        _orig_lef = trainer.log_extra_fn
+
+        def _patched_lef():
+            metrics = _orig_lef() if _orig_lef else {}
+            if metrics:
+                early_stopper.record_metrics(metrics, trainer.total_steps)
+            early_stopper.check_and_maybe_raise(trainer.total_steps)
+            return metrics
+
+        trainer.log_extra_fn = _patched_lef
+        trainer.on_eval_complete = early_stopper.record_metrics
 
     print(f"\n[Train] Starting Q-table training")
     if tc.total_steps is not None:
@@ -561,6 +601,21 @@ def _train_qtable(config: ExperimentConfig):
     print(f"  Save dir: {config.save_dir}")
 
     trainer.train()
+
+    if eval_config_path:
+        from evaluators.test import run_eval_from_config
+        qtable_dir = config.save_dir / "final"
+        print(f"\n[Train] Starting auto-eval from {eval_config_path}")
+        final_eval_metrics = run_eval_from_config(str(qtable_dir), eval_config_path)
+        if final_eval_metrics:
+            logger.log(final_eval_metrics, step=trainer.total_steps)
+            if early_stopper is not None:
+                early_stopper.record_metrics(final_eval_metrics, trainer.total_steps)
+            if config.track_wandb:
+                import wandb
+                if wandb.run is not None:
+                    for key, value in final_eval_metrics.items():
+                        wandb.run.summary[key] = value
 
     tb_writer.close()
     if config.track_wandb:
@@ -586,12 +641,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         eval_config_path: 评估 YAML 路径；提供则训练结束后自动评估最终模型。
     """
     if config.algo_name == "qtable":
-        _train_qtable(config)
-        if eval_config_path:
-            from evaluators.test import run_eval_from_config
-            qtable_dir = config.save_dir / "final"
-            print(f"\n[Train] Starting auto-eval from {eval_config_path}")
-            run_eval_from_config(str(qtable_dir), eval_config_path)
+        _train_qtable(config, eval_config_path=eval_config_path, early_stopper=early_stopper)
         return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -630,6 +680,12 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     _maybe_seed_vec_env(vec_env, config.seed)
     print(f"[Train] Created {tc.num_envs} vectorized {config.env_type} envs "
           f"({'subproc' if tc.use_subproc else 'dummy'})")
+
+    # 若启用了 obs 归一化，保留对包装层的引用，供 checkpoint 持久化和 eval 使用
+    from envs.venv_wrappers import VectorEnvNormObs
+    _obs_norm_wrapper: Optional[VectorEnvNormObs] = (
+        vec_env if isinstance(vec_env, VectorEnvNormObs) else None
+    )
 
     # ---- 3. 推断维度 ----
     is_parallel = vec_env.is_parallel_env
@@ -767,6 +823,21 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             }
         return {"enabled": False}
 
+    def _get_obs_rms_state():
+        """序列化当前 obs_rms 统计量，供 checkpoint 写入和评估时还原。"""
+        if _obs_norm_wrapper is None:
+            return None
+        rms = _obs_norm_wrapper.get_obs_rms()
+        import numpy as _np
+        def _to_list(v):
+            return v.tolist() if isinstance(v, _np.ndarray) else float(v)
+        return {
+            "mean": _to_list(rms.mean),
+            "var":  _to_list(rms.var),
+            "count": float(rms.count),
+            "clip_max": rms.clip_max,
+        }
+
     def save_checkpoint_fn(iteration: int):
         ckpt_dir = config.save_dir / f"iter_{iteration}"
         save_model(
@@ -780,6 +851,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
                 **_eval_meta,
                 "iteration": iteration,
                 "value_normalization": _get_value_norm_config(),
+                "obs_rms_state": _get_obs_rms_state(),
             },
         )
         print(f"[Checkpoint] Saved iteration {iteration} to {ckpt_dir}")
@@ -818,6 +890,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
                 env_config=_eval_env_cfg,
                 num_episodes=_eval_episodes,
                 device=_eval_device,
+                obs_rms=_obs_norm_wrapper.get_obs_rms() if _obs_norm_wrapper is not None else None,
             )
 
     trainer = create_trainer(
@@ -879,6 +952,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             extra_info={
                 **_eval_meta,
                 "value_normalization": _get_value_norm_config(),
+                "obs_rms_state": _get_obs_rms_state(),
                 **extra_info,
             },
         )

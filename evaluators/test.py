@@ -78,6 +78,19 @@ def _eval_metrics_history_for_plot(env, env_type: str) -> dict:
     return hist
 
 
+def _summary_from_episode_metrics(episode_metrics, wi_fromT_finals: list | None = None) -> dict:
+    """统一汇总为 logger / wandb 友好的 eval/* 指标。"""
+    result = {
+        "eval/igi": float(np.mean([m.igi for m in episode_metrics])),
+        "eval/agi": float(np.mean([m.agi for m in episode_metrics])),
+        "eval/iwi": float(np.mean([m.iwi for m in episode_metrics])),
+        "eval/wi": float(np.mean([m.wi for m in episode_metrics])),
+    }
+    if wi_fromT_finals:
+        result["eval/wi_fromT"] = float(np.mean(wi_fromT_finals))
+    return result
+
+
 def _policy_output_to_action_scores(out: dict) -> tuple[torch.Tensor | None, str]:
     """从 policy.forward 结果取出用于区分动作的标量向量（actor=logits, value=Q）。"""
     if out.get("logits") is not None:
@@ -265,7 +278,7 @@ def test_trained_policy(
     print(f"\n=== Network Dimensions ===")
     print(f"Obs dim: {obs_dim}, Action dim: {action_dim}")
 
-    # ---- 3. 加载策略 ----
+    # ---- 3. 加载策略 & obs_rms ----
     model_dir = Path(model_dir)
     model_config = get_model_config(model_dir)
     extra = model_config.get("extra", {})
@@ -279,6 +292,13 @@ def test_trained_policy(
         action_space=action_space,
         device='cpu',
     )
+
+    # 加载训练时的 obs_rms（若训练时未开启 norm_obs，则为 None，评估循环不做归一化）
+    from utils.model_io import load_obs_rms
+    _eval_obs_rms = load_obs_rms(model_dir)
+    if _eval_obs_rms is not None:
+        print(f"[Eval] obs_rms loaded: mean≈{float(np.mean(_eval_obs_rms.mean)):.3f}, "
+              f"std≈{float(np.mean(np.sqrt(_eval_obs_rms.var))):.3f}, count={_eval_obs_rms.count:.0f}")
 
     # ---- 4. 评估循环 ----
     time_desc = f"{eff_episode_time:.0f}s" if eff_episode_time is not None else "env-truncated"
@@ -327,9 +347,14 @@ def test_trained_policy(
                 aid: torch.as_tensor(info['action_mask'], dtype=torch.bool, device=multi_policy.device)
                 for aid, info in infos.items()
             }
+            # obs 归一化：若训练时开启了 norm_obs，使用保存的 RMS 统计量
+            if _eval_obs_rms is not None:
+                obs_normed = {aid: _eval_obs_rms.norm(np.asarray(o)) for aid, o in obs.items()}
+            else:
+                obs_normed = obs
             obs_tensor = {
                 aid: torch.as_tensor(o, dtype=torch.float32, device=multi_policy.device)
-                for aid, o in obs.items()
+                for aid, o in obs_normed.items()
             }
 
             # BEAU: set _current_node_idx on actor before forward
@@ -827,18 +852,85 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
 
     print(f"\n[Eval] model_dir={model_dir}, config={eval_config_path}")
     if algo_name == "qtable":
-        test_qtable_policy(
+        episode_metrics = test_qtable_policy(
             model_dir=model_dir,
             env_config_path=eval_config_path,
             **eval_params,
         )
     else:
-        test_trained_policy(
+        episode_metrics = test_trained_policy(
             model_dir=model_dir,
             env_config_path=eval_config_path,
             env_custom_config_overrides=train_custom_configs,
             **eval_params,
         )
+    return _summary_from_episode_metrics(episode_metrics)
+
+
+def eval_qtable_inline(
+    algo,
+    env_type: str,
+    env_config,
+    num_episodes: int = 5,
+) -> dict:
+    """用内存中的当前 Q-table 直接评估，行为与 DRL 的 inline eval 对齐。"""
+    env = _create_env(env_type, env_config)
+    is_parallel = hasattr(env, "possible_agents")
+    prev_eps = {aid: pol.epsilon for aid, pol in algo.policies.items()}
+    for pol in algo.policies.values():
+        pol.set_epsilon(0.0)
+
+    episode_metrics = []
+    wi_fromT_finals: list = []
+    try:
+        for _ in range(num_episodes):
+            obs, infos = env.reset()
+            terminated = False
+            truncated = False
+
+            while not (terminated or truncated):
+                if is_parallel:
+                    actions = {}
+                    for agent_str in env.agents:
+                        info_i = infos[agent_str]
+                        action_mask = info_i.get("action_mask", None)
+                        pol = algo.policies[agent_str]
+                        if info_i.get("active_mask", 1):
+                            if action_mask is not None:
+                                actions[agent_str] = pol.select_action(obs[agent_str], action_mask)
+                            else:
+                                actions[agent_str] = int(np.argmax(pol.get_q(obs[agent_str])))
+                        else:
+                            if action_mask is not None:
+                                valid = np.where(action_mask)[0]
+                                actions[agent_str] = int(valid[-1]) if len(valid) > 0 else 0
+                            else:
+                                actions[agent_str] = 0
+                    obs, _, terms, truncs, infos = env.step(actions)
+                    first = env.agents[0]
+                    truncated = bool(truncs[first])
+                    terminated = bool(terms[first])
+                else:
+                    info_i = infos if isinstance(infos, dict) else {}
+                    action_mask = info_i.get("action_mask", None)
+                    pol = algo.policies["agent_0"]
+                    if action_mask is not None:
+                        action = pol.select_action(obs, action_mask)
+                    else:
+                        action = int(np.argmax(pol.get_q(obs)))
+                    obs, _, terminated, truncated, infos = env.step(action)
+
+            final_metrics = env.world.current_metrics
+            episode_metrics.append(final_metrics)
+            if env_type in _MASUP_LIKE_ENV_TYPES:
+                wi_fromT_finals.append(float(getattr(env, "worst_idleness_fromT", 0.0)))
+    finally:
+        for aid, pol in algo.policies.items():
+            pol.set_epsilon(prev_eps[aid])
+        if hasattr(env, "close"):
+            env.close()
+
+    return _summary_from_episode_metrics(episode_metrics, wi_fromT_finals)
 
 
 # =============================================================================
@@ -851,6 +943,7 @@ def eval_policy_inline(
     env_config,
     num_episodes: int = 5,
     device=None,
+    obs_rms=None,
 ) -> dict:
     """用内存中的当前 policy 直接评估，不保存/加载 checkpoint，不生成图表。
 
@@ -863,6 +956,8 @@ def eval_policy_inline(
         env_config:   EnvConfig 实例（从 eval yaml 读取）。
         num_episodes: 评估 episode 数量。
         device:       torch.device；None 时从 policy 自动检测。
+        obs_rms:      utils.log_utils.RunningMeanStd 实例；训练时启用了 norm_obs 则传入，
+                      确保评估时观测归一化与训练完全一致。None 表示不归一化。
 
     Returns:
         dict, key 均带 "eval/" 前缀，可直接传入 logger.log。
@@ -904,9 +999,14 @@ def eval_policy_inline(
                     )
                     for aid, info in infos.items()
                 }
+                # obs 归一化：若训练时开启了 norm_obs，使用相同 RMS 统计量
+                if obs_rms is not None:
+                    obs_normed = {aid: obs_rms.norm(np.asarray(o)) for aid, o in obs.items()}
+                else:
+                    obs_normed = obs
                 obs_tensor = {
                     aid: torch.as_tensor(o, dtype=torch.float32, device=device)
-                    for aid, o in obs.items()
+                    for aid, o in obs_normed.items()
                 }
 
                 if is_multi_policy:
@@ -957,9 +1057,9 @@ def eval_policy_inline(
                 action_mask_t = torch.as_tensor(
                     np.asarray(am), dtype=torch.bool, device=device,
                 ).unsqueeze(0)
-                obs_t = torch.as_tensor(
-                    np.asarray(obs), dtype=torch.float32, device=device,
-                ).unsqueeze(0)
+                # obs 归一化：若训练时开启了 norm_obs，使用相同 RMS 统计量
+                obs_np = obs_rms.norm(np.asarray(obs)) if obs_rms is not None else np.asarray(obs)
+                obs_t = torch.as_tensor(obs_np, dtype=torch.float32, device=device).unsqueeze(0)
 
                 with torch.no_grad():
                     out = policy.forward(

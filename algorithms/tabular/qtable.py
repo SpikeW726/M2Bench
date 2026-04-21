@@ -115,6 +115,10 @@ class QTableAlgo:
     def get_epsilon(self) -> float:
         return next(iter(self.policies.values())).epsilon
 
+    def set_training_mode(self, training: bool):
+        """与 DRL 算法接口对齐；Q-table 无 train/eval 模式差异。"""
+        return None
+
     def save(self, save_dir: str):
         """逐 agent 保存 Q-table 到指定目录。"""
         from pathlib import Path

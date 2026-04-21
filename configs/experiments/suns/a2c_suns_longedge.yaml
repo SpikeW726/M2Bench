@@ -21,6 +21,7 @@ env:
   num_agents: 1
   init_positions: [0]
   episode_len: 100
+  norm_obs: true
   custom_configs:
     truncate_by_time: true
 

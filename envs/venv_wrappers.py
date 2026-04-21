@@ -72,15 +72,19 @@ class VectorEnvWrapper(BaseVectorEnv):
 class VectorEnvNormObs(VectorEnvWrapper):
     """
     观测归一化包装器。
-    
+
     使用 running mean/std 将观测归一化到近似 N(0,1) 分布，有助于稳定训练。
-    
+    同时支持：
+    - Gymnasium 单智能体：obs 为 ndarray (num_envs, obs_dim)
+    - PettingZoo ParallelEnv：obs 为 Dict[str, ndarray]，各 agent shape (num_envs, obs_dim)
+      同构智能体共享同一个 RMS（将所有 agent 的 obs 合并后更新统计量）。
+
     Args:
         venv: 被包装的向量化环境
         update_obs_rms: 是否在 reset/step 时更新统计量
         clip_max: 归一化后的裁剪范围，默认 10.0
     """
-    
+
     def __init__(
         self,
         venv: BaseVectorEnv,
@@ -90,23 +94,36 @@ class VectorEnvNormObs(VectorEnvWrapper):
         super().__init__(venv)
         self.update_obs_rms = update_obs_rms
         self.obs_rms = NumpyRMS(clip_max=clip_max)
-    
+
+    def _to_batch(self, obs) -> "np.ndarray":
+        """将 obs 展平为 2D batch 供 RMS 更新。"""
+        if isinstance(obs, dict):
+            # PettingZoo: {agent: (num_envs, obs_dim)} → (num_envs * num_agents, obs_dim)
+            return np.concatenate(list(obs.values()), axis=0)
+        return obs
+
+    def _norm_obs(self, obs):
+        """归一化 obs，保持输入结构不变（dict 或 ndarray）。"""
+        if isinstance(obs, dict):
+            return {k: self.obs_rms.norm(v) for k, v in obs.items()}
+        return self.obs_rms.norm(obs)
+
     def reset(self, env_id=None, **kwargs):
         obs, info = self.venv.reset(env_id, **kwargs)
         if self.update_obs_rms:
-            self.obs_rms.update(obs)
-        return self.obs_rms.norm(obs), info
-    
+            self.obs_rms.update(self._to_batch(obs))
+        return self._norm_obs(obs), info
+
     def step(self, actions, env_id=None):
         obs, rew, term, trunc, info = self.venv.step(actions, env_id)
         if self.update_obs_rms:
-            self.obs_rms.update(obs)
-        return self.obs_rms.norm(obs), rew, term, trunc, info
-    
+            self.obs_rms.update(self._to_batch(obs))
+        return self._norm_obs(obs), rew, term, trunc, info
+
     def set_obs_rms(self, obs_rms: NumpyRMS) -> None:
         """设置观测统计量（用于加载已保存的统计）。"""
         self.obs_rms = obs_rms
-    
+
     def get_obs_rms(self) -> NumpyRMS:
         """获取观测统计量（用于保存）。"""
         return self.obs_rms

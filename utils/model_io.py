@@ -348,3 +348,26 @@ def get_model_config(model_dir: str | Path) -> Dict[str, Any]:
     config_path = Path(model_dir) / 'config.yaml'
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
+
+
+def load_obs_rms(model_dir: str | Path):
+    """从 checkpoint 的 config.yaml extra.obs_rms_state 重建 NumpyRMS。
+
+    若训练时未启用 norm_obs，返回 None；调用方直接用 `if obs_rms` 判断即可。
+
+    Returns:
+        utils.log_utils.RunningMeanStd 实例，或 None。
+    """
+    import numpy as np
+    from utils.log_utils import RunningMeanStd
+
+    cfg = get_model_config(model_dir)
+    state = (cfg.get("extra") or {}).get("obs_rms_state")
+    if state is None:
+        return None
+
+    rms = RunningMeanStd(clip_max=state.get("clip_max", 10.0))
+    rms.mean  = np.asarray(state["mean"],  dtype=np.float32)
+    rms.var   = np.asarray(state["var"],   dtype=np.float32)
+    rms.count = float(state["count"])
+    return rms

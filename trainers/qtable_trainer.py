@@ -38,6 +38,46 @@ def _save_qtable_final(
         print(f"[QTable] Saved final Q-tables to {final_dir}")
 
 
+def _log_metrics(logger, data: Dict[str, float], step: int) -> None:
+    if logger is not None:
+        logger.log(data, step=step)
+
+
+def _maybe_run_inline_eval(
+    *,
+    algo: QTableAlgo,
+    eval_fn: Optional[Callable[[], Dict[str, float]]],
+    eval_interval: int,
+    iteration: int,
+    verbose: bool,
+    logger,
+    total_steps: int,
+    on_eval_complete: Optional[Callable],
+) -> None:
+    """对齐 DRL trainer：每隔 eval_interval 个 iteration 执行一次 inline eval。"""
+    if not eval_fn or eval_interval <= 0:
+        return
+    if iteration % eval_interval != 0:
+        return
+    if verbose:
+        print(f"[Eval] Running inline eval at iteration {iteration} ...")
+    algo.set_training_mode(False)
+    try:
+        eval_metrics = eval_fn()
+    except Exception as e:
+        print(f"[Eval] Inline eval failed: {e}")
+        eval_metrics = {}
+    finally:
+        algo.set_training_mode(True)
+    if eval_metrics:
+        _log_metrics(logger, eval_metrics, step=total_steps)
+        if on_eval_complete is not None:
+            on_eval_complete(eval_metrics, total_steps)
+        if verbose:
+            parts = ", ".join(f"{k}={v:.4f}" for k, v in eval_metrics.items())
+            print(f"[Eval] {parts}")
+
+
 class QTableTrainer:
     """Q-table 训练器，按 episode 迭代。
 
@@ -69,6 +109,7 @@ class QTableTrainer:
         save_dir: Path,
         logger=None,
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
     ):
         self.algo = algo
         self.vec_env = vec_env
@@ -77,16 +118,20 @@ class QTableTrainer:
         self._step_budget: Optional[int] = config.total_steps
         self.max_episodes = config.max_iterations
         self.save_interval = config.save_interval
+        self.eval_interval = getattr(config, "eval_interval", 0)
         self.save_dir = Path(save_dir)
         self.logger = logger
         self.log_extra_fn = log_extra_fn
+        self.eval_fn = eval_fn
         self.verbose = config.verbose
 
         self._sync_mode = getattr(algo.params, 'sync_update', False)
         self._gamma = algo.gamma
 
+        self.iteration = 0
         self.total_steps = 0
         self.best_reward = -float("inf")
+        self.on_eval_complete: Optional[Callable] = None
 
     def train(self) -> Dict[str, float]:
         start_time = time.time()
@@ -95,6 +140,7 @@ class QTableTrainer:
 
         while True:
             ep += 1
+            self.iteration = ep
             ep_result = self._run_episode()
             self.total_steps += ep_result["steps"]
             episode_rewards.append(ep_result["mean_reward"])
@@ -105,6 +151,16 @@ class QTableTrainer:
                 self.best_reward = ep_result["mean_reward"]
 
             self._log_episode(ep, ep_result, start_time)
+            _maybe_run_inline_eval(
+                algo=self.algo,
+                eval_fn=self.eval_fn,
+                eval_interval=self.eval_interval,
+                iteration=self.iteration,
+                verbose=self.verbose,
+                logger=self.logger,
+                total_steps=self.total_steps,
+                on_eval_complete=self.on_eval_complete,
+            )
 
             if ep % self.save_interval == 0:
                 self._save_checkpoint(ep)
@@ -336,8 +392,7 @@ class QTableTrainer:
             if extra:
                 log_data.update(extra)
 
-        if self.logger:
-            self.logger.log(log_data, step=self.total_steps)
+        _log_metrics(self.logger, log_data, step=self.total_steps)
 
         if self.verbose and (ep % 50 == 0 or ep == 1):
             ep_cap = (
@@ -402,6 +457,7 @@ class JointQTableTrainer:
         save_dir: Path,
         logger=None,
         log_extra_fn=None,
+        eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
     ):
         self.algo = algo
         self.vec_env = vec_env
@@ -409,13 +465,17 @@ class JointQTableTrainer:
         self._step_budget: Optional[int] = config.total_steps
         self.max_episodes = config.max_iterations
         self.save_interval = config.save_interval
+        self.eval_interval = getattr(config, "eval_interval", 0)
         self.save_dir = Path(save_dir)
         self.logger = logger
         self.log_extra_fn = log_extra_fn
+        self.eval_fn = eval_fn
         self.verbose = config.verbose
 
+        self.iteration = 0
         self.total_steps = 0
         self.best_reward = -float("inf")
+        self.on_eval_complete: Optional[Callable] = None
 
     def train(self) -> Dict[str, float]:
         start_time = time.time()
@@ -424,6 +484,7 @@ class JointQTableTrainer:
 
         while True:
             ep += 1
+            self.iteration = ep
             ep_result = self._run_episode()
             self.total_steps += ep_result["steps"]
             episode_rewards.append(ep_result["mean_reward"])
@@ -434,6 +495,16 @@ class JointQTableTrainer:
                 self.best_reward = ep_result["mean_reward"]
 
             self._log_episode(ep, ep_result, start_time)
+            _maybe_run_inline_eval(
+                algo=self.algo,
+                eval_fn=self.eval_fn,
+                eval_interval=self.eval_interval,
+                iteration=self.iteration,
+                verbose=self.verbose,
+                logger=self.logger,
+                total_steps=self.total_steps,
+                on_eval_complete=self.on_eval_complete,
+            )
 
             if ep % self.save_interval == 0:
                 self._save_checkpoint(ep)
@@ -547,8 +618,7 @@ class JointQTableTrainer:
             if extra:
                 log_data.update(extra)
 
-        if self.logger:
-            self.logger.log(log_data, step=self.total_steps)
+        _log_metrics(self.logger, log_data, step=self.total_steps)
 
         if self.verbose and (ep % 50 == 0 or ep == 1):
             ep_cap = (

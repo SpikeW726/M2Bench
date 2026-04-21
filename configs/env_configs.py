@@ -28,6 +28,11 @@ class EnvConfig(ToStringMixin):
     # False 时保持当前 pipeline 行为不变（默认）
     norm_reward: bool = False
 
+    # 观测归一化开关：True 时使用 VectorEnvNormObs（running mean/std → clip ±10）
+    # 适用于 obs 特征量级大（如 SUNS/BBLA 中未归一化的空闲度）的场景
+    # MASUP 家族使用自身的观测预处理，不建议开启
+    norm_obs: bool = False
+
     # 边上运动时间随机扰动（双轨设计：obs 始终用名义时间，物理到达由扰动时间驱动）
     edge_time_jitter: bool = False              # 是否开启扰动
     edge_time_jitter_frac: float = 0.1         # 扰动幅度 ε，实际时间 ∈ [T*(1-ε), T*(1+ε)]

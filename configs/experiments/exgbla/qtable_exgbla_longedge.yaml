@@ -8,6 +8,7 @@ seed: 42
 env:
   graph_path: graphs/long_edge.json
   enable_wait: false
+  norm_reward: true
   num_agents: 3
   init_positions:
   - 0
@@ -28,3 +29,4 @@ training:
   use_subproc: false
   total_steps: 10000000
   save_interval: 1000
+  eval_interval: 50

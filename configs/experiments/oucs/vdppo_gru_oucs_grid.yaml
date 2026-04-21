@@ -21,6 +21,7 @@ env:
   num_agents: 8
   init_positions: [6, 12, 18, 24, 30, 36, 42, 48]
   episode_len: 500
+  norm_obs: true
   custom_configs:
     truncate_by_time: true
     penalised_factor: 1.5

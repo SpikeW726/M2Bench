@@ -556,11 +556,20 @@ def create_vec_env(
 ):
     """创建向量化环境。
 
+    包装优先级（由内到外）：基础 VectorEnv → NormObs → NormReward。
+
+    当 env_config.norm_obs=True 时，外包 VectorEnvNormObs：
+    同时适配 Gymnasium 单智能体（obs 为 ndarray）和 PettingZoo 多智能体
+    （obs 为 Dict[str, ndarray]）两种接口；同构 agent 共享同一个 RMS。
+
     当 env_config.norm_reward=True 时，外包 VectorEnvNormReward：
     仅按运行标准差缩放 reward，不减均值。
+
+    注意：norm_obs 对包含整数编码结构（如 GNN 环境的 edge_src/edge_dst）的
+    obs 向量不适用，请勿在 MAGEC 等 GNN 环境中开启。
     """
     from envs.venvs import DummyVectorEnv, SubprocVectorEnv
-    from envs.venv_wrappers import VectorEnvNormReward
+    from envs.venv_wrappers import VectorEnvNormObs, VectorEnvNormReward
 
     entry = ENV_REGISTRY[env_type]
     env_cls = _import_class(entry["module"], entry["class_name"])
@@ -572,6 +581,9 @@ def create_vec_env(
         vec_env = SubprocVectorEnv(env_fns)
     else:
         vec_env = DummyVectorEnv(env_fns)
+
+    if getattr(env_config, "norm_obs", False):
+        vec_env = VectorEnvNormObs(vec_env)
 
     if getattr(env_config, "norm_reward", False):
         vec_env = VectorEnvNormReward(vec_env)

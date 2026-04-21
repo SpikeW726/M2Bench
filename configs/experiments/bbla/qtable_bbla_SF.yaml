@@ -20,6 +20,7 @@ seed: 42
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: false
+  norm_reward: true
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 10000
@@ -40,3 +41,4 @@ training:
   use_subproc: true
   total_steps: 50000000
   save_interval: 1000
+  eval_interval: 50
