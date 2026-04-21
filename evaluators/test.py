@@ -62,7 +62,7 @@ from utils.autodl_paths import (
 
 
 # MASUP / MASUPGraphEnv：第四幅子图用 wi_fromT 替代全 episode 的 wi
-_MASUP_LIKE_ENV_TYPES = frozenset({"masup", "masup_gnn"})
+_MASUP_LIKE_ENV_TYPES = frozenset({"masup", "masup_gnn", "masup_beau"})
 
 
 def _eval_metrics_history_for_plot(env, env_type: str) -> dict:
@@ -331,6 +331,19 @@ def test_trained_policy(
                 aid: torch.as_tensor(o, dtype=torch.float32, device=multi_policy.device)
                 for aid, o in obs.items()
             }
+
+            # BEAU: set _current_node_idx on actor before forward
+            if hasattr(multi_policy, '_shared_policy') and hasattr(
+                multi_policy._shared_policy, 'actor'
+            ) and hasattr(multi_policy._shared_policy.actor, 'compute_value'):
+                actor_net = multi_policy._shared_policy.actor
+                n_agents_eval = len(env.agents)
+                cn_idx_2d = np.zeros((n_agents_eval, 1), dtype=np.int64)
+                for a_idx, aid in enumerate(env.agents):
+                    cn_idx_2d[a_idx, 0] = infos[aid].get('current_node_idx', 0)
+                actor_net._current_node_idx = torch.as_tensor(
+                    cn_idx_2d, dtype=torch.long, device=multi_policy.device,
+                )
 
             with torch.no_grad():
                 outputs = multi_policy.forward(obs_tensor, state_dict=hidden_state, action_mask=action_masks)
@@ -842,8 +855,11 @@ def eval_policy_inline(
     """用内存中的当前 policy 直接评估，不保存/加载 checkpoint，不生成图表。
 
     Args:
-        policy:       训练中的 MultiAgentPolicy 实例（共享内存，无需序列化）。
-        env_type:     环境类型字符串（如 "masup"）。
+        policy:       训练中的 policy 实例。可以是 MultiAgentPolicy（多智能体训练），
+                      也可以是裸 ActorPolicy / ValuePolicy（单智能体 Gym 训练）。
+                      当单智能体训练 + 多智能体 eval（如 suns_gym 训→ suns 3-agent eval）时，
+                      会为每个 agent 独立调用裸 policy，实现"共享同一套权重"的多 agent 部署。
+        env_type:     环境类型字符串（如 "masup"、"suns"）。
         env_config:   EnvConfig 实例（从 eval yaml 读取）。
         num_episodes: 评估 episode 数量。
         device:       torch.device；None 时从 policy 自动检测。
@@ -863,14 +879,21 @@ def eval_policy_inline(
     is_recurrent = getattr(policy, "is_recurrent", False)
     episode_metrics_list = []
     wi_fromT_finals = []
-    is_multi = isinstance(policy, MultiAgentPolicy)
+
+    # 判断 eval env 的接口类型：
+    #   is_pettingzoo=True  → PettingZoo ParallelEnv，obs/infos 为 per-agent dict
+    #   is_pettingzoo=False → Gymnasium 单智能体，obs 为 ndarray，infos 为扁平 dict
+    is_pettingzoo = hasattr(env, "possible_agents")
+    # MultiAgentPolicy 使用统一的 forward(obs_dict, state_dict, action_mask) 接口；
+    # 裸 ActorPolicy/ValuePolicy 使用 forward(obs_t, state, action_mask) 接口。
+    is_multi_policy = isinstance(policy, MultiAgentPolicy)
 
     for _ in range(num_episodes):
         obs, infos = env.reset()
         hidden_state = None
 
-        if is_multi:
-            # PettingZoo ParallelEnv：obs / infos 为 per-agent dict
+        if is_pettingzoo:
+            # PettingZoo ParallelEnv 分支（多智能体，无论 policy 是否为 MultiAgentPolicy）
             while env.agents:
                 if episode_time is not None and env.world.current_time >= episode_time:
                     break
@@ -886,18 +909,35 @@ def eval_policy_inline(
                     for aid, o in obs.items()
                 }
 
-                with torch.no_grad():
-                    outputs = policy.forward(
-                        obs_tensor, state_dict=hidden_state, action_mask=action_masks
-                    )
-                actions = {aid: out["act"].cpu().numpy() for aid, out in outputs.items()}
-
-                if is_recurrent:
-                    hidden_state = {
-                        aid: out["state"]
-                        for aid, out in outputs.items()
-                        if out.get("state") is not None
-                    }
+                if is_multi_policy:
+                    # 多智能体 policy：统一 forward(obs_dict, state_dict, action_mask_dict)
+                    with torch.no_grad():
+                        outputs = policy.forward(
+                            obs_tensor, state_dict=hidden_state, action_mask=action_masks
+                        )
+                    actions = {aid: out["act"].cpu().numpy() for aid, out in outputs.items()}
+                    if is_recurrent:
+                        hidden_state = {
+                            aid: out["state"]
+                            for aid, out in outputs.items()
+                            if out.get("state") is not None
+                        }
+                else:
+                    # 裸单智能体 policy 部署到多 agent：为每个 agent 单独 forward，共享同一套权重
+                    # 典型场景：suns_gym(1 agent) 训练 → suns(3 agents) eval
+                    actions = {}
+                    new_hidden = {} if is_recurrent else None
+                    for aid in list(obs_tensor.keys()):
+                        obs_t = obs_tensor[aid].unsqueeze(0)
+                        am_t = action_masks[aid].unsqueeze(0)
+                        h = hidden_state.get(aid) if (is_recurrent and hidden_state) else None
+                        with torch.no_grad():
+                            out = policy.forward(obs_t, state=h, action_mask=am_t)
+                        actions[aid] = out["act"].cpu().numpy()
+                        if is_recurrent and out.get("state") is not None:
+                            new_hidden[aid] = out["state"]
+                    if is_recurrent:
+                        hidden_state = new_hidden
 
                 obs, _, _, _, infos = env.step(actions)
         else:
