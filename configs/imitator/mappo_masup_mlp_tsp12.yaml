@@ -1,0 +1,58 @@
+# MAPPO + MASUPActorMLP/MASUPCriticMLP — TSP12 图模仿学习预训练配置
+#
+# 用法:
+#   python trainers/imitator/imitation_trainer.py \
+#       --config configs/imitator/mappo_masup_mlp_tsp12.yaml
+#   python trainers/imitator/imitation_trainer.py \
+#       --config configs/imitator/mappo_masup_mlp_tsp12.yaml \
+#       --data_path dataset/TSP12/samples.h5
+
+# ----- 算法 -----
+algo_name: mappo
+
+# ----- 环境 -----
+env_type: masup
+env_config: configs/eval/masup/masup_tsp12.yaml
+
+# ----- 网络结构（须与目标 RL 实验 YAML 中的 actor/critic 段严格一致）-----
+actor_type: masup_mlp
+critic_type: masup_mlp
+
+actor:
+  graph_path: graphs/simple_TSP_12.json
+  num_agents: 3
+  num_nodes: 12
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 20.0
+  hidden: [256, 256]
+
+critic:
+  graph_path: graphs/simple_TSP_12.json
+  num_agents: 3
+  num_nodes: 12
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 20.0
+  input_mode: state
+  hidden: [256, 256]
+
+# ----- 训练超参 -----
+actor_lr: 3.0e-4
+critic_lr: 3.0e-4
+batch_size: 1024
+iteration: 100
+actor_patience: 5
+actor_min_delta: 1.0e-5
+use_value_norm: true
+
+# ----- 数据 & 日志 -----
+data_path: dataset/TSP12/samples.h5
+save_dir: models/masup-mlp-mappo-imitation-tsp12
+exp_name: imi_masup_mlp_mappo_tsp12
+track: false
+wandb_project: MAP-imitation

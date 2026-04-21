@@ -21,11 +21,15 @@ from networks.mlp import ActorMLP, CriticMLP
 from utils.model_io import _convert_to_native_types as _ensure_native_types
 from utils.autodl_paths import resolve_models_path, resolve_runs_path
 from configs.registry import (
-    create_actor, create_q_network,
+    create_actor, create_critic, create_q_network,
     ENV_REGISTRY, _import_class, _env_config_to_dicts, load_eval_config,
     get_policy_type,
 )
-from configs.network_configs import MLPConfig, MPNNConfig, RNNConfig, QMLPConfig, QRNNConfig
+from configs.network_configs import (
+    MLPConfig, MPNNConfig, RNNConfig, QMLPConfig, QRNNConfig,
+    MASUPActorConfig, MASUPActorRNNConfig,
+    MASUPCriticConfig, MASUPCriticRNNConfig,
+)
 
 
 def _filter_dataclass_kwargs(cls, raw: dict) -> dict:
@@ -172,15 +176,35 @@ def load_imitator_config(yaml_path: str | Path) -> dict:
         elif actor_type == "mpnn":
             actor_raw = raw.get("mpnn_actor", raw.get("actor", {}))
             actor_config = MPNNConfig(**_filter_dataclass_kwargs(MPNNConfig, actor_raw))
+        elif actor_type == "masup_mlp":
+            actor_raw = raw.get("actor", {})
+            actor_config = MASUPActorConfig(**_filter_dataclass_kwargs(MASUPActorConfig, actor_raw))
+        elif actor_type == "masup_rnn":
+            actor_raw = raw.get("actor", {})
+            actor_config = MASUPActorRNNConfig(**_filter_dataclass_kwargs(MASUPActorRNNConfig, actor_raw))
         else:
             raise ValueError(f"Unknown actor_type: {actor_type}")
 
         actor_net = create_actor(actor_type, actor_config, obs_dim, action_dim, device="cpu")
 
         if mode == "actor_critic":
-            critic_hidden = raw.get("critic_hidden_sizes",
-                                    raw.get("critic", {}).get("hidden", [512, 256, 128]))
-            critic_net = CriticMLP(critic_state_dim, critic_hidden, 1)
+            # MASUP 专供 Critic：masup_mlp / masup_rnn，其他类型退回原 CriticMLP
+            critic_type = raw.get("critic_type", "")
+            if critic_type in ("masup_mlp", "masup_rnn"):
+                critic_raw = raw.get("critic", {})
+                if critic_type == "masup_mlp":
+                    critic_config = MASUPCriticConfig(
+                        **_filter_dataclass_kwargs(MASUPCriticConfig, critic_raw)
+                    )
+                else:
+                    critic_config = MASUPCriticRNNConfig(
+                        **_filter_dataclass_kwargs(MASUPCriticRNNConfig, critic_raw)
+                    )
+                critic_net = create_critic(critic_type, critic_config, critic_state_dim, device="cpu")
+            else:
+                critic_hidden = raw.get("critic_hidden_sizes",
+                                        raw.get("critic", {}).get("hidden", [512, 256, 128]))
+                critic_net = CriticMLP(critic_state_dim, critic_hidden, 1)
 
     elif mode == "q_net":
         q_type = raw.get("q_type", "mlp")
