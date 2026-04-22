@@ -196,16 +196,18 @@ class ActorPolicy(RLBasePolicy):
         """
         if self.is_discrete:
             logits = self.actor(obs)
+            # 在 action masking 前检查原始 logits 是否含真正的 NaN/Inf
+            # masking 后的 -inf 是合法值（对应 ON_EDGE 或无效动作），不应视为错误
+            if torch.isnan(logits).any() or (torch.isinf(logits) & (logits > 0)).any():
+                nan_frac = (~torch.isfinite(logits)).float().mean().item()
+                raise RuntimeError(
+                    f"evaluate_actions raw logits 含 NaN/+Inf: obs shape={obs.shape}, "
+                    f"logits shape={logits.shape}, bad_frac={nan_frac:.3f}"
+                )
             action_mask = kwargs.get("action_mask", None)
             if action_mask is not None:
                 mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
                 logits = logits.masked_fill(~mask_t, float("-inf"))
-            if not torch.isfinite(logits).all():
-                nan_frac = (~torch.isfinite(logits)).float().mean().item()
-                raise RuntimeError(
-                    f"evaluate_actions logits 含非有限值: obs shape={obs.shape}, "
-                    f"logits shape={logits.shape}, bad_frac={nan_frac:.3f}"
-                )
             dist = torch.distributions.Categorical(logits=logits)
         else:
             out = self.actor(obs)
@@ -253,6 +255,14 @@ class ActorPolicy(RLBasePolicy):
         action_mask = kwargs.get("action_mask", None)
 
         if self.is_discrete:
+            # 在 masking 前检查原始 logits 是否含真正的 NaN/+Inf
+            if torch.isnan(logits_seq).any() or (torch.isinf(logits_seq) & (logits_seq > 0)).any():
+                nan_frac = (~torch.isfinite(logits_seq)).float().mean().item()
+                raise RuntimeError(
+                    f"evaluate_actions_sequence raw logits 含 NaN/+Inf: "
+                    f"obs_seq shape={obs_seq.shape}, logits shape={logits_seq.shape}, "
+                    f"bad_frac={nan_frac:.3f}"
+                )
             if action_mask is not None:
                 mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits_seq.device)
                 # chunk_split padding 产生全零 mask → 全 -inf，设第一个 action 为 valid
@@ -262,13 +272,6 @@ class ActorPolicy(RLBasePolicy):
                     idx = all_masked.nonzero(as_tuple=True)
                     mask_t[idx[0], idx[1], 0] = True
                 logits_seq = logits_seq.masked_fill(~mask_t, float("-inf"))
-            if not torch.isfinite(logits_seq).all():
-                nan_frac = (~torch.isfinite(logits_seq)).float().mean().item()
-                raise RuntimeError(
-                    f"evaluate_actions_sequence logits 含非有限值: "
-                    f"obs_seq shape={obs_seq.shape}, logits shape={logits_seq.shape}, "
-                    f"bad_frac={nan_frac:.3f}"
-                )
             dist = torch.distributions.Categorical(logits=logits_seq)
             log_prob = dist.log_prob(act_seq)
             entropy = dist.entropy()
