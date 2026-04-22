@@ -1,9 +1,12 @@
+# IPPO + MASUPEnv (grid) — masup_mlp 预处理网络
+# 用法: python train.py configs/experiments/masup/ippo_masup_grid.yaml
+
 algo_name: ippo
 env_type: masup
-actor_type: mlp
-critic_type: mlp
+actor_type: masup_mlp
+critic_type: masup_mlp
 
-exp_name: ippo-grid
+exp_name: ippo-masup-grid
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
@@ -47,5 +50,9 @@ training:
 
 actor:
   hidden: [256, 256]
+  graph_path: graphs/grid.json
+  num_agents: 6
 critic:
   hidden: [256, 256]
+  graph_path: graphs/grid.json
+  num_agents: 6

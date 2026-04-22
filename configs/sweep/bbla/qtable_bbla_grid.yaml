@@ -1,0 +1,46 @@
+# QTable + BBLAEnv (grid) 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/bbla/qtable_bbla_grid.yaml \
+#                   --sweep-config configs/sweep/bbla/qtable_bbla_grid.yaml \
+#                   --eval-config configs/eval/bbla/bbla_grid.yaml --count 20
+#
+# grid 图: 50 节点，max_degree=7，均匀边权（均值≈2.2），FixedStepEnv
+# 状态空间远小于 SF（全连通），epsilon 可较快衰减
+
+method: bayes
+
+metric:
+  name: eval/wi
+  goal: minimize
+
+early_terminate:
+  min_trial: 4
+  min_steps: 5000000
+  terminate_ratio: 0.5
+  early_stop_iters: 8
+  slope_horizons: [4, 8]
+  slope_threshold: 5.0e-5
+
+parameters:
+  seed:
+    value: 42
+  lr:
+    min: 0.01
+    max: 0.5
+    distribution: log_uniform_values
+  # grid 短 horizon，gamma 适中
+  gamma:
+    values: [0.9, 0.95, 0.97, 0.99]
+  epsilon_start:
+    values: [0.05, 0.1, 0.2]
+  epsilon_end:
+    min: 0.01
+    max: 0.1
+    distribution: uniform
+  save_interval:
+    value: 1000
+  # grid max_degree=7，状态空间较 SF 小，衰减步数减少
+  epsilon_decay_steps:
+    min: 5000
+    max: 200000
+    distribution: uniform

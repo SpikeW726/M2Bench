@@ -1,0 +1,45 @@
+# QTable + GBLAEnv (grid) 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/gbla/qtable_gbla_grid.yaml \
+#                   --sweep-config configs/sweep/gbla/qtable_gbla_grid.yaml \
+#                   --eval-config configs/eval/gbla/gbla_grid.yaml --count 20
+#
+# grid 图: 50 节点，max_degree=7，obs_dim=11（BBLA 4 + 邻居意图 7）
+# 比 BBLA 多了邻居意图，epsilon_decay 适当延长
+
+method: bayes
+
+metric:
+  name: eval/wi
+  goal: minimize
+
+early_terminate:
+  min_trial: 4
+  min_steps: 5000000
+  terminate_ratio: 0.5
+  early_stop_iters: 8
+  slope_horizons: [4, 8]
+  slope_threshold: 5.0e-5
+
+parameters:
+  seed:
+    value: 42
+  lr:
+    min: 0.01
+    max: 0.5
+    distribution: log_uniform_values
+  gamma:
+    values: [0.9, 0.95, 0.97, 0.99]
+  epsilon_start:
+    values: [0.05, 0.1, 0.2]
+  epsilon_end:
+    min: 0.01
+    max: 0.1
+    distribution: uniform
+  save_interval:
+    value: 1000
+  # grid obs_dim=11（含邻居意图），比 BBLA 状态复杂，decay 适当延长
+  epsilon_decay_steps:
+    min: 10000
+    max: 500000
+    distribution: uniform

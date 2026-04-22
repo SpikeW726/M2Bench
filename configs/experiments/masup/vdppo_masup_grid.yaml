@@ -1,9 +1,12 @@
+# VDPPO + MASUPEnv (grid) — masup_mlp actor + RNN Q-network
+# 用法: python train.py configs/experiments/masup/vdppo_masup_grid.yaml
+
 algo_name: vdppo
 env_type: masup
-actor_type: mlp
+actor_type: masup_mlp
 q_type: rnn
 
-exp_name: vdppo-grid
+exp_name: vdppo-masup-grid
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
@@ -54,6 +57,8 @@ training:
 
 actor:
   hidden: [256, 256]
+  graph_path: graphs/grid.json
+  num_agents: 6
 q_network:
   rnn_type: gru
   hidden_size: 64

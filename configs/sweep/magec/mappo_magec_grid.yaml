@@ -1,0 +1,73 @@
+# MAPPO + MAGECEnv (grid) 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/magec/mappo_magec_grid.yaml \
+#                   --sweep-config configs/sweep/magec/mappo_magec_grid.yaml \
+#                   --eval-config configs/eval/magec/magec_grid.yaml --count 40
+#
+# grid 图: 50 节点，phi=1（均匀），6 agents，episode_len=500 模拟秒
+# steps_per_episode≈227，num_steps=512 可稳定覆盖 2+ episode
+# gamma 无需过高（比 SF），ent_coef 适中
+
+method: bayes
+
+metric:
+  name: eval/wi
+  goal: minimize
+
+early_terminate:
+  min_trial: 6
+  min_steps: 5000000
+  terminate_ratio: 0.4
+  early_stop_iters: 100
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
+
+parameters:
+  seed:
+    value: 42
+  # ---- MAPPOParams ----
+  actor_lr:
+    min: 5.0e-5
+    max: 1.0e-3
+    distribution: log_uniform_values
+
+  critic_lr:
+    min: 1.0e-4
+    max: 3.0e-3
+    distribution: log_uniform_values
+
+  clip_range:
+    min: 0.1
+    max: 0.4
+
+  vf_coef:
+    min: 0.1
+    max: 2.0
+
+  ent_coef:
+    min: 0.001
+    max: 0.1
+    distribution: log_uniform_values
+
+  gae_lambda:
+    min: 0.9
+    max: 1.0
+
+  # grid 短 horizon，gamma 不必过高
+  gamma:
+    values: [0.97, 0.98, 0.99]
+
+  # ---- OnPolicyTrainerConfig ----
+  # grid steps_per_episode≈227，512 足够覆盖 episode
+  num_steps:
+    values: [256, 512, 1024]
+
+  minibatch_size:
+    values: [1024, 2048]
+
+  update_epochs:
+    values: [3, 5, 10]
+
+  # total_steps 由 experiment base 决定
+  save_interval:
+    value: 500

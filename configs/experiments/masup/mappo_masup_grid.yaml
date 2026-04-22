@@ -1,9 +1,17 @@
+# MAPPO + MASUPEnv (grid) — masup_mlp 预处理网络
+# 用法: python train.py configs/experiments/masup/mappo_masup_grid.yaml
+#
+# grid 图特性:
+#   49 节点 (7×7)，规则网格，边权均匀（均值≈3-4），6 agents
+#   episode_len=500, T=50 → episode 完成频繁，γ 不必过高
+#   EventDrivenEnv: 每步推进到下一 agent 到达事件
+
 algo_name: mappo
 env_type: masup
-actor_type: mlp
-critic_type: mlp
+actor_type: masup_mlp
+critic_type: masup_mlp
 
-exp_name: mappo-grid
+exp_name: mappo-masup-grid
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
@@ -40,7 +48,7 @@ training:
   num_envs: 24
   use_subproc: true
   num_steps: 1024
-  total_steps: 10000000
+  total_steps: 20000000
   save_interval: 500
   minibatch_size: 2048
   update_epochs: 5
@@ -48,5 +56,9 @@ training:
 
 actor:
   hidden: [256, 256]
+  graph_path: graphs/grid.json
+  num_agents: 6
 critic:
   hidden: [256, 256]
+  graph_path: graphs/grid.json
+  num_agents: 6

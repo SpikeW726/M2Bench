@@ -1,0 +1,25 @@
+# OUCSEnv grid 评估配置（8 agents，norm_obs: true）
+# 用法:
+#   python evaluators/test.py --env_config configs/eval/oucs/oucs_grid.yaml --model models/xxx/final
+
+env_type: oucs
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 8
+  init_positions: [6, 12, 18, 24, 30, 36, 42, 48]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+    penalised_factor: 1.5
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/grid/vdppo_oucs/best_eval.png
+  show_plot: false
+  animation: false
+  event_driven: false
+  max_frames: 1000

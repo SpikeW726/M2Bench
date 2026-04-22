@@ -1,0 +1,59 @@
+# A2C + SUNSGymEnv (grid) 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/suns/a2c_suns_grid.yaml \
+#                   --sweep-config configs/sweep/suns/a2c_suns_grid.yaml \
+#                   --eval-config configs/eval/suns/suns_grid.yaml --count 40
+#
+# grid 图: 50 节点，均匀边权（均值≈2.2），episode_len=500 模拟秒
+# steps_per_episode ≈ 227 → 小 num_steps=512 即可稳定覆盖多个 episode
+# gamma 不必过高（短 horizon），lr 可适当放大
+
+method: bayes
+
+metric:
+  name: eval/wi
+  goal: minimize
+
+early_terminate:
+  min_trial: 6
+  min_steps: 5000000
+  terminate_ratio: 0.4
+  early_stop_iters: 100
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
+
+parameters:
+  seed:
+    value: 42
+  # ---- A2CParams (单优化器) ----
+  lr:
+    min: 0.0001
+    max: 0.003
+    distribution: log_uniform_values
+
+  # ---- OnPolicyParams ----
+  # grid horizon 短，gamma 不必过高
+  gamma:
+    values: [0.97, 0.98, 0.99]
+
+  gae_lambda:
+    min: 0.9
+    max: 1.0
+
+  max_grad_norm:
+    values: [0.5, 1.0]
+
+  # ---- OnPolicyTrainerConfig ----
+  # grid steps_per_episode≈227，512 即可稳定覆盖 2+ episode
+  num_steps:
+    values: [512, 1024, 2048]
+
+  minibatch_size:
+    values: [1024, 2048]
+
+  update_epochs:
+    values: [1]
+
+  # total_steps 由 experiment base 决定
+  save_interval:
+    value: 500

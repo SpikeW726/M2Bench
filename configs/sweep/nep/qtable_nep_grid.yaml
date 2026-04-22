@@ -1,0 +1,46 @@
+# QTable + NEPEnv (grid) 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/nep/qtable_nep_grid.yaml \
+#                   --sweep-config configs/sweep/nep/qtable_nep_grid.yaml \
+#                   --eval-config configs/eval/nep/nep_grid.yaml --count 20
+#
+# grid 图: 50 节点，182 有向边，state_space ≈ 820K（极大）
+# lr 建议高一些（0.5+）以加速大稀疏状态空间的 Q-table 更新
+# epsilon_decay 需要极长（状态空间约为 SF 的 8 倍）
+
+method: bayes
+
+metric:
+  name: eval/wi
+  goal: minimize
+
+early_terminate:
+  min_trial: 4
+  min_steps: 20000000
+  terminate_ratio: 0.5
+  early_stop_iters: 8
+  slope_horizons: [4, 8]
+  slope_threshold: 5.0e-5
+
+parameters:
+  seed:
+    value: 42
+  lr:
+    min: 0.1
+    max: 0.9
+    distribution: log_uniform_values
+  gamma:
+    values: [0.9, 0.95, 0.97, 0.99]
+  epsilon_start:
+    values: [0.1, 0.2, 0.5]
+  epsilon_end:
+    min: 0.01
+    max: 0.1
+    distribution: uniform
+  save_interval:
+    value: 1000
+  # grid state_space ≈ 820K，充分探索需要极长 decay（单位：global env steps）
+  epsilon_decay_steps:
+    min: 1000000
+    max: 500000000
+    distribution: uniform

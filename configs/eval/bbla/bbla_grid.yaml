@@ -1,0 +1,24 @@
+# BBLAEnv grid 评估配置（3 agents，FixedStepEnv）
+# 用法:
+#   python evaluators/test.py --env_config configs/eval/bbla/bbla_grid.yaml --model models/xxx/final
+
+algo_name: qtable
+env_type: bbla
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: false
+  norm_reward: true
+  num_agents: 3
+  init_positions: [1, 25, 50]
+  episode_len: 2000
+  custom_configs:
+    truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/grid/qtable_bbla/best_eval.png
+  show_plot: false
+  animation: false
+  event_driven: false
+  max_frames: 500

@@ -1,8 +1,14 @@
+# QMIX + MASUPEnv (grid) — masup_q_mlp 预处理 Q-network
+# 用法: python train.py configs/experiments/masup/qmix_masup_grid.yaml
+#
+# grid 图: 49 节点 (7×7)，边权均匀，6 agents
+# QMIX: 超网络混合器，需要 global state；shared_sync 共享 replay index
+
 algo_name: qmix
 env_type: masup
-q_type: mlp
+q_type: masup_q_mlp
 
-exp_name: qmix-grid
+exp_name: qmix-masup-grid
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
@@ -31,7 +37,7 @@ algo:
   target_update_freq: 200
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_steps: 598
+  epsilon_decay_steps: 1000
   use_double_dqn: true
   shared_policy: true
   reward_global: true
@@ -54,3 +60,5 @@ training:
 q_network:
   hidden: [256, 256]
   dueling: false
+  graph_path: graphs/grid.json
+  num_agents: 6

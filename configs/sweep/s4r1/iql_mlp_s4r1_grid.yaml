@@ -1,0 +1,88 @@
+# IQL + MLP + S4R1Env (grid) 超参数搜索
+# 用法:
+#   python sweep.py --base-config configs/experiments/s4r1/iql_s4r1_grid.yaml \
+#                   --sweep-config configs/sweep/s4r1/iql_mlp_s4r1_grid.yaml \
+#                   --eval-config configs/eval/s4r1/s4r1_grid.yaml --count 40
+#
+# grid 图: 50 节点，8 agents，FixedStepEnv，episode_len=500 步
+# epsilon_decay_steps: grid episode 短、agent 决策频繁，衰减步数较 SF 小
+
+method: bayes
+
+metric:
+  name: eval/wi
+  goal: minimize
+
+early_terminate:
+  min_trial: 6
+  min_steps: 10000000
+  terminate_ratio: 0.4
+  early_stop_iters: 200
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
+
+parameters:
+  seed:
+    value: 42
+  # ---- algo params (映射到 IQLParams) ----
+  lr:
+    min: 0.00005
+    max: 0.003
+    distribution: log_uniform_values
+
+  # grid 短 horizon，gamma 适中
+  gamma:
+    values: [0.95, 0.97, 0.98, 0.99]
+
+  tau:
+    min: 0.001
+    max: 0.01
+    distribution: log_uniform_values
+
+  target_update_freq:
+    values: [1, 5, 10]
+
+  epsilon_start:
+    value: 1.0
+
+  epsilon_end:
+    min: 0.005
+    max: 0.1
+    distribution: uniform
+
+  # grid: 8 agents × episode_len=500 = 4000 决策/episode × num_envs
+  # 合理衰减步数
+  epsilon_decay_steps:
+    min: 3000
+    max: 50000
+    distribution: uniform
+
+  max_grad_norm:
+    values: [0.5, 1.0, 10.0]
+
+  use_double_dqn:
+    value: true
+
+  # ---- training params ----
+  batch_size:
+    values: [128, 256, 512]
+
+  buffer_size:
+    values: [20000, 50000, 100000]
+
+  warmup_steps:
+    values: [5000, 10000]
+
+  update_per_step:
+    value: 1
+
+  collect_per_step:
+    value: 16
+
+  num_steps:
+    values: [32, 64, 128]
+
+  # total_steps 由 experiment base 决定
+
+  save_interval:
+    value: 500

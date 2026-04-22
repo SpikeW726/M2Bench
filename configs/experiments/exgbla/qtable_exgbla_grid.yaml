@@ -1,0 +1,43 @@
+# QTable + ExGBLAEnv (grid) — 含扩展邻居精确位置观测
+# 用法: python train.py configs/experiments/exgbla/qtable_exgbla_grid.yaml
+#
+# grid 图特性:
+#   50 节点，max_degree=7，边权 2~6（均值≈2.2），FixedStepEnv (dt=1)
+#   obs_space: Box(int32, 2+2×max_neighbors=16) → 含邻居当前位置+意图（双倍意图向量）
+#   action_space: Discrete(max_neighbors+1=8)（含 wait）
+#   ExGBLA 比 GBLA 多了邻居精确位置，grid 图下 obs_dim=16
+#   状态空间介于 GBLA 与 SF ExGBLA（obs_dim=24）之间
+
+algo_name: qtable
+env_type: ex_gbla
+exp_name: qtable-ex_gbla-grid
+graph_name: grid
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: false
+  norm_reward: true
+  num_agents: 3
+  init_positions: [1, 25, 50]
+  episode_len: 2000
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.1
+  gamma: 0.97
+  epsilon_start: 0.2
+  epsilon_end: 0.05
+  sync_update: true
+  # grid max_neighbors=7，obs_dim=16，状态空间适中
+  epsilon_decay_steps: 150000
+
+training:
+  num_envs: 4
+  use_subproc: false
+  total_steps: 30000000
+  save_interval: 1000
+  eval_interval: 50

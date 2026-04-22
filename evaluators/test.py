@@ -1041,7 +1041,8 @@ def eval_policy_inline(
                             h = hidden_state.get(aid) if (is_recurrent and hidden_state) else None
                             with torch.no_grad():
                                 out = policy.forward(obs_t, state=h, action_mask=am_t)
-                            actions[aid] = out["act"].cpu().numpy()
+                            # 提取标量整数动作（env.step 不接受 array([scalar])）
+                            actions[aid] = int(out["act"].cpu().numpy().reshape(-1)[0])
                             if is_recurrent and out.get("state") is not None:
                                 new_hidden[aid] = out["state"]
                         if is_recurrent:

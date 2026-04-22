@@ -1,0 +1,43 @@
+# QTable + BBLAEnv (grid)
+# 用法: python train.py configs/experiments/bbla/qtable_bbla_grid.yaml
+#
+# grid 图特性:
+#   50 节点，max_degree=7，边权 2~6（均值≈2.2），FixedStepEnv (dt=1)
+#   obs_space: Box(int32, 4) → [cur_node, prev_node, target_neighbor, steps_on_edge]
+#   action_space: Discrete(max_degree) = Discrete(7)（grid max 出度）
+#   Q-table 状态: (50, 50, 7, steps) 组合，有效状态远小于上界
+#   episode_len=2000: grid 图小、边权短，2000 步可完成充分巡逻
+
+algo_name: qtable
+env_type: bbla
+exp_name: qtable-bbla-grid
+graph_name: grid
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: false
+  norm_reward: true
+  num_agents: 3
+  init_positions: [1, 25, 50]
+  episode_len: 2000
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.1
+  gamma: 0.97
+  epsilon_start: 0.2
+  epsilon_end: 0.05
+  sync_update: true
+  # grid max_degree=7（远小于 SF=11），状态空间较小，较短衰减即可充分探索
+  epsilon_decay_steps: 50000
+
+training:
+  num_envs: 8
+  use_subproc: true
+  total_steps: 30000000
+  save_interval: 1000
+  eval_interval: 50
