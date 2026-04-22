@@ -17,6 +17,7 @@
 """
 
 import json
+import warnings
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -290,6 +291,15 @@ def _make_preprocessor(
     mode: str,
 ) -> MASUPPreprocessor:
     gpe_matrix, node_order = _compute_gpe(graph_path, gpe_dim)
+    n_graph = len(node_order)
+    # YAML 常省略 num_nodes 或沿用 MASUPBaseConfig 默认 12；与图不一致会导致切片错位、Embedding 越界
+    if num_nodes != n_graph:
+        warnings.warn(
+            f"MASUP: num_nodes={num_nodes} 与 {graph_path} 节点数 {n_graph} 不一致，已按图修正。",
+            UserWarning,
+            stacklevel=2,
+        )
+        num_nodes = n_graph
     return MASUPPreprocessor(
         num_agents=num_agents,
         num_nodes=num_nodes,
@@ -341,7 +351,6 @@ class MASUPActorMLP(nn.Module):
         self.output_dim = output_dim
         self._graph_path = graph_path
         self._num_agents = num_agents
-        self._num_nodes = num_nodes
         self._role_imformation = role_imformation
         self._gpe_dim = gpe_dim
         self._proj_dim = proj_dim
@@ -353,6 +362,7 @@ class MASUPActorMLP(nn.Module):
             graph_path, num_agents, num_nodes, role_imformation,
             gpe_dim, proj_dim, use_log_idleness, T_time, mode="actor",
         )
+        self._num_nodes = self.preprocessor.num_nodes
         self.network = _build_mlp_layers(
             self.preprocessor.output_dim, hidden, output_dim, output_std=0.01,
         )
@@ -427,7 +437,6 @@ class MASUPActorRNN(nn.Module):
         self._fc_hidden = list(fc_hidden) if fc_hidden else []
         self._graph_path = graph_path
         self._num_agents = num_agents
-        self._num_nodes = num_nodes
         self._role_imformation = role_imformation
         self._gpe_dim = gpe_dim
         self._proj_dim = proj_dim
@@ -438,6 +447,7 @@ class MASUPActorRNN(nn.Module):
             graph_path, num_agents, num_nodes, role_imformation,
             gpe_dim, proj_dim, use_log_idleness, T_time, mode="actor",
         )
+        self._num_nodes = self.preprocessor.num_nodes
         prep_out = self.preprocessor.output_dim
 
         # fc_in 编码层
@@ -567,7 +577,6 @@ class MASUPCriticMLP(nn.Module):
         self.output_dim = 1
         self._graph_path = graph_path
         self._num_agents = num_agents
-        self._num_nodes = num_nodes
         self._role_imformation = role_imformation
         self._gpe_dim = gpe_dim
         self._proj_dim = proj_dim
@@ -581,12 +590,13 @@ class MASUPCriticMLP(nn.Module):
             graph_path, num_agents, num_nodes, role_imformation,
             gpe_dim, proj_dim, use_log_idleness, T_time, mode=mode,
         )
+        self._num_nodes = self.preprocessor.num_nodes
 
         # state 模式下，state_dim 之后是 agent_one_hot（pass-through 已在 preprocessor 处理）
         # agent_one_hot 在 state 模式中由 preprocessor passthrough 处理不了（字段在 state_dim 后）
         # 因此 critic 的 forward 里手动拼接
         if input_mode == "state":
-            self._state_dim = 3 * num_agents + num_nodes + 2
+            self._state_dim = 3 * num_agents + self._num_nodes + 2
             net_input = self.preprocessor.output_dim + num_agents
         else:
             self._state_dim = None
@@ -667,7 +677,6 @@ class MASUPCriticRNN(nn.Module):
         self._fc_hidden = list(fc_hidden) if fc_hidden else []
         self._graph_path = graph_path
         self._num_agents = num_agents
-        self._num_nodes = num_nodes
         self._role_imformation = role_imformation
         self._gpe_dim = gpe_dim
         self._proj_dim = proj_dim
@@ -680,9 +689,10 @@ class MASUPCriticRNN(nn.Module):
             graph_path, num_agents, num_nodes, role_imformation,
             gpe_dim, proj_dim, use_log_idleness, T_time, mode=mode,
         )
+        self._num_nodes = self.preprocessor.num_nodes
 
         if input_mode == "state":
-            self._state_dim = 3 * num_agents + num_nodes + 2
+            self._state_dim = 3 * num_agents + self._num_nodes + 2
             rnn_input_base = self.preprocessor.output_dim + num_agents
         else:
             self._state_dim = None
@@ -821,7 +831,6 @@ class MASUPQMLP(nn.Module):
         self.dueling = dueling
         self._graph_path = graph_path
         self._num_agents = num_agents
-        self._num_nodes = num_nodes
         self._role_imformation = role_imformation
         self._gpe_dim = gpe_dim
         self._proj_dim = proj_dim
@@ -833,6 +842,7 @@ class MASUPQMLP(nn.Module):
             graph_path, num_agents, num_nodes, role_imformation,
             gpe_dim, proj_dim, use_log_idleness, T_time, mode="actor",
         )
+        self._num_nodes = self.preprocessor.num_nodes
         prev = self.preprocessor.output_dim
         shared_layers = []
         for h in hidden:
@@ -922,7 +932,6 @@ class MASUPQRNN(nn.Module):
         self._fc_hidden = list(fc_hidden) if fc_hidden else []
         self._graph_path = graph_path
         self._num_agents = num_agents
-        self._num_nodes = num_nodes
         self._role_imformation = role_imformation
         self._gpe_dim = gpe_dim
         self._proj_dim = proj_dim
@@ -933,6 +942,7 @@ class MASUPQRNN(nn.Module):
             graph_path, num_agents, num_nodes, role_imformation,
             gpe_dim, proj_dim, use_log_idleness, T_time, mode="actor",
         )
+        self._num_nodes = self.preprocessor.num_nodes
         fc_sizes = list(fc_hidden) if fc_hidden else [hidden_size]
         fc_layers = []
         prev = self.preprocessor.output_dim
@@ -1072,21 +1082,19 @@ class MASUPVDPPOQmlp(nn.Module):
         self.dueling = dueling
         self._graph_path = graph_path
         self._num_agents = num_agents
-        self._num_nodes = num_nodes
         self._gpe_dim = gpe_dim
         self._proj_dim = proj_dim
         self._use_log_idleness = use_log_idleness
         self._T_time = T_time
         self._hidden = list(hidden)
 
-        # state_dim 由 num_agents / num_nodes 推算
-        self._state_dim = 3 * num_agents + num_nodes + 2
-
         # role_imformation 在 state 模式下无关，传 "agent-index" 占位
         self.preprocessor = _make_preprocessor(
             graph_path, num_agents, num_nodes, "agent-index",
             gpe_dim, proj_dim, use_log_idleness, T_time, mode="state",
         )
+        self._num_nodes = self.preprocessor.num_nodes
+        self._state_dim = 3 * num_agents + self._num_nodes + 2
         net_input = self.preprocessor.output_dim + num_agents  # + one_hot passthrough
 
         prev = net_input
@@ -1181,19 +1189,18 @@ class MASUPVDPPOQrnn(nn.Module):
         self._fc_hidden = list(fc_hidden) if fc_hidden else []
         self._graph_path = graph_path
         self._num_agents = num_agents
-        self._num_nodes = num_nodes
         self._gpe_dim = gpe_dim
         self._proj_dim = proj_dim
         self._use_log_idleness = use_log_idleness
         self._T_time = T_time
 
-        self._state_dim = 3 * num_agents + num_nodes + 2
-        passthrough_dim = input_dim - self._state_dim   # N + action_dim
-
         self.preprocessor = _make_preprocessor(
             graph_path, num_agents, num_nodes, "agent-index",
             gpe_dim, proj_dim, use_log_idleness, T_time, mode="state",
         )
+        self._num_nodes = self.preprocessor.num_nodes
+        self._state_dim = 3 * num_agents + self._num_nodes + 2
+        passthrough_dim = input_dim - self._state_dim   # N + action_dim
         rnn_input_base = self.preprocessor.output_dim + passthrough_dim
 
         fc_sizes = list(fc_hidden) if fc_hidden else [hidden_size]
