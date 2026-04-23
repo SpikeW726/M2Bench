@@ -7,15 +7,13 @@ env:
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/SF/hpcc/HPCC_eval.png
+  save_plot: evaluators/results/SF/cc/CC_eval.png
   show_plot: false
   animation: false
   event_driven: true
   max_frames: 1500
 
 algorithm_params:
-  distance_mode: sp
-  w_idl: 0.6
-  w_dist: 0.25
-  w_conflict: 0.5
-  softmax_tau: 1.0
+  idleness_weight: 1.0
+  distance_weight: 0.5
+  distance_mode: edge

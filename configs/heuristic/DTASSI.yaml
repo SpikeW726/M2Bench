@@ -1,0 +1,20 @@
+env:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  deltaT: 20.0
+  init_positions: [0, 5, 11]
+  episode_len: 3000
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/SF/dta_ssi/DTASSI_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 1500
+
+algorithm_params:
+  tabu_length: 5
+  # 与旧版一致：在基础分上再乘每候选独立 Uniform(低, 高)，与 Greedy 的 stochastic/score_jitter 独立
+  ssi_uniform_low: 0.9
+  ssi_uniform_high: 1.1

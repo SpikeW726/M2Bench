@@ -1,3 +1,18 @@
+env:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  deltaT: 20.0
+  init_positions: [0, 5, 11]
+  episode_len: 3000
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/SF/er/ER_eval.png
+  show_plot: false
+  animation: false
+  event_driven: true
+  max_frames: 1500
+
 algorithm_params:
-  exploration_rate: 0.0            # 评估设 0
-  use_avg_len_lower_bound: true    # 使用均值边长作为旅行时间下界（避免短边抖动）
+  exploration_rate: 0.0
+  use_avg_len_lower_bound: true

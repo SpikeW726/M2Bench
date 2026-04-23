@@ -1,0 +1,20 @@
+env:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 3
+  deltaT: 20.0
+  init_positions: [0, 5, 11]
+  episode_len: 3000
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/SF/dta_greedy/DTAGREEDY_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 1500
+
+algorithm_params:
+  tabu_length: 5
+  score_jitter: 0.1
+  # 与旧版一致：仅 stochastic=true 时才对分数乘 (1±score_jitter) 扰动；评估默认可复现
+  stochastic: false

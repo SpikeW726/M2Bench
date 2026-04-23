@@ -163,15 +163,29 @@ class HeuristicEvaluator:
 
 def create_policy(policy_name: str, num_agents: int, policy_config: Dict) -> HeuriticBasePolicy:
     """按名称创建启发式策略实例。"""
+    # policy_map: {策略名称: (模块路径, 类名)}
     policy_map = {
-        'ER': 'policies.heuritic.er',
-        'HPCC': 'policies.heuritic.hpcc',
+        'ER':        ('policies.heuritic.er',                    'ERPolicy'),
+        'HPCC':      ('policies.heuritic.hpcc',                  'HPCCPolicy'),
+        'GBS':       ('policies.heuritic.gbs',                   'GBSPolicy'),
+        'SEBS':      ('policies.heuritic.sebs',                  'SEBSPolicy'),
+        'BAPS':      ('policies.heuritic.baps',                  'BAPSPolicy'),
+        'CID':       ('policies.heuritic.cid',                   'CIDPolicy'),
+        'CBLS':      ('policies.heuritic.cbls',                  'CBLSPolicy'),
+        'RANDOM':    ('policies.heuritic.random',                'RandomPolicy'),
+        'MSP':       ('policies.heuritic.msp',                   'MSPPolicy'),
+        'DTAGREEDY': ('policies.heuritic.dta_greedy',            'DTAGreedyPolicy'),
+        'DTASSI':    ('policies.heuritic.dta_ssi',               'DTASSIPolicy'),
+        'AHPA':      ('policies.heuritic.ahpa',                  'AHPAPolicy'),
+        'CR':        ('policies.heuritic.conscientious_reactive', 'ConscientiousReactivePolicy'),
+        'CC':        ('policies.heuritic.conscientious_cognitive','ConscientiousCognitivePolicy'),
     }
     if policy_name not in policy_map:
         raise ValueError(f"Unknown policy: {policy_name}. Available: {list(policy_map.keys())}")
 
-    module = __import__(policy_map[policy_name], fromlist=[policy_name + 'Policy'])
-    policy_class = getattr(module, policy_name + 'Policy')
+    module_path, class_name = policy_map[policy_name]
+    module = __import__(module_path, fromlist=[class_name])
+    policy_class = getattr(module, class_name)
     return policy_class(num_agents, policy_config)
 
 
@@ -181,64 +195,81 @@ def create_policy(policy_name: str, num_agents: int, policy_config: Dict) -> Heu
 
 def main():
     parser = argparse.ArgumentParser(description='启发式策略评估 (直接与 PatrolWorld 交互)')
-    parser.add_argument('--num_episodes', type=int, default=10,
-                        help='评估 episode 数量 (default: 10)')
     parser.add_argument('--policy', type=str, default='ER',
-                        choices=['ER', 'HPCC'],
+                        choices=[
+                            'ER', 'HPCC',
+                            'GBS', 'SEBS', 'BAPS', 'CID', 'CBLS',
+                            'RANDOM', 'MSP',
+                            'DTAGREEDY', 'DTASSI',
+                            'AHPA', 'CR', 'CC',
+                        ],
                         help='策略名称 (default: ER)')
-    parser.add_argument('--env_config', type=str,
-                        default='configs/eval/masup/masup_grid.yaml',
-                        help='环境配置 YAML (experiment YAML 或独立 eval YAML)')
-    parser.add_argument('--policy_config', type=str, default=None,
-                        help='策略配置路径 (default: configs/policies/{POLICY}.yaml)')
-    parser.add_argument('--save_plot', type=str,
-                        default=str(AUTODL_RESULTS_ROOT / 'heuristic_eval.png'),
-                        help='图表保存路径')
+    parser.add_argument('--config', type=str, default=None,
+                        help='统一配置文件路径 (default: configs/heuristic/{POLICY}.yaml)，'
+                             '包含 env: / eval: / algorithm_params: 三段')
+    # 以下 CLI 参数可选传入，优先级高于 YAML 中 eval: 段的同名字段
+    parser.add_argument('--num_episodes', type=int, default=None,
+                        help='评估 episode 数量（覆盖 YAML eval.num_episodes）')
+    parser.add_argument('--save_plot', type=str, default=None,
+                        help='图表保存路径（覆盖 YAML eval.save_plot）')
     parser.add_argument('--no_show', action='store_true',
-                        help='不显示图表')
+                        help='强制不显示图表（覆盖 YAML eval.show_plot）')
     parser.add_argument('--animation', action='store_true',
-                        help='录制最后一个 episode 的动画视频')
+                        help='强制录制动画（覆盖 YAML eval.animation）')
     parser.add_argument('--no_event_driven', action='store_true',
-                        help='使用固定步长动画（默认为事件驱动动画）')
+                        help='强制固定步长动画（覆盖 YAML eval.event_driven）')
     parser.add_argument('--max_frames', type=int, default=None,
-                        help='动画最大帧数限制（默认不限制，推荐 300~600）')
+                        help='动画最大帧数（覆盖 YAML eval.max_frames，推荐 300~600）')
 
     args = parser.parse_args()
     args.save_plot = resolve_results_path(args.save_plot)
 
-    # ---- 加载环境配置 ----
-    env_cfg = load_env_config(args.env_config)
+    # ---- 加载统一配置文件 ----
+    config_path = args.config or f"configs/heuristic/{args.policy}.yaml"
+    with open(config_path) as f:
+        raw_cfg = yaml.safe_load(f) or {}
+
+    # ---- 解析 env: 段 → PatrolWorld 参数 ----
+    env_cfg = load_env_config(config_path)
     cfg_dict, custom_dict = _env_config_to_dicts(env_cfg)
 
-    episode_len = cfg_dict.get('episode_len', 5000)
+    episode_len    = cfg_dict.get('episode_len', 5000)
     truncate_by_time = custom_dict.get('truncate_by_time', True)
     init_positions = cfg_dict.get('init_positions', None)
-    graph_path = cfg_dict['graph_path']
-    graph_name = Path(graph_path).stem
+    graph_path     = cfg_dict['graph_path']
+    graph_name     = Path(graph_path).stem
 
-    # ---- 加载策略配置 ----
-    policy_config_path = args.policy_config or f"configs/policies/{args.policy}.yaml"
-    with open(policy_config_path) as f:
-        policy_config = yaml.safe_load(f)
+    # ---- 解析 eval: 段，CLI 参数优先 ----
+    eval_cfg = raw_cfg.get('eval', {})
+    num_episodes = args.num_episodes if args.num_episodes is not None \
+        else eval_cfg.get('num_episodes', 10)
+    save_plot = args.save_plot if args.save_plot is not None \
+        else eval_cfg.get('save_plot', f'evaluators/results/{args.policy.lower()}_eval.png')
+    show_plot  = eval_cfg.get('show_plot', False) and not args.no_show
+    animation  = args.animation or eval_cfg.get('animation', False)
+    event_driven = eval_cfg.get('event_driven', True) and not args.no_event_driven
+    max_frames = args.max_frames if args.max_frames is not None \
+        else eval_cfg.get('max_frames', None)
 
     # ---- 创建 PatrolWorld（不需要 MDP 封装）----
-    print(f"Creating PatrolWorld with graph: {graph_path}")
-    print(f"  episode_len: {episode_len}, truncate_by_time: {truncate_by_time}")
-    print(f"  init_positions: {init_positions if init_positions else 'random'}")
+    print(f"Config : {config_path}")
+    print(f"Graph  : {graph_path}")
+    print(f"episode_len={episode_len}, truncate_by_time={truncate_by_time}")
+    print(f"init_positions: {init_positions if init_positions else 'random'}")
     world = PatrolWorld(cfg_dict)
 
     # ---- 创建策略 ----
-    print(f"Creating {args.policy} policy")
-    policy = create_policy(args.policy, world.num_agents, policy_config)
+    print(f"Policy : {args.policy}")
+    policy = create_policy(args.policy, world.num_agents, raw_cfg)
 
     # ---- 运行评估 ----
     evaluator = HeuristicEvaluator(
-        world, policy, args.num_episodes,
+        world, policy, num_episodes,
         episode_len=episode_len,
         truncate_by_time=truncate_by_time,
         init_positions=init_positions,
-        record_animation=args.animation,
-        event_driven=not args.no_event_driven,
+        record_animation=animation,
+        event_driven=event_driven,
     )
     aggregated = evaluator.evaluate()
 
@@ -246,27 +277,27 @@ def main():
     print("\n=== Final Statistics ===")
     for metric in ['igi', 'agi', 'iwi', 'wi']:
         final_mean = aggregated[f'{metric}_mean'][-1]
-        final_std = aggregated[f'{metric}_std'][-1]
+        final_std  = aggregated[f'{metric}_std'][-1]
         print(f"{metric.upper()}: {final_mean:.4f} ± {final_std:.4f}")
 
     # ---- 绘图 ----
     print(f"\nPlotting results...")
-    save_dir = str(Path(args.save_plot).parent)
+    save_dir = str(Path(save_plot).parent)
     plot_aggregated_metrics(
         aggregated,
-        title=f'{args.policy} Policy Evaluation ({args.num_episodes} episodes)',
-        save_path=args.save_plot,
-        show=not args.no_show,
+        title=f'{args.policy} Policy Evaluation ({num_episodes} episodes)',
+        save_path=save_plot,
+        show=show_plot,
     )
 
     # ---- 动画 ----
-    if args.animation:
+    if animation:
         print(f"\nGenerating animation for last episode...")
         evaluator.generate_animation(
             algorithm_name=args.policy,
             map_name=graph_name,
             save_dir=save_dir,
-            max_frames=args.max_frames,
+            max_frames=max_frames,
         )
 
 

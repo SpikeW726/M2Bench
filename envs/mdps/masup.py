@@ -72,8 +72,7 @@ class MASUPEnv(EventDrivenEnv):
             for n in self.world.graph.nodes
         }
 
-        # ---- 优化 5: 预分配 pos_flat 缓冲区，复用 np.ndarray 避免每步重新分配 ----
-        self._pos_buf: np.ndarray = np.empty(3 * self.world.num_agents, dtype=np.float32)
+        # pos_flat 缓冲区在 _build_obs 中按需创建（避免预分配属性类型被意外覆写）
 
 
     def observation_space(self, agent):
@@ -435,15 +434,15 @@ class MASUPEnv(EventDrivenEnv):
         # 转 float32 即可，避免 Python 列表推导式和 N 次 dict 查找
         weighted = self.world._weighted_arr.astype(np.float32)
 
-        # 优化 5: 复用预分配缓冲区，避免每步创建临时 list 和 np.array
         Na = self.world.num_agents
+        pos_buf = np.empty(3 * Na, dtype=np.float32)
         for aid in range(Na):
             ag = self.world.agents[aid]
             i = aid * 3
-            self._pos_buf[i] = ag.last_position
-            self._pos_buf[i + 1] = ag.target_node
-            self._pos_buf[i + 2] = ag.nominal_action_remaining  # 名义剩余时间
-        shared = np.concatenate((self._pos_buf, weighted))
+            pos_buf[i] = ag.last_position
+            pos_buf[i + 1] = ag.target_node
+            pos_buf[i + 2] = ag.nominal_action_remaining
+        shared = np.concatenate((pos_buf, weighted))
 
         worst = float(self.worst_idleness_fromT)
         timer = float(self.obs_timer)

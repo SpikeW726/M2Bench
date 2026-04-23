@@ -1,6 +1,6 @@
 """向量化环境：并行运行多个环境实例，支持 Gymnasium Env 和 PettingZoo ParallelEnv。"""
 
-from typing import Any, Callable, Dict, List, Literal, Sequence, Union
+from typing import Any, Callable, Dict, List, Literal, Sequence, Union, Optional
 import numpy as np
 import gymnasium as gym
 

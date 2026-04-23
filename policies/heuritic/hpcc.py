@@ -29,8 +29,10 @@ class HPCCPolicy(HeuriticBasePolicy):
 
 
         # 认知协调参数（ETA冲突）
-        self.conflict_eta_margin: float = float(ap.get("conflict_eta_margin", 0.0))  # 允许我方稍慢/持平的余量
-        self.eta_clip_min: float = float(ap.get("eta_clip_min", 1.0))  # ETA 最小值，避免 0
+        self.conflict_eta_margin: float = float(ap.get("conflict_eta_margin", 0.0))
+        self.eta_clip_min: float = float(ap.get("eta_clip_min", 1.0))
+        # softmax 温度（>0 时按 softmax(-score/tau) 采样；<=0 退化为 argmin）
+        self.softmax_tau: float = float(ap.get("softmax_tau", config.get("softmax_tau", 1.0)))
         self._eps = 1e-9
 
 
@@ -117,7 +119,7 @@ class HPCCPolicy(HeuriticBasePolicy):
         
         neighbor_idleness = np.asarray(neighbor_idleness, dtype=np.float32)
         
-        # 计算距离
+        # 计算距离（调用基类工具方法，自动读取 self.distance_mode）
         graph = global_state.get('graph')
         distances = self._neighbor_distances(current_node, neighbors, graph)
         
@@ -142,59 +144,6 @@ class HPCCPolicy(HeuriticBasePolicy):
         return int(np.random.choice(len(neighbors), p=probs))
 
     
-    def _norm_minmax(self, arr: np.ndarray) -> np.ndarray:
-        """Min-Max 归一化"""
-        a_min, a_max = float(np.min(arr)), float(np.max(arr))
-        if a_max - a_min < self._eps:
-            return np.zeros_like(arr, dtype=np.float32)
-        return (arr - a_min) / (a_max - a_min)
-
-    def _norm_inverted(self, arr: np.ndarray) -> np.ndarray:
-        """反向 Min-Max 归一化（值大→归一化后小）"""
-        return 1.0 - self._norm_minmax(arr)
-
-    def _neighbor_distances(
-        self, 
-        current: int, 
-        neighbors: List[int], 
-        graph: Any
-    ) -> np.ndarray:
-        """
-        计算从当前节点到每个邻居的距离
-        
-        Args:
-            current: 当前节点
-            neighbors: 邻居节点列表
-            graph: 图对象
-        
-        Returns:
-            distances: 到每个邻居的距离数组
-        """
-        if graph is None:
-            return np.ones(len(neighbors), dtype=np.float32)
-
-        # 优先使用最短路
-        if self.distance_mode == "sp" and hasattr(graph, "shortest_path_length"):
-            out = []
-            for nb in neighbors:
-                try:
-                    d = float(graph.shortest_path_length(current, nb))
-                except Exception:
-                    d = float(getattr(graph, "get_edge_length", lambda u, v: 1.0)(current, nb) or 1.0)
-                out.append(max(d, 1.0))
-            return np.asarray(out, dtype=np.float32)
-
-        # 否则使用边长
-        get_len = getattr(graph, "get_edge_length", None)
-        out = []
-        for nb in neighbors:
-            if callable(get_len):
-                d = float(get_len(current, nb) or 1.0)
-            else:
-                d = 1.0
-            out.append(max(d, 1.0))
-        return np.asarray(out, dtype=np.float32)
-
     def _neighbor_conflicts(
         self, 
         agent_id: int, 

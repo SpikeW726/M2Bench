@@ -520,17 +520,19 @@ class PatrolWorld:
     
     def get_global_state_for_heuristic(self) -> Dict:
         """
-        返回启发式算法需要的全局状态,目前只适用于ER启发式算法
-        
+        返回启发式算法需要的全局状态。
+
         Returns:
             {
-                'graph': Graph,                       # 图结构对象
-                'agent_positions': Dict[int, int],    # 智能体位置
-                'agents_on_edge': Dict[int, bool],    # 智能体是否在边上
-                'current_time': float,                # 当前仿真时间
-                'node_last_visit': Dict[int, float],  # 节点上次访问时间
-                'agent_speeds': List[float],          # 智能体速度
-                'er_avg_edge_len': float,             # 平均边长
+                'graph': Graph,                           # 图结构对象
+                'agent_positions': Dict[int, int],        # 智能体位置 {agent_idx: node_id}
+                'agents_on_edge': Dict[int, bool],        # 智能体是否在边上
+                'agents_target_node': Dict[int, int],     # 智能体当前目标节点（-1 表示无）
+                'current_time': float,                    # 当前仿真时间
+                'node_last_visit': Dict[int, float],      # 节点上次访问时间
+                'node_idleness': Dict[int, float],        # 节点当前空闲度
+                'agent_speeds': List[float],              # 智能体速度
+                'er_avg_edge_len': float,                 # 平均边长
             }
         """
         # 从 idleness 反推 last_visit_time: last_visit[n] = current_time - idleness[n]
@@ -538,19 +540,24 @@ class PatrolWorld:
             n: self.current_time - self.node_idleness[n]
             for n in self.graph.nodes
         }
-        
+
         return {
             'graph': self.graph,
             'agent_positions': {
-                i: self.agents[i].position 
+                i: self.agents[i].position
                 for i in range(self.num_agents)
             },
             'agents_on_edge': {
                 i: self.agents[i].state == AgentState.ON_EDGE
                 for i in range(self.num_agents)
             },
+            'agents_target_node': {
+                i: self.agents[i].target_node
+                for i in range(self.num_agents)
+            },
             'current_time': self.current_time,
             'node_last_visit': node_last_visit,
+            'node_idleness': dict(self.node_idleness),
             'agent_speeds': self.speeds,
             'er_avg_edge_len': self.graph.get_average_edge_length() if hasattr(self.graph, 'get_average_edge_length') else 1.0,
         }
