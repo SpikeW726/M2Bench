@@ -34,6 +34,7 @@ from configs.registry import (
 from data.collector import (
     OnPolicyCollector, MAOnPolicyCollector,
     OffPolicyCollector, MAOffPolicyCollector,
+    MATOnPolicyCollector,
 )
 from data.buffer import ReplayBuffer, SequenceReplayBuffer
 from policies.marl.marl_base import MultiAgentPolicy
@@ -306,12 +307,93 @@ def _load_pretrained(
     return value_norm_config
 
 
+def _build_mat_policy(config: ExperimentConfig, dims: dict, device):
+    """构建 MAT 专属 MATMultiAgentPolicy（GATEncoder + MATDecoder）。
+
+    从 config.algo 获取超参（hidden_dim, num_heads, encoder_layers, decoder_heads）。
+    图结构（adj, node_coords, sorted_nodes）从 config.env 的 graph_path 读取。
+    """
+    import json
+    import numpy as np
+    from networks.mat import GATEncoder, MATDecoder
+    from policies.marl.mat_policy import MATMultiAgentPolicy
+
+    algo_cfg = config.algo
+    env_cfg = config.env
+    custom = env_cfg.custom_configs or {}
+
+    graph_path = custom.get("graph_path", getattr(env_cfg, "graph_path", None))
+    if graph_path is None:
+        raise ValueError("[MAT] config.env.custom_configs 中必须包含 graph_path 字段")
+
+    from utils.graph_layout import process_graph_file
+    from pathlib import Path
+    gp = Path(graph_path)
+    coords_path = gp.with_name(gp.stem + "_coords.json")
+    if not coords_path.exists():
+        process_graph_file(gp)
+
+    with open(graph_path) as f:
+        graph_data = json.load(f)
+    with open(coords_path) as f:
+        raw_coords = json.load(f)
+
+    all_nodes = sorted(graph_data["nodes"])
+    graph_size = len(all_nodes)
+    node_to_idx = {n: i for i, n in enumerate(all_nodes)}
+
+    node_coords = np.array([raw_coords[str(n)] for n in all_nodes], dtype=np.float32)
+
+    adj = np.zeros((graph_size, graph_size), dtype=np.float32)
+    for e in graph_data["edges"]:
+        i, j = node_to_idx[e["from"]], node_to_idx[e["to"]]
+        adj[i, j] = 1.0
+        adj[j, i] = 1.0
+
+    hidden_dim = getattr(algo_cfg, "hidden_dim", 64)
+    num_heads = getattr(algo_cfg, "num_heads", 4)
+    enc_layers = getattr(algo_cfg, "encoder_layers", 2)
+    n_agents = dims["num_agents"]
+
+    encoder = GATEncoder(
+        input_dim=3,
+        hidden_dim=hidden_dim,
+        num_heads=num_heads,
+        num_layers=enc_layers,
+        adj=adj,
+        graph_size=graph_size,
+    ).to(device)
+
+    decoder = MATDecoder(
+        hidden_dim=hidden_dim,
+        n_agents=n_agents,
+        graph_size=graph_size,
+        n_heads=num_heads,
+        adj=adj,
+        node_coords=node_coords,
+        node_id_to_idx=node_to_idx,
+        sorted_nodes=all_nodes,
+    ).to(device)
+
+    policy = MATMultiAgentPolicy(
+        encoder=encoder,
+        decoder=decoder,
+        n_agents=n_agents,
+        agent_ids=dims["agent_ids"],
+    ).to(device)
+
+    print(f"[MAT] Built GATEncoder(graph_size={graph_size}, hidden={hidden_dim}, "
+          f"heads={num_heads}, layers={enc_layers}) + MATDecoder(n_agents={n_agents})")
+    return policy
+
+
 def _build_policy(
     config: ExperimentConfig,
     dims: dict,
     is_parallel: bool,
     actor_net=None,
     q_net=None,
+    device=None,
 ):
     """根据环境类型和算法类型构建 Policy。
 
@@ -322,7 +404,10 @@ def _build_policy(
 
     if is_parallel:
         # ---- 多智能体路径 ----
-        if policy_type == "value":
+        if policy_type == "mat":
+            # MAT 专属路径：从 vec_env 获取图结构信息，构建 GATEncoder + MATDecoder
+            return _build_mat_policy(config, dims, device)
+        elif policy_type == "value":
             shared = getattr(config.algo, "shared_policy", False)
             return MultiAgentPolicy(
                 agent_ids=dims["agent_ids"],
@@ -460,7 +545,10 @@ def _build_collector(
                 )
             return OffPolicyCollector(algorithm, vec_env, buffer)
     else:
-        if is_parallel:
+        if get_policy_type(config.algo_name) == "mat":
+            # MAT 专属：决策步缓冲 collector
+            return MATOnPolicyCollector(algorithm, vec_env, dims["num_agents"])
+        elif is_parallel:
             return MAOnPolicyCollector(algorithm, vec_env)
         else:
             return OnPolicyCollector(algorithm, vec_env)
@@ -744,7 +832,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         print("[Train] Off-policy algorithm, skipping pretrained weight loading")
 
     # ---- 6. 构建 Policy ----
-    policy = _build_policy(config, dims, is_parallel, actor_net=actor_net, q_net=q_net)
+    policy = _build_policy(config, dims, is_parallel, actor_net=actor_net, q_net=q_net, device=device)
 
     # ---- 7. 构建算法 ----
     # context_kwargs 池: 放入所有可能需要的运行时参数，

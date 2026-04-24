@@ -17,7 +17,7 @@ import yaml
 from configs.env_configs import EnvConfig
 from configs.algo_configs import (
     AlgoParams, A2CParams, MAA2CParams, MAPPOParams, IPPOParams, VDPPOParams,
-    D3QNParams, IQLParams, VDNParams, QMIXParams, QTableParams,
+    D3QNParams, IQLParams, VDNParams, QMIXParams, QTableParams, MAPPOMATParams,
 )
 from configs.training_configs import (
     TrainerConfig, OnPolicyTrainerConfig, OffPolicyTrainerConfig,
@@ -117,6 +117,14 @@ ALGO_REGISTRY: Dict[str, Dict[str, Any]] = {
         "params_class": QTableParams,
         "trainer_type": "tabular",
     },
+    # ---- MAT（Multi-Agent Transformer）PPO ----
+    "mappo_mat": {
+        "module": "algorithms.marl.mappo_mat",
+        "class_name": "MAPPOMATAlgo",
+        "params_class": MAPPOMATParams,
+        "trainer_type": "on_policy",
+        "policy_type": "mat",   # 特殊路径：MATMultiAgentPolicy
+    },
 }
 
 # ---- 环境 ----
@@ -164,6 +172,10 @@ ENV_REGISTRY: Dict[str, Dict[str, str]] = {
     "magec": {
         "module": "envs.mdps.magec",
         "class_name": "MAGECEnv",
+    },
+    "beau": {
+        "module": "envs.mdps.beau",
+        "class_name": "BEAU",
     },
 }
 

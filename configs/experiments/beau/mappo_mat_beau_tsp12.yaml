@@ -1,0 +1,53 @@
+# MAPPO-MAT (GATEncoder + Multi-Agent Transformer) + BEAU 环境 (TSP12)
+# 初始调试配置：num_envs=1 方便问题定位
+# 用法: python train.py configs/experiments/beau/mappo_mat_beau_tsp12.yaml
+
+# ---- 分发字段 ----
+algo_name: mappo_mat
+env_type: beau
+
+# ---- 实验元信息 ----
+exp_name: mappo-mat-tsp12
+graph_name: TSP12
+track_wandb: true
+seed: 42
+
+# ---- 环境 ----
+env:
+  graph_path: graphs/simple_TSP_12.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 0.333
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 300
+  custom_configs:
+    reward_scale: 0.01
+    truncate_by_time: true
+
+# ---- 算法 ----
+algo:
+  gamma: 0.99
+  clip_coef: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 10.0
+  lr: 5.0e-5
+  policy_update_steps: 5
+  factor: 0.5
+  patience: 100
+  # MAT 网络结构（通过 _build_mat_policy 读取）
+  hidden_dim: 64
+  num_heads: 4
+  encoder_layers: 2
+
+# ---- 训练 ----
+training:
+  num_envs: 1          # 初始调试时 1 个 env
+  use_subproc: false
+  num_steps: 600       # 每轮采集 600 仿真步（约 100 决策步）
+  total_steps: 2000000
+  save_interval: 200
+  minibatch_size: 64   # MAT: update 内部忽略此参数（使用 policy_update_steps）
+  update_epochs: 5     # MAT: 忽略，使用 policy_update_steps
+  eval_interval: 0

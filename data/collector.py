@@ -1185,3 +1185,272 @@ def _extract_agent_active_mask_np(
 
 Collector = OnPolicyCollector
 MACollector = MAOnPolicyCollector
+
+
+# =============================================================================
+#                      MATOnPolicyCollector（决策步缓冲）
+# =============================================================================
+
+class MATOnPolicyCollector(BaseCollector):
+    """MAT（Multi-Agent Transformer）专用 On-Policy 采集器。
+
+    关键设计（严格遵循 asy_ppo.py）:
+    - 只在 any(active_mask)==True 时存入 buffer（决策步缓冲）
+    - 累积决策步之间的 change_reward
+    - state_mat() / get_current_node_indices() 通过 call_env_method 获取
+
+    初始化时环境必须已经 reset，且支持 state_mat() / get_adj() / get_current_node_indices()
+    方法（即 BEAU 环境）。
+
+    collect(n_steps) 中 n_steps 指**仿真步数**（不是决策步数）；
+    result.n_steps 也返回仿真步数（供 Trainer 统计 total_steps）。
+    result.batch 为 MATBatch，只含决策步。
+    """
+
+    def __init__(self, algorithm, env: "BaseVectorEnv", n_agents: int):
+        from algorithms.marl.mappo_mat import MATBatch  # 避免循环导入
+        self._MATBatch = MATBatch
+        self.n_agents = n_agents
+        # 当前 shift_action：(num_envs, N, N, 2)
+        self._last_shift: Optional[torch.Tensor] = None
+        # 当前 episode 每个 env 的 change_reward（决策步间累积）
+        self._change_rewards: Optional[np.ndarray] = None
+        super().__init__(algorithm, env)
+
+    # -------------------------------------------------------------------------
+
+    def _reset_buffer(self):
+        self._graph_state_buf: List[np.ndarray] = []   # (N, G, 3)
+        self._actions_buf: List[np.ndarray] = []        # (N,) int
+        self._log_probs_buf: List[np.ndarray] = []      # (N, G)
+        self._rewards_buf: List[float] = []             # scalar
+        self._shift_buf: List[np.ndarray] = []          # (N, N, 2)
+        self._node_idx_buf: List[np.ndarray] = []       # (N,) int
+        self._active_mask_buf: List[np.ndarray] = []    # (N,)
+        # 最后一步的状态（用于 MC return bootstrap）
+        self._last_graph_state: Optional[np.ndarray] = None
+        self._last_node_idx: Optional[np.ndarray] = None
+        self._last_active_mask: Optional[np.ndarray] = None
+        self._last_shift_np: Optional[np.ndarray] = None
+
+    def reset(self, **kwargs):
+        result = super().reset(**kwargs)
+        # 初始化 shift_action 全零
+        device = self.algorithm.device
+        self._last_shift = torch.zeros(
+            self.num_envs, self.n_agents, self.n_agents, 2,
+            dtype=torch.float32, device=device,
+        )
+        self._change_rewards = np.zeros(self.num_envs, dtype=np.float32)
+        return result
+
+    # -------------------------------------------------------------------------
+
+    def collect(
+        self,
+        n_steps: Optional[int] = None,
+        n_episodes: Optional[int] = None,
+    ) -> "CollectResult":
+        """收集 n_steps 仿真步，只存决策步到 buffer。"""
+        if n_steps is None:
+            raise ValueError("MATOnPolicyCollector 暂只支持 n_steps 模式")
+        if self._obs is None:
+            self.reset()
+
+        policy = self.algorithm.policy
+        device = self.algorithm.device
+
+        self.algorithm.set_training_mode(False)
+
+        sim_step_count = 0
+
+        while sim_step_count < n_steps:
+            # ---- 从环境获取图结构全局状态（每 env 一份）----
+            # 假设 num_envs=1（多 env 扩展见注释）
+            graph_states = self.env.call_env_method("state_mat")      # List[(N,G,3)]
+            node_idxs    = self.env.call_env_method("get_current_node_indices")  # List[(N,)]
+
+            # 取 env 0（num_envs=1 时）
+            graph_state = graph_states[0]   # (N, G, 3)
+            node_idx    = node_idxs[0]      # (N,) int32
+
+            # 从 info 提取 active_mask（每个 agent 的 active_mask）
+            active_mask = self._extract_active_mask_all_agents()  # (N,) float
+
+            # ---- 联合动作采样（无论哪些 agent READY，统一前向传播）----
+            graph_state_batch = graph_state[np.newaxis]  # (1, N, G, 3)
+            node_idx_batch    = node_idx[np.newaxis]      # (1, N)
+            am_batch          = active_mask[np.newaxis]   # (1, N)
+            last_shift_env    = self._last_shift[0:1]     # (1, N, N, 2)
+
+            actions_np, log_probs_t, _, shift_new = policy.compute_joint_actions(
+                graph_state_batch, node_idx_batch, am_batch, last_shift_env
+            )
+            # actions_np: (1, N)  log_probs_t: (1, N, G)  shift_new: (1, N, N, 2)
+
+            actions_env = actions_np[0]           # (N,) int
+            log_probs_env = log_probs_t[0].cpu().numpy()  # (N, G)
+            self._last_shift[0] = shift_new[0]
+
+            # ---- 将 graph_index 转为 PettingZoo action dict ----
+            # BEAU 与 MASUPEnv 相同：Discrete(max_neighbors+2)
+            # 但 MAT 输出的是 graph index；需要在 env 侧映射
+            # 通过 call_env_method 请求环境将 graph_index 转为实际动作
+            actions_env_mapped = self._map_graph_idx_to_env_actions(actions_env, node_idx)
+
+            # ---- 环境步 ----
+            obs_dict, rew_dict, term_dict, trunc_dict, info_dict = \
+                self.env.step(actions_env_mapped)
+
+            # 共享奖励：取 agent_0 的奖励（与原论文 shared_reward 对应）
+            shared_rew = self._get_shared_reward(rew_dict)
+
+            self._change_rewards[0] += shared_rew
+            sim_step_count += self.num_envs
+
+            done = self._check_done(term_dict, trunc_dict)
+            if done:
+                self._handle_done(0, self._current_rewards[0], self._current_lengths[0])
+
+            self._current_rewards[0] += shared_rew
+            self._current_lengths[0] += 1
+
+            # ---- 只在有 READY agent 时存入 buffer（决策步缓冲）----
+            any_ready = bool(active_mask.any())
+            if any_ready:
+                self._graph_state_buf.append(graph_state.copy())
+                self._actions_buf.append(actions_env.copy())
+                self._log_probs_buf.append(log_probs_env.copy())
+                self._rewards_buf.append(float(self._change_rewards[0]))
+                self._shift_buf.append(shift_new[0].cpu().numpy().copy())
+                self._node_idx_buf.append(node_idx.copy())
+                self._active_mask_buf.append(active_mask.copy())
+                self._change_rewards[0] = 0.0  # 重置 change_reward
+
+            # episode 结束时重置
+            if done:
+                self._change_rewards[0] = 0.0
+                self._last_shift[0] = torch.zeros(
+                    self.n_agents, self.n_agents, 2,
+                    dtype=torch.float32, device=device,
+                )
+
+            self._obs = obs_dict
+            self._info = info_dict
+
+        # 保存最后一步状态供 MC return bootstrap
+        last_gs = self.env.call_env_method("state_mat")[0]
+        last_ni = self.env.call_env_method("get_current_node_indices")[0]
+        last_am = self._extract_active_mask_all_agents()
+        self._last_graph_state = last_gs
+        self._last_node_idx = last_ni
+        self._last_active_mask = last_am
+        self._last_shift_np = self._last_shift[0].cpu().numpy()
+
+        # ---- 构建 MATBatch ----
+        T = len(self._rewards_buf)
+        if T == 0:
+            # 极端情况：整个 n_steps 内无决策步（不应发生）
+            batch = self._MATBatch(
+                graph_state=np.zeros((1, self.n_agents, 1, 3), dtype=np.float32),
+                actions=np.zeros((1, self.n_agents), dtype=np.int64),
+                log_probs=np.zeros((1, self.n_agents, 1), dtype=np.float32),
+                rewards=np.zeros(1, dtype=np.float32),
+                shift_action=np.zeros((1, self.n_agents, self.n_agents, 2), dtype=np.float32),
+                node_last_idx=np.zeros((1, self.n_agents), dtype=np.int32),
+                active_mask=np.ones((1, self.n_agents), dtype=np.float32),
+            )
+        else:
+            batch = self._MATBatch(
+                graph_state=np.stack(self._graph_state_buf),   # (T,N,G,3)
+                actions=np.stack(self._actions_buf),            # (T,N)
+                log_probs=np.stack(self._log_probs_buf),        # (T,N,G)
+                rewards=np.array(self._rewards_buf, dtype=np.float32),  # (T,)
+                shift_action=np.stack(self._shift_buf),         # (T,N,N,2)
+                node_last_idx=np.stack(self._node_idx_buf),     # (T,N)
+                active_mask=np.stack(self._active_mask_buf),    # (T,N)
+                last_graph_state=self._last_graph_state,
+                last_node_idx=self._last_node_idx,
+                last_active_mask=self._last_active_mask,
+                last_shift=self._last_shift_np,
+            )
+
+        return CollectResult(
+            batch=batch,
+            n_steps=sim_step_count,
+            n_episodes=len(self._episode_rewards),
+            episode_rewards=self._episode_rewards.copy(),
+            episode_lengths=self._episode_lengths.copy(),
+        )
+
+    # -------------------------------------------------------------------------
+    #  私有辅助
+    # -------------------------------------------------------------------------
+
+    def _extract_active_mask_all_agents(self) -> np.ndarray:
+        """从 self._info 提取每个 agent 的 active_mask，返回 (N,) float32。"""
+        info = self._info
+        mask = np.ones(self.n_agents, dtype=np.float32)
+        if info is None:
+            return mask
+        for k in range(self.n_agents):
+            agent_key = f"agent_{k}"
+            if agent_key in info:
+                arr = info[agent_key]
+                if isinstance(arr, np.ndarray) and len(arr) > 0:
+                    entry = arr[0]
+                elif isinstance(arr, dict):
+                    entry = arr
+                else:
+                    continue
+                if isinstance(entry, dict):
+                    mask[k] = float(entry.get("active_mask", 1))
+        return mask
+
+    def _map_graph_idx_to_env_actions(
+        self,
+        graph_idx_actions: np.ndarray,  # (N,) int — graph index
+        current_node_idx: np.ndarray,   # (N,) int
+    ) -> Dict[str, np.ndarray]:
+        """将 graph index 转为 VectorEnv.step() 所需格式。
+
+        VectorEnv.step() 期望: Dict[str, np.ndarray(num_envs,)]
+        即每个 agent 的动作数组（长度=num_envs，这里 num_envs=1）。
+        """
+        results = self.env.call_env_method(
+            "graph_idx_to_action",
+            graph_idx_actions.tolist(),
+        )
+        # results[0]: Dict[str, int]（env 0 的 agent->action 映射）
+        per_env_dict = results[0]
+        # 封装为 {agent: np.array([action])} 格式，长度=1
+        return {
+            agent: np.array([act], dtype=np.int64)
+            for agent, act in per_env_dict.items()
+        }
+
+    def _get_shared_reward(self, rew_dict) -> float:
+        """从 reward dict 中取 agent_0 的标量奖励（共享奖励，与原论文对应）。"""
+        if rew_dict is None:
+            return 0.0
+        for key in ("agent_0", "agent_0"):
+            if key in rew_dict:
+                arr = rew_dict[key]
+                if isinstance(arr, np.ndarray):
+                    return float(arr[0])
+                return float(arr)
+        return 0.0
+
+    def _check_done(self, term_dict, trunc_dict) -> bool:
+        """任意 agent done → episode done（env_0）。"""
+        if term_dict is None and trunc_dict is None:
+            return False
+        for d in (term_dict, trunc_dict):
+            if d is None:
+                continue
+            for v in d.values():
+                if isinstance(v, np.ndarray) and len(v) > 0 and v[0]:
+                    return True
+                elif isinstance(v, bool) and v:
+                    return True
+        return False

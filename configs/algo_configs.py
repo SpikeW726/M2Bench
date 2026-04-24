@@ -198,6 +198,27 @@ class QMIXParams(VDNParams):
 
 
 # =============================================================================
+#                     MAT（Multi-Agent Transformer）PPO 系列
+# =============================================================================
+
+@dataclass(kw_only=True)
+class MAPPOMATParams(AlgoParams):
+    """MAT PPO 算法超参（对应 asy_ppo.py）。
+
+    注: gamma, clip_coef, ent_coef, vf_coef 与 asy_ppo 原文保持一致命名。
+    """
+    lr: float = 5e-5
+    gamma: float = 0.99
+    clip_coef: float = 0.2          # PPO clip range
+    ent_coef: float = 0.01          # 熵正则系数
+    vf_coef: float = 0.5            # Value loss 系数
+    max_grad_norm: float = 10.0     # 梯度裁剪（asy_ppo 默认 10）
+    policy_update_steps: int = 5    # 内层 PPO epoch 数
+    factor: float = 0.5             # ReduceLROnPlateau factor
+    patience: int = 100             # ReduceLROnPlateau patience
+
+
+# =============================================================================
 #                     Tabular 系列
 # =============================================================================
 

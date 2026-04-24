@@ -62,7 +62,8 @@ from utils.autodl_paths import (
 
 
 # MASUP / MASUPGraphEnv：第四幅子图用 wi_fromT 替代全 episode 的 wi
-_MASUP_LIKE_ENV_TYPES = frozenset({"masup", "masup_gnn", "masup_beau"})
+# BEAU 无 T_time，不提供 _wi_fromT_history，不纳入此集合
+_MASUP_LIKE_ENV_TYPES = frozenset({"masup", "masup_gnn"})
 
 
 def _eval_metrics_history_for_plot(env, env_type: str) -> dict:

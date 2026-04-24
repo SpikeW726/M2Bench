@@ -55,6 +55,7 @@ def _get_class_registry() -> Dict[str, type]:
         MASUPQMLP, MASUPQRNN,
         MASUPVDPPOQmlp, MASUPVDPPOQrnn,
     )
+    from networks.mat import GATEncoder, MATDecoder
 
     return {
         "ActorMLP": ActorMLP,
@@ -76,6 +77,9 @@ def _get_class_registry() -> Dict[str, type]:
         "MASUPQRNN": MASUPQRNN,
         "MASUPVDPPOQmlp": MASUPVDPPOQmlp,
         "MASUPVDPPOQrnn": MASUPVDPPOQrnn,
+        # MAT 网络
+        "GATEncoder": GATEncoder,
+        "MATDecoder": MATDecoder,
     }
 
 
