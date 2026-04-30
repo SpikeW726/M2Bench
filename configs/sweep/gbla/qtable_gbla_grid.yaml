@@ -15,31 +15,30 @@ metric:
 
 early_terminate:
   min_trial: 4
-  min_steps: 5000000
+  min_steps: 10000000
   terminate_ratio: 0.5
-  early_stop_iters: 8
-  slope_horizons: [4, 8]
-  slope_threshold: 5.0e-5
+  early_stop_iters: 200
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
 
 parameters:
   seed:
     value: 42
   lr:
-    min: 0.01
-    max: 0.5
+    min: 0.00001
+    max: 0.001
     distribution: log_uniform_values
+
   gamma:
-    values: [0.9, 0.95, 0.97, 0.99]
+    values: [0.99, 0.999]
   epsilon_start:
-    values: [0.05, 0.1, 0.2]
+    values: [0.2, 0.5, 1.0]
   epsilon_end:
-    min: 0.01
-    max: 0.1
-    distribution: uniform
+    value: 0.05
   save_interval:
     value: 1000
-  # grid obs_dim=11（含邻居意图），比 BBLA 状态复杂，decay 适当延长
+  # grid max_degree=7，状态空间较 SF 小，衰减步数减少
   epsilon_decay_steps:
-    min: 10000
-    max: 500000
+    min: 8000000
+    max: 12000000
     distribution: uniform

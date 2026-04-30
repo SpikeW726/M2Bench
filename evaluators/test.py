@@ -165,6 +165,81 @@ def _open_action_logits_csv(path: str, action_dim: int) -> tuple[csv.DictWriter,
     return w, f
 
 
+def _record_qtable_action_scores(
+    *,
+    writer,
+    do_print: bool,
+    print_count: int,
+    print_limit: int,
+    action_dim: int,
+    episode: int,
+    step: int,
+    sim_time: float,
+    agent_id: str,
+    q_values: np.ndarray,
+    action_mask,
+    chosen_action: int,
+    active: int,
+    active_only: bool,
+) -> int:
+    """记录 Q-table 决策时的合法动作 Q 值与区分度统计。"""
+    if writer is None and not do_print:
+        return print_count
+    if active_only and active != 1:
+        return print_count
+
+    q = np.asarray(q_values, dtype=np.float32).reshape(-1)
+    if action_mask is None:
+        mask = np.ones_like(q, dtype=bool)
+    else:
+        mask = np.asarray(action_mask, dtype=bool).reshape(-1)
+        if mask.size != q.size:
+            return print_count
+
+    scores_t = torch.as_tensor(q, dtype=torch.float32)
+    mask_t = torch.as_tensor(mask, dtype=torch.bool)
+    st = _valid_action_stats(scores_t, mask_t)
+
+    row = {
+        "episode": episode,
+        "step": step,
+        "sim_time": f"{sim_time:.6f}",
+        "agent_id": agent_id,
+        "policy_head": "q_values",
+        "chosen_action": chosen_action,
+        "active_mask": active,
+        "n_valid": st["n_valid"],
+        "max_logit": f"{st['max_logit']:.6f}",
+        "min_logit": f"{st['min_logit']:.6f}",
+        "logit_gap_top2": f"{st['logit_gap_top2']:.6f}",
+        "entropy": f"{st['entropy']:.6f}",
+        "max_prob": f"{st['max_prob']:.6f}",
+    }
+    for i in range(action_dim):
+        key = f"logit_a{i}"
+        if i < q.size and i < mask.size and bool(mask[i]):
+            row[key] = f"{float(q[i]):.6f}"
+        else:
+            row[key] = ""
+
+    if writer is not None:
+        writer.writerow(row)
+
+    if do_print and print_count < print_limit:
+        parts = [
+            f"{float(q[i]):.3f}" if i < mask.size and bool(mask[i]) else "—"
+            for i in range(min(q.size, action_dim))
+        ]
+        print(
+            f"[action_scores] ep={episode} step={step} t={sim_time:.2f} "
+            f"{agent_id} q_values a={chosen_action} "
+            f"H={st['entropy']:.3f} max_p={st['max_prob']:.3f} "
+            f"gap2={st['logit_gap_top2']:.3f} scores=[{', '.join(parts)}]"
+        )
+        return print_count + 1
+    return print_count
+
+
 def _eval_plot_metric_configs(env_type: str, sample_hist: dict):
     base = [
         ("igi", "Instantaneous Graph Idleness (IGI)", "IGI"),
@@ -563,6 +638,11 @@ def test_qtable_policy(
     event_driven: bool = True,
     max_frames: int = None,
     save_animation_dir: str = None,
+    env_custom_config_overrides: dict = None,
+    log_action_logits: bool = False,
+    log_action_logits_max_lines: int = 500,
+    action_logits_csv: str = None,
+    action_logits_active_only: bool = True,
 ):
     """评估训练好的 Q-table 策略。
 
@@ -586,12 +666,17 @@ def test_qtable_policy(
         save_plot = resolve_results_path(save_plot)
     if save_animation_dir is not None:
         save_animation_dir = resolve_results_path(save_animation_dir)
+    if action_logits_csv is not None:
+        action_logits_csv = resolve_results_path(action_logits_csv)
 
     from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
     from configs.algo_configs import QTableParams
 
     # ---- 1. 创建环境 ----
     env_type, env_cfg = load_eval_config(env_config_path)
+    if env_custom_config_overrides:
+        env_cfg.custom_configs = {**(env_cfg.custom_configs or {}), **env_custom_config_overrides}
+        print(f"[Eval] Merged train-time custom_configs: {env_custom_config_overrides}")
     print(f"\n=== Creating {env_type} environment ===")
     env = _create_env(env_type, env_cfg)
 
@@ -641,6 +726,20 @@ def test_qtable_policy(
     # ---- 4. 评估循环 ----
     print(f"\n=== Running {num_episodes} episodes (greedy, epsilon=0) ===")
 
+    do_logits_file = bool(action_logits_csv)
+    do_logits_print = bool(log_action_logits)
+    logits_csv_w = None
+    logits_csv_f = None
+    logits_print_count = 0
+    if do_logits_file:
+        logits_csv_w, logits_csv_f = _open_action_logits_csv(action_logits_csv, action_dim)
+        print(f"[Eval] Writing per-decision Q values to {action_logits_csv}")
+    if do_logits_print or do_logits_file:
+        print(
+            "[Eval] qtable action_scores: 记录 Q 值；"
+            f"active_only={action_logits_active_only}。"
+        )
+
     episode_metrics = []
     metrics_history = []
     episode_times = []
@@ -652,6 +751,7 @@ def test_qtable_policy(
         obs, infos = env.reset()
         truncated = False
         terminated = False
+        step_count = 0
 
         is_last = (ep == num_episodes - 1)
         record = record_animation and is_last
@@ -666,8 +766,9 @@ def test_qtable_policy(
                     info_i = infos[agent_str]
                     action_mask = info_i.get("action_mask", None)
                     pol = algo.policies[agent_str]
+                    active = int(info_i.get("active_mask", 1))
 
-                    if info_i.get("active_mask", 1):
+                    if active:
                         if action_mask is not None:
                             actions[agent_str] = pol.select_action(obs[agent_str], action_mask)
                         else:
@@ -679,6 +780,23 @@ def test_qtable_policy(
                             actions[agent_str] = int(valid[-1]) if len(valid) > 0 else 0
                         else:
                             actions[agent_str] = 0
+
+                    logits_print_count = _record_qtable_action_scores(
+                        writer=logits_csv_w,
+                        do_print=do_logits_print,
+                        print_count=logits_print_count,
+                        print_limit=log_action_logits_max_lines,
+                        action_dim=action_dim,
+                        episode=ep,
+                        step=step_count,
+                        sim_time=float(getattr(env.world, "current_time", step_count)),
+                        agent_id=agent_str,
+                        q_values=pol.get_q(obs[agent_str]).copy(),
+                        action_mask=action_mask,
+                        chosen_action=int(actions[agent_str]),
+                        active=active,
+                        active_only=action_logits_active_only,
+                    )
 
                 obs, _, terms, truncs, infos = env.step(actions)
                 first = env.agents[0]
@@ -694,11 +812,28 @@ def test_qtable_policy(
                     action = pol.select_action(obs, action_mask)
                 else:
                     action = int(np.argmax(pol.get_q(obs)))
+                logits_print_count = _record_qtable_action_scores(
+                    writer=logits_csv_w,
+                    do_print=do_logits_print,
+                    print_count=logits_print_count,
+                    print_limit=log_action_logits_max_lines,
+                    action_dim=action_dim,
+                    episode=ep,
+                    step=step_count,
+                    sim_time=float(getattr(getattr(env, "world", None), "current_time", step_count)),
+                    agent_id="agent_0",
+                    q_values=pol.get_q(obs).copy(),
+                    action_mask=action_mask,
+                    chosen_action=int(action),
+                    active=1,
+                    active_only=action_logits_active_only,
+                )
                 obs, _, terminated, truncated, infos = env.step(action)
 
             if record:
                 anim_time_intervals.append(getattr(env, 'last_time_interval', 1.0))
                 anim_positions_history.append(env.world.snapshot_agent_positions())
+            step_count += 1
 
         final_metrics = env.world.current_metrics
         episode_metrics.append(final_metrics)
@@ -718,6 +853,19 @@ def test_qtable_policy(
         if env_type in _MASUP_LIKE_ENV_TYPES:
             ep_line += f", WI@T={getattr(env, 'worst_idleness_fromT', 0.0):.4f}"
         print(ep_line)
+
+    if logits_csv_f is not None:
+        logits_csv_f.close()
+        print(f"[Eval] action_scores CSV saved: {action_logits_csv}")
+    if (
+        do_logits_print
+        and log_action_logits_max_lines > 0
+        and logits_print_count >= log_action_logits_max_lines
+    ):
+        print(
+            f"[Eval] action_scores 打印已截断（仅前 {log_action_logits_max_lines} 行）；"
+            "完整记录请使用 action_logits_csv。"
+        )
 
     # ---- 5. 汇总统计 ----
     print(f"\n=== Summary Statistics ({num_episodes} episodes) ===")
@@ -857,15 +1005,18 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
 
     print(f"\n[Eval] model_dir={model_dir}, config={eval_config_path}")
     if algo_name == "qtable":
-        # 过滤掉 DRL 专属字段，test_qtable_policy 不支持这些参数
+        # 过滤掉 DRL 专属字段，仅保留 Q-table 评估支持的参数。
         _QTABLE_SUPPORTED = {
             "num_episodes", "save_plot", "show_plot", "record_animation",
             "event_driven", "max_frames", "save_animation_dir",
+            "log_action_logits", "log_action_logits_max_lines",
+            "action_logits_csv", "action_logits_active_only",
         }
         qtable_params = {k: v for k, v in eval_params.items() if k in _QTABLE_SUPPORTED}
         episode_metrics = test_qtable_policy(
             model_dir=model_dir,
             env_config_path=eval_config_path,
+            env_custom_config_overrides=train_custom_configs,
             **qtable_params,
         )
     else:

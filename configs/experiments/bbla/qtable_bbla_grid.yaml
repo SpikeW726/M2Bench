@@ -20,24 +20,23 @@ env:
   graph_path: graphs/grid.json
   enable_wait: false
   norm_reward: true
-  num_agents: 3
-  init_positions: [1, 25, 50]
-  episode_len: 2000
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
+  episode_len: 500
   custom_configs:
     truncate_by_time: true
 
 algo:
-  lr: 0.1
-  gamma: 0.97
+  lr: 0.001
+  gamma: 0.99
   epsilon_start: 0.2
   epsilon_end: 0.05
   sync_update: true
-  # grid max_degree=7（远小于 SF=11），状态空间较小，较短衰减即可充分探索
-  epsilon_decay_steps: 50000
+  epsilon_decay_steps: 10000000
 
 training:
-  num_envs: 8
+  num_envs: 64
   use_subproc: true
-  total_steps: 30000000
-  save_interval: 1000
-  eval_interval: 50
+  total_steps: 50000000
+  save_interval: 300
+  eval_interval: 10

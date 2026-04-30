@@ -46,7 +46,7 @@ algo:
   reward_global: true
 
 training:
-  num_envs: 32
+  num_envs: 64
   use_subproc: true
   num_steps: 2048
   total_steps: 20000000

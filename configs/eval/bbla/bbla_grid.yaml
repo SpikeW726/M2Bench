@@ -9,16 +9,20 @@ env:
   graph_path: graphs/grid.json
   enable_wait: false
   norm_reward: true
-  num_agents: 3
-  init_positions: [1, 25, 50]
-  episode_len: 2000
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
+  episode_len: 500
   custom_configs:
     truncate_by_time: true
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/grid/qtable_bbla/best_eval.png
+  save_plot: evaluators/results/grid/qtable-bbla/best_eval.png
   show_plot: false
-  animation: false
-  event_driven: false
-  max_frames: 500
+  animation: true
+  event_driven: true
+  max_frames: 300
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/grid/qtable-bbla/action_logits.csv
+  action_logits_active_only: true

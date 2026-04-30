@@ -19,7 +19,7 @@ env:
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/grid/vdppo_masup/eval.png
+  save_plot: evaluators/results/grid/iql_masup/eval.png
   show_plot: false
   animation: true
   event_driven: true

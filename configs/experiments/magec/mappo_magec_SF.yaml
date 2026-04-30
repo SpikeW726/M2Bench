@@ -48,15 +48,16 @@ algo:
   vf_coef: 0.5
   ent_coef: 0.01
   shared_policy: true
+  use_value_norm: true
 
 # ---- 训练 ----
 # step_per_iteration = 8 × 1024 = 8192
 # max_iterations = ceil(10M / 8192) = 1221
 training:
-  num_envs: 8
+  num_envs: 64
   use_subproc: true
   num_steps: 1024
-  total_steps: 10000000
+  total_steps: 40000000
   save_interval: 400
   minibatch_size: 2048
   update_epochs: 5

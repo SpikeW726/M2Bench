@@ -614,6 +614,13 @@ def _train_qtable(
             pass
         return {}
 
+    qtable_eval_meta = {
+        "env_type": config.env_type,
+        "agent_ids": list(vec_env.agents) if vec_env.is_parallel_env else ["agent_0"],
+        # 训练时的 custom_configs（含 sweep 覆盖），供自动评估复用。
+        "train_env_custom_configs": dict(config.env.custom_configs or {}),
+    }
+
     inline_eval_fn = None
     if eval_config_path and tc.eval_interval > 0:
         from evaluators.test import eval_qtable_inline
@@ -649,7 +656,7 @@ def _train_qtable(
         trainer = QTableTrainer(
             algo=algo, vec_env=vec_env, config=tc,
             save_dir=config.save_dir, logger=logger, log_extra_fn=log_extra_fn,
-            eval_fn=inline_eval_fn,
+            eval_fn=inline_eval_fn, extra_info=qtable_eval_meta,
         )
     else:
         # Gymnasium Env：单一集中式 Q-table，虚拟 key "agent_0"
@@ -661,7 +668,7 @@ def _train_qtable(
         trainer = JointQTableTrainer(
             algo=algo, vec_env=vec_env, config=tc,
             save_dir=config.save_dir, logger=logger, log_extra_fn=log_extra_fn,
-            eval_fn=inline_eval_fn,
+            eval_fn=inline_eval_fn, extra_info=qtable_eval_meta,
         )
 
     if early_stopper is not None:

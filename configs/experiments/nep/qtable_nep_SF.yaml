@@ -25,19 +25,21 @@ env:
   norm_reward: true
   num_agents: 3
   init_positions: [0, 5, 11]
-  episode_len: 10000
+  episode_len: 3000
+  custom_configs:
+    truncate_by_time: true
 
 algo:
-  lr: 0.5
-  gamma: 0.99
+  lr: 0.005
+  gamma: 0.999
   epsilon_start: 0.2
   epsilon_end: 0.05
   # SF 状态空间远大于 longedge，延长探索期以充分覆盖
-  epsilon_decay_steps: 200000000
+  epsilon_decay_steps: 10000000
 
 training:
-  num_envs: 4
-  use_subproc: false
-  total_steps: 50000000
+  num_envs: 64
+  use_subproc: true
+  total_steps: 40000000
   save_interval: 1000
-  eval_interval: 50
+  eval_interval: 5

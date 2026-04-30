@@ -21,6 +21,7 @@ def _save_qtable_final(
     episode: int,
     total_steps: int,
     verbose: bool,
+    extra_info: Optional[Dict[str, Any]] = None,
 ) -> None:
     """写入 save_dir/final/，与 RL checkpoint 约定一致（sweep summary、自动评估）。"""
     final_dir = Path(save_dir) / "final"
@@ -32,6 +33,8 @@ def _save_qtable_final(
         "epsilon": algo.get_epsilon(),
         "qtable_sizes": {aid: len(pol.q_table) for aid, pol in algo.policies.items()},
     }
+    if extra_info:
+        meta["extra"] = extra_info
     with open(final_dir / "config.yaml", "w") as f:
         yaml.dump(meta, f, default_flow_style=False)
     if verbose:
@@ -110,6 +113,7 @@ class QTableTrainer:
         logger=None,
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
         eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        extra_info: Optional[Dict[str, Any]] = None,
     ):
         self.algo = algo
         self.vec_env = vec_env
@@ -123,6 +127,7 @@ class QTableTrainer:
         self.logger = logger
         self.log_extra_fn = log_extra_fn
         self.eval_fn = eval_fn
+        self.extra_info = extra_info or {}
         self.verbose = config.verbose
 
         self._sync_mode = getattr(algo.params, 'sync_update', False)
@@ -173,7 +178,8 @@ class QTableTrainer:
 
         self._save_checkpoint(ep)
         _save_qtable_final(
-            self.algo, self.save_dir, ep, self.total_steps, self.verbose
+            self.algo, self.save_dir, ep, self.total_steps, self.verbose,
+            extra_info=self.extra_info,
         )
 
         total_time = time.time() - start_time
@@ -420,6 +426,8 @@ class QTableTrainer:
                 aid: len(pol.q_table) for aid, pol in self.algo.policies.items()
             },
         }
+        if self.extra_info:
+            meta["extra"] = self.extra_info
         with open(ckpt_dir / "config.yaml", "w") as f:
             yaml.dump(meta, f, default_flow_style=False)
 
@@ -458,6 +466,7 @@ class JointQTableTrainer:
         logger=None,
         log_extra_fn=None,
         eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        extra_info: Optional[Dict[str, Any]] = None,
     ):
         self.algo = algo
         self.vec_env = vec_env
@@ -470,6 +479,7 @@ class JointQTableTrainer:
         self.logger = logger
         self.log_extra_fn = log_extra_fn
         self.eval_fn = eval_fn
+        self.extra_info = extra_info or {}
         self.verbose = config.verbose
 
         self.iteration = 0
@@ -517,7 +527,8 @@ class JointQTableTrainer:
 
         self._save_checkpoint(ep)
         _save_qtable_final(
-            self.algo, self.save_dir, ep, self.total_steps, self.verbose
+            self.algo, self.save_dir, ep, self.total_steps, self.verbose,
+            extra_info=self.extra_info,
         )
 
         total_time = time.time() - start_time
@@ -644,6 +655,8 @@ class JointQTableTrainer:
             "epsilon": self.algo.get_epsilon(),
             "qtable_size": len(self.algo.policies[self.POLICY_KEY].q_table),
         }
+        if self.extra_info:
+            meta["extra"] = self.extra_info
         with open(ckpt_dir / "config.yaml", "w") as f:
             yaml.dump(meta, f, default_flow_style=False)
 

@@ -26,12 +26,12 @@ parameters:
     value: 42
   # ---- MAPPOParams: 优化器 ----
   actor_lr:
-    min: 5.0e-5
+    min: 5.0e-6
     max: 1.0e-3
     distribution: log_uniform_values
 
   critic_lr:
-    min: 1.0e-4
+    min: 1.0e-5
     max: 3.0e-3
     distribution: log_uniform_values
 
@@ -41,33 +41,41 @@ parameters:
     max: 0.4
 
   vf_coef:
-    min: 0.1
+    min: 0.5
     max: 2.0
 
   ent_coef:
-    min: 0.001
-    max: 0.1
-    distribution: log_uniform_values
+    min: 0.0
+    max: 0.01
 
   gae_lambda:
     min: 0.9
     max: 1.0
 
   gamma:
-    values: [0.99, 0.995, 0.999]
+    value: 0.999
 
   # ---- OnPolicyTrainerConfig ----
   # 最小值 512: SF EventDrivenEnv 上 256 步/env 约只覆盖 0.77 个 episode，易出现 N/A
   num_steps:
-    values: [512, 1024, 2048]
+    values: [3072, 4096]
 
   minibatch_size:
     values: [1024, 2048, 4096]
 
   update_epochs:
-    values: [3, 5, 10]
+    values: [3, 5]
 
   # total_steps 由各 experiment base 的 training.total_steps 决定，避免覆盖不同图预算
 
   save_interval:
-    value: 400
+    value: 200
+
+  # ---- 自定义早停 ----
+early_terminate:
+  min_trial: 4              # 前 N 个 trial 仅建立 milestone 基准
+  min_steps: 10000000       # 达到该 env steps 后做 cross-trial 比较
+  terminate_ratio: 0.5      # 指标不在前 40% 则早停（可根据地图特性调整）
+  early_stop_iters: 200     # trial 内至少运行 N iters 后启用 slope 检查
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
