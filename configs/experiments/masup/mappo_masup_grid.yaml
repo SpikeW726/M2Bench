@@ -11,7 +11,7 @@ env_type: masup
 actor_type: masup_mlp
 critic_type: masup_mlp
 
-exp_name: mappo-grid-preproci
+exp_name: mappo-grid-preproci-imi
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
@@ -45,7 +45,7 @@ algo:
   use_value_norm: true
 
 training:
-  num_envs: 48
+  num_envs: 96
   use_subproc: true
   num_steps: 1024
   total_steps: 50000000

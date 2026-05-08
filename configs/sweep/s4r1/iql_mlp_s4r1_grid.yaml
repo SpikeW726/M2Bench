@@ -15,7 +15,7 @@ metric:
 
 early_terminate:
   min_trial: 6
-  min_steps: 10000000
+  min_steps: 15000000
   terminate_ratio: 0.4
   early_stop_iters: 200
   slope_horizons: [16, 64, 128]
@@ -26,18 +26,17 @@ parameters:
     value: 42
   # ---- algo params (映射到 IQLParams) ----
   lr:
-    min: 0.00005
-    max: 0.003
+    min: 0.00001
+    max: 0.0005
     distribution: log_uniform_values
 
   # grid 短 horizon，gamma 适中
   gamma:
-    values: [0.95, 0.97, 0.98, 0.99]
+    values: [0.995, 0.999]
 
   tau:
     min: 0.001
     max: 0.01
-    distribution: log_uniform_values
 
   target_update_freq:
     values: [1, 5, 10]
@@ -46,41 +45,35 @@ parameters:
     value: 1.0
 
   epsilon_end:
-    min: 0.005
-    max: 0.1
-    distribution: uniform
+    value: 0.05
 
-  # grid: 8 agents × episode_len=500 = 4000 决策/episode × num_envs
-  # 合理衰减步数
   epsilon_decay_steps:
-    min: 3000
-    max: 50000
-    distribution: uniform
+    values: [5000000, 8000000, 12000000]
 
   max_grad_norm:
-    values: [0.5, 1.0, 10.0]
+    values: [5.0, 10.0]
 
   use_double_dqn:
     value: true
 
   # ---- training params ----
   batch_size:
-    values: [128, 256, 512]
+    values: [64, 128, 256]
 
   buffer_size:
-    values: [20000, 50000, 100000]
+    values: [50000, 100000]
 
   warmup_steps:
     values: [5000, 10000]
 
   update_per_step:
-    value: 1
+    values: [5, 10]
 
   collect_per_step:
-    value: 16
+    value: 96
 
   num_steps:
-    values: [32, 64, 128]
+    values: [128, 512]
 
   # total_steps 由 experiment base 决定
 

@@ -52,14 +52,14 @@ critic:
 actor_lr: 3.0e-4
 critic_lr: 3.0e-4
 batch_size: 1024
-iteration: 100
+iteration: 25
 actor_patience: 5
 actor_min_delta: 1.0e-5
 use_value_norm: true
 
 # ----- 数据 & 日志 -----
-data_path: dataset/SF/samples.h5
-save_dir: models/masup-mlp-mappo-imitation-SF
-exp_name: imi_masup_mlp_mappo_SF
+data_path: ~/autodl-tmp/dataset/SF/mappo_masup.h5
+save_dir: ~/autodl-tmp/models/imi-mappo-pre-masup-SF
+exp_name: imi_pre_masup_mlp_mappo_SF
 track: false
 wandb_project: MAP-imitation

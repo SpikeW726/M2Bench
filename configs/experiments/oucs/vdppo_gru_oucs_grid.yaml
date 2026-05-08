@@ -19,8 +19,8 @@ env:
   graph_path: graphs/grid.json
   enable_wait: false
   norm_reward: true
-  num_agents: 8
-  init_positions: [6, 12, 18, 24, 30, 36, 42, 48]
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
   episode_len: 500
   norm_obs: true
   custom_configs:
@@ -30,41 +30,41 @@ env:
 # ---- 算法 ----
 algo:
   use_active_mask: true
-  actor_lr: 0.0005
-  q_lr: 0.0005
+  actor_lr: 0.0007060824869158372
+  q_lr: 0.0022915285417258917
   gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  vf_coef: 0.5
-  ent_coef: 0.01
+  gae_lambda: 0.948439624611504
+  clip_range: 0.20349696839742087
+  vf_coef: 0.9647832089675668
+  ent_coef: 0.003423819781228686
   target_kl: 0.3
-  tau: 0.1
-  target_update_freq: 1
+  tau: 0.46177941976361936
+  target_update_freq: 5
   q_clip_range: null
-  mixer_embed_dim: 64
+  mixer_embed_dim: 128
   data_chunk_length: 10
   reward_global: false
 
 # ---- 训练 ----
 training:
-  num_envs: 12
+  num_envs: 96
   use_subproc: true
-  num_steps: 2048
+  num_steps: 512
   total_steps: 50000000
-  save_interval: 800
-  minibatch_size: 4096
-  update_epochs: 5
+  save_interval: 300
+  minibatch_size: 2048
+  update_epochs: 10
   eval_interval: 10
 
 # ---- 网络 ----
 actor:
   rnn_type: gru
-  hidden_size: 64
+  hidden_size: 256
   num_layers: 1
   fc_hidden: [256, 256]   # GRU 前编码层
 
 q_network:
   rnn_type: gru
-  hidden_size: 64
+  hidden_size: 256
   num_layers: 1
   dueling: false

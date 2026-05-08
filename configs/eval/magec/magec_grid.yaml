@@ -19,6 +19,6 @@ eval:
   num_episodes: 10
   save_plot: evaluators/results/grid/mappo_magec/best_eval.png
   show_plot: false
-  animation: false
+  animation: true
   event_driven: true
   max_frames: 1000

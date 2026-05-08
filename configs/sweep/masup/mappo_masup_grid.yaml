@@ -54,6 +54,11 @@ parameters:
   custom_configs.contribution_scale:
     values: [0.0, 0.05, 0.1]
 
+  actor_path:
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid/imi_pre_masup_mlp_mappo_grid__1777742933_final/policy.pt
+  critic_path:
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid/imi_pre_masup_mlp_mappo_grid__1777742933_final/critic.pt
+
 # ---- 自定义早停 ----
 early_terminate:
   min_trial: 6             # 前 N 个 trial 仅建立 milestone 基准

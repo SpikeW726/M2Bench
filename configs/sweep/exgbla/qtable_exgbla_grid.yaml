@@ -1,45 +1,36 @@
-# QTable + ExGBLAEnv (grid) 超参数搜索
-# 用法:
-#   python sweep.py --base-config configs/experiments/exgbla/qtable_exgbla_grid.yaml \
-#                   --sweep-config configs/sweep/exgbla/qtable_exgbla_grid.yaml \
-#                   --eval-config configs/eval/exgbla/exgbla_grid.yaml --count 20
-#
-# grid 图: 50 节点，max_degree=7，obs_dim=16（GBLA + 邻居精确位置）
-# 状态空间介于 GBLA 与 SF ExGBLA 之间
-
 method: bayes
-
 metric:
   name: eval/wi
   goal: minimize
-
-early_terminate:
-  min_trial: 4
-  min_steps: 5000000
-  terminate_ratio: 0.5
-  early_stop_iters: 8
-  slope_horizons: [4, 8]
-  slope_threshold: 5.0e-5
 
 parameters:
   seed:
     value: 42
   lr:
-    min: 0.01
-    max: 0.9
+    min: 0.00001
+    max: 0.01
     distribution: log_uniform_values
   gamma:
-    values: [0.9, 0.95, 0.97, 0.99]
+    value: 0.999
   epsilon_start:
-    values: [0.05, 0.1, 0.2, 0.5]
+    values:
+    - 0.2
+    - 0.5
+    - 1.0
   epsilon_end:
-    min: 0.01
-    max: 0.1
-    distribution: uniform
+    value: 0.05
   save_interval:
-    value: 1000
-  # grid obs_dim=16（扩展邻居位置），状态空间较大，decay 进一步延长
+    value: 200
   epsilon_decay_steps:
-    min: 10000
-    max: 1000000
+    min: 8000000
+    max: 12000000
     distribution: uniform
+
+  # ---- 自定义早停 ----
+early_terminate:
+  min_trial: 4              # 前 N 个 trial 仅建立 milestone 基准
+  min_steps: 15000000       # 达到该 env steps 后做 cross-trial 比较
+  terminate_ratio: 0.5      # 指标不在前 40% 则早停（可根据地图特性调整）
+  early_stop_iters: 200     # trial 内至少运行 N iters 后启用 slope 检查
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5

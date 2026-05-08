@@ -42,7 +42,7 @@ algo:
   use_active_mask: true
   actor_lr: 3.0e-4
   critic_lr: 3.0e-4
-  gamma: 0.98
+  gamma: 0.999
   gae_lambda: 0.95
   clip_range: 0.2
   vf_coef: 0.5
@@ -53,11 +53,11 @@ algo:
 # step_per_iteration = 8 × 512 = 4096
 # max_iterations = ceil(20M / 4096) = 4883
 training:
-  num_envs: 8
+  num_envs: 64
   use_subproc: true
-  num_steps: 512
-  total_steps: 20000000
-  save_interval: 500
+  num_steps: 1024
+  total_steps: 50000000
+  save_interval: 200
   minibatch_size: 2048
   update_epochs: 5
   eval_interval: 10

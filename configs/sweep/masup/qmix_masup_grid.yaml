@@ -21,9 +21,8 @@ parameters:
     max: 5.0e-4
     distribution: log_uniform_values
 
-  # grid diameter=10, T=50 -- shorter horizon
   gamma:
-    values: [0.97, 0.98, 0.99]
+    values: [0.99, 0.999]
 
   tau:
     values: [1.0]
@@ -35,45 +34,37 @@ parameters:
     value: 1.0
 
   epsilon_end:
-    min: 0.01
-    max: 0.1
-    distribution: uniform
+    value: 0.05
 
-  # grid episodes shorter -- epsilon can decay faster
   epsilon_decay_steps:
-    min: 300
-    max: 3000
-    distribution: uniform
+    values: [10000000, 20000000]
 
   max_grad_norm:
-    values: [0.5, 1.0, 10.0]
+    values: [1.0, 5.0, 10.0]
 
   use_double_dqn:
     value: true
 
-  mixer_embed_dim:
-    values: [16, 32, 64]
-
   batch_size:
-    values: [128, 256, 512]
+    values: [256, 512]
 
   buffer_size:
-    values: [20000, 50000, 100000]
+    values: [50000, 100000, 500000]
 
   warmup_steps:
-    values: [1000, 2000, 5000]
+    values: [10000, 20000]
 
   update_per_step:
-    values: [1, 2]
+    value: 1
 
   collect_per_step:
-    value: 24
+    value: 64
 
   num_steps:
-    values: [32, 64, 128]
+    value: 2048
 
   total_steps:
-    value: 20000000
+    value: 50000000
 
   save_interval:
     value: 500

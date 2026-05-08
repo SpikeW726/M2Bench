@@ -42,10 +42,9 @@ algo:
   shared_policy: true
   reward_global: true
   shared_sync: true
-  mixer_embed_dim: 32
 
 training:
-  num_envs: 24
+  num_envs: 108
   use_subproc: true
   num_steps: 64
   total_steps: 20000000
@@ -55,10 +54,18 @@ training:
   buffer_size: 50000
   collect_per_step: 24
   update_per_step: 1
-  eval_interval: 25
+  eval_interval: 10
 
 q_network:
-  hidden: [256, 256]
-  dueling: false
+  # ===== MASUP 异构预处理参数 =====
   graph_path: graphs/grid.json
   num_agents: 6
+  num_nodes: 50
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 50.0
+  # ===== Q-network 主干参数 =====
+  hidden: [256, 256]
+  dueling: false

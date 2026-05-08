@@ -1,88 +1,85 @@
-# IQL + MLP + S4R1 超参数搜索
-# 用法（示例 base 与 experiments/s4r1/ 下 yaml 对应）:
-#   python sweep.py --base-config configs/experiments/s4r1/iql_s4r1_tsp12.yaml \
-#                   --sweep-config configs/sweep/s4r1/iql_mlp_s4r1.yaml --count 40
+# IQL + MASUP SF 超参数搜索（独立 Q + sync_replay）
 #
-# 并行:
-#   python sweep.py --base-config configs/experiments/s4r1/iql_s4r1_tsp12.yaml \
-#                   --sweep-config configs/sweep/s4r1/iql_mlp_s4r1.yaml --create-only
-#   python sweep.py --base-config configs/experiments/s4r1/iql_s4r1_tsp12.yaml \
-#                   --sweep-id <ID> --count 15   # 各 tmux 窗口
+# SF 图要点: 边权大、T=200 死区、长 episode；与 QMIX SF sweep 对齐 collect/num_steps/warmup 量级。
+# num_steps 固定 512（每 env / iter），避免小值导致单 iter 内完不成 episode → reward N/A。
 #
-# 其它图: 替换 --base-config；total_steps 以各 experiment 的 training.total_steps 为准
+# 用法:
+#   python sweep.py --base-config configs/experiments/masup/iql_masup_SF.yaml \
+#                   --sweep-config configs/sweep/masup/iql_masup_SF.yaml --count 40
 
 method: bayes
 
 metric:
-  name: eval/wi
+  name: eval/wi_fromT
   goal: minimize
 
+# ---- 自定义早停 ----
 early_terminate:
-  type: hyperband
-  min_iter: 1000
-  eta: 3
+  min_trial: 6
+  min_steps: 15000000
+  terminate_ratio: 0.4
+  early_stop_iters: 500  
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
 
 parameters:
   seed:
     value: 42
-  # ---- algo params (映射到 IQLParams / D3QNParams) ----
-
   lr:
-    min: 0.00005
-    max: 0.003
+    min: 5.0e-6
+    max: 1.0e-3
     distribution: log_uniform_values
 
   gamma:
-    values: [0.97, 0.98, 0.99, 0.995]
+    values: [0.99, 0.999]
 
   tau:
-    min: 0.001
-    max: 0.01
-    distribution: log_uniform_values
+    value: 1.0
 
   target_update_freq:
-    values: [1, 5, 10]
+    values: [500, 1000]
 
   epsilon_start:
     value: 1.0
 
   epsilon_end:
-    min: 0.005
-    max: 0.1
-    distribution: uniform
+    value: 0.05
 
   epsilon_decay_steps:
-    min: 3000
-    max: 70000
-    distribution: uniform
+    values: [10000000, 13000000]
 
   max_grad_norm:
-    values: [0.5, 1.0, 10.0]
+    values: [1.0, 10.0]
 
   use_double_dqn:
     value: true
 
-  # ---- training params (映射到 OffPolicyTrainerConfig) ----
+  sync_replay:
+    value: true
+
+  shared_policy:
+    value: false
+
   batch_size:
-    values: [128, 256, 512]
+    values: [256, 512, 1024]
 
   buffer_size:
-    values: [20000, 50000, 100000]
+    value: 400000
 
   warmup_steps:
-    values: [5000, 10000, 20000]
+    value: 10000
 
   update_per_step:
     value: 1
 
   collect_per_step:
-    value: 16
+    value: 64
 
   num_steps:
-    # values: [32, 64, 128]
-    values: [4096, 8192]
+    value: 512
 
-  # total_steps 由各 experiment base 的 training.total_steps 决定（避免 sweep 覆盖不同图的预算）
+  total_steps:
+    value: 40000000
 
   save_interval:
-    value: 1000
+    value: 200

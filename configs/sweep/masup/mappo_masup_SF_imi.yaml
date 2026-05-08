@@ -8,7 +8,7 @@ parameters:
   # ---- algo params (映射到 MAPPOParams) ----
   actor_lr:
     min: 1.0e-6
-    max: 1.0e-3
+    max: 3.0e-4
     distribution: log_uniform_values
   critic_lr:
     min: 1.0e-5
@@ -16,21 +16,21 @@ parameters:
     distribution: log_uniform_values
 
   clip_range:
-    min: 0.1
-    max: 0.4
+    min: 0.05
+    max: 0.3
   vf_coef:
-    min: 0.1
+    min: 0.5
     max: 2.0
   ent_coef:
     min: 0.0
-    max: 0.3
+    max: 0.05
   gae_lambda:
     min: 0.9
     max: 1.0
 
   # SF 地图 episode 极长（T=200, episode_len=3000），gamma 应偏高
   gamma:
-    values: [0.99, 0.995, 0.999]
+    value: 0.999
 
   # use_value_norm 在长 episode / 大图上收益明显，固定开启
   use_value_norm:
@@ -46,7 +46,7 @@ parameters:
     values: [3, 5]
 
   total_steps:
-    value: 20000000
+    value: 50000000
 
   # SF 每个完整 episode 很长，save_interval 设小以便捕获早期良好 checkpoint
   save_interval:
@@ -58,14 +58,14 @@ parameters:
     values: [0.0, 0.05, 0.1]
 
   actor_path:
-    value: ~/autodl-tmp/models/imi-mappo-masup-SF/imi_mappo_masup_mlp_SF__1775556450_final/policy.pt
+    value: ~/autodl-tmp/models/imi-mappo-pre-masup-SF/imi_pre_masup_mlp_mappo_SF__1776830456_final/policy.pt
   critic_path:
-    value: ~/autodl-tmp/models/imi-mappo-masup-SF/imi_mappo_masup_mlp_SF__1775556450_final/critic.pt
+    value: ~/autodl-tmp/models/imi-mappo-pre-masup-SF/imi_pre_masup_mlp_mappo_SF__1776830456_final/critic.pt
 
 # ---- 自定义早停 ----
 early_terminate:
   min_trial: 6             # 前 N 个 trial 仅建立 milestone 基准
-  min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
+  min_steps: 10000000       # 达到该 env steps 后做 cross-trial 比较
   terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
   early_stop_iters: 100  # trial 内至少运行 N iters 后启用 slope 检查
   slope_horizons: [8, 32, 64]

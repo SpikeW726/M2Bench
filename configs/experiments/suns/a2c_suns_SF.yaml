@@ -37,24 +37,26 @@ env:
 
 # ---- 算法 ----
 algo:
-  lr: 7.0e-4
-  gamma: 0.99
-  gae_lambda: 0.95
+  lr: 0.000168888839673364
+  gamma: 0.999
+  gae_lambda: 0.9081211421614606
   vf_coef: 0.5
-  ent_coef: 0.01
+  ent_coef: 0.009031146681261244
+  use_value_norm: true
+  max_grad_norm: 0.5
 
 # ---- 训练 ----
 # step_per_iteration = 12 × 1024 = 12288
 # max_iterations = ceil(10M / 12288) = 814
 training:
-  num_envs: 12
+  num_envs: 108
   use_subproc: true
-  num_steps: 1024
-  total_steps: 10000000
-  save_interval: 200
-  minibatch_size: 2048
+  num_steps: 4096
+  total_steps: 40000000
+  save_interval: 1000
+  minibatch_size: 1024
   update_epochs: 1
-  eval_interval: 10
+  eval_interval: 1
 
 # ---- 网络 (SUN: f1 2→4→1, f2 3→6→1) ----
 # SF: 12 节点，node_feat_dim=2

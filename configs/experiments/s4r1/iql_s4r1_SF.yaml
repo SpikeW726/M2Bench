@@ -37,14 +37,14 @@ algo:
   target_update_freq: 1
   epsilon_start: 0.95
   epsilon_end: 0.005
-  epsilon_decay_steps: 34978
+  epsilon_decay_steps: 10000000
   use_double_dqn: true
   shared_policy: false
 
 # ---- 训练 ----
 # num_envs=4 为 sweep 约束；增大 num_steps / collect_per_step 提高每轮完结 episode 数，减轻 rollout/episode_reward 长期 N/A
 training:
-  num_envs: 4
+  num_envs: 108
   use_subproc: true
   num_steps: 4096
   total_steps: 10000000
@@ -52,11 +52,11 @@ training:
   batch_size: 128
   warmup_steps: 20000
   buffer_size: 150000
-  collect_per_step: 64
+  collect_per_step: 108
   update_per_step: 1
   eval_interval: 25
 
 # ---- Q-network ----
 q_network:
-  hidden: [128, 84]
+  hidden: [256, 256]
   dueling: true

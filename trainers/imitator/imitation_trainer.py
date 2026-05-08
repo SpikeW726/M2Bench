@@ -298,8 +298,9 @@ class imi_trainer:
         self.exp_name = kwargs.get("exp_name", "imi_train")
         self.run_name = f"{self.exp_name}__{int(time.time())}"
 
-        # 模型保存配置
-        self.save_dir = resolve_models_path(kwargs.get("save_dir", "models"))
+        # 模型保存配置（须先 expanduser：`~/...` 交 resolve_models_path 会破坏路径）
+        _sd = os.path.expanduser(str(kwargs.get("save_dir", "models")))
+        self.save_dir = resolve_models_path(_sd)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.save_model = kwargs.get("save_model", True)
 
@@ -323,6 +324,8 @@ class imi_trainer:
     # ------------------------------------------------------------------
     def train(self, data_path: str, batch_size: int = 32, iteration: int = 10):
         """根据文件格式自动选择训练方法"""
+        # h5py/np.load 不认字面量 `~`，须展开为绝对路径
+        data_path = os.path.abspath(os.path.expanduser(data_path))
         if data_path.endswith(".h5") or data_path.endswith(".hdf5"):
             self._train_from_hdf5(data_path, batch_size, iteration)
         else:

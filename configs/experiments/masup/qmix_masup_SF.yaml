@@ -23,7 +23,7 @@ env:
   custom_configs:
     T: 200.0
     role_imformation: decision
-    reward_scale: 0.01
+    reward_scale: 0.1
     truncate_by_time: true
     idi_scale: 0.05
     contribution_scale: 0.05

@@ -37,7 +37,7 @@ parameters:
     value: 1.0
 
   target_update_freq:
-    values: [500, 1000]
+    values: [200, 500, 1000]
 
   epsilon_start:
     value: 1.0
@@ -84,3 +84,12 @@ parameters:
 
   peng_lambda:
     values: [0.3, 0.5]
+
+  custom_configs.reward_scale:
+    values: [0.01, 0.1]
+
+  custom_configs.idi_scale:
+    values: [0.0, 0.05]
+
+  custom_configs.contribution_scale:
+    values: [0.0, 0.05]
