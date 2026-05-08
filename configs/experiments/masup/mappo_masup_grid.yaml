@@ -2,7 +2,7 @@
 # 用法: python train.py configs/experiments/masup/mappo_masup_grid.yaml
 #
 # grid 图特性:
-#   49 节点 (7×7)，规则网格，边权均匀（均值≈3-4），6 agents
+#   50 节点（7×7 网格 + depot），规则网格，6 agents（与 graphs/grid.json / num_nodes 一致）
 #   episode_len=500, T=50 → episode 完成频繁，γ 不必过高
 #   EventDrivenEnv: 每步推进到下一 agent 到达事件
 
@@ -11,7 +11,7 @@ env_type: masup
 actor_type: masup_mlp
 critic_type: masup_mlp
 
-exp_name: mappo-masup-grid
+exp_name: mappo-grid-preproci
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
@@ -45,20 +45,35 @@ algo:
   use_value_norm: true
 
 training:
-  num_envs: 24
+  num_envs: 48
   use_subproc: true
   num_steps: 1024
-  total_steps: 20000000
-  save_interval: 500
+  total_steps: 50000000
+  save_interval: 200
   minibatch_size: 2048
   update_epochs: 5
   eval_interval: 10
 
+# ---- 网络（须与 env.custom_configs 中 T / role_imformation 一致）----
 actor:
-  hidden: [256, 256]
   graph_path: graphs/grid.json
   num_agents: 6
+  num_nodes: 50   # graphs/grid.json 节点数（1..50 含 depot）
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 50.0    # 与 env.custom_configs.T 一致
+  hidden: [256, 256]
+
 critic:
-  hidden: [256, 256]
   graph_path: graphs/grid.json
   num_agents: 6
+  num_nodes: 50
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 50.0
+  input_mode: state
+  hidden: [256, 256]

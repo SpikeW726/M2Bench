@@ -12,7 +12,7 @@ parameters:
     max: 1.0e-3
     distribution: log_uniform_values
   critic_lr:
-    min: 1.0e-6
+    min: 1.0e-5
     max: 5.0e-3
     distribution: log_uniform_values
 
@@ -24,31 +24,30 @@ parameters:
     max: 2.0
   ent_coef:
     min: 0.0
-    max: 0.3
+    max: 0.2
   gae_lambda:
-    min: 0.9
-    max: 1.0
+    values: [0.95, 0.99, 0.999]
 
   # grid diameter=10, T=50 -- shorter horizon, gamma need not be as high as SF
   gamma:
-    values: [0.97, 0.98, 0.99]
+    value: 0.999
 
   use_value_norm:
     value: true
 
   # grid episode_len=500, episodes complete frequently -- smaller rollout sufficient
   num_steps:
-    values: [512, 1024, 2048]
+    values: [1024, 2048]
   minibatch_size:
     values: [512, 1024, 2048, 4096]
   update_epochs:
     values: [3, 5, 10]
 
   total_steps:
-    value: 20000000
+    value: 50000000
 
   save_interval:
-    value: 500
+    value: 200
 
   custom_configs.idi_scale:
     values: [0.0, 0.05, 0.1]

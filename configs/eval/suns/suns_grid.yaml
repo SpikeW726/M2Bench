@@ -9,14 +9,14 @@ env:
   enable_wait: false
   norm_reward: true
   norm_obs: true
-  num_agents: 3
-  init_positions: [1, 25, 50]
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
   episode_len: 500
 
 eval:
   num_episodes: 10
   save_plot: evaluators/results/grid/a2c_suns/best_eval.png
   show_plot: false
-  animation: false
+  animation: true
   event_driven: true
-  max_frames: 1000
+  max_frames: 500

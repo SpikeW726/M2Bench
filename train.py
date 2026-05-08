@@ -85,6 +85,18 @@ def _maybe_seed_vec_env(vec_env, seed: Optional[int]) -> None:
     vec_env.seed(seed)
 
 
+def _find_vec_wrapper(vec_env, wrapper_type):
+    """沿 venv 链查找指定 wrapper。"""
+    cur = vec_env
+    seen = set()
+    while cur is not None and id(cur) not in seen:
+        if isinstance(cur, wrapper_type):
+            return cur
+        seen.add(id(cur))
+        cur = getattr(cur, "venv", None)
+    return None
+
+
 # WandB：同一进程内多次 train 时按 run.id 重新注册 step 轴
 _WANDB_ENV_STEP_AXIS_RUN_ID: Optional[str] = None
 
@@ -776,10 +788,10 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     print(f"[Train] Created {tc.num_envs} vectorized {config.env_type} envs "
           f"({'subproc' if tc.use_subproc else 'dummy'})")
 
-    # 若启用了 obs 归一化，保留对包装层的引用，供 checkpoint 持久化和 eval 使用
+    # 若启用了 obs 归一化，保留内层 wrapper 引用，供 checkpoint 和 eval 使用
     from envs.venv_wrappers import VectorEnvNormObs
     _obs_norm_wrapper: Optional[VectorEnvNormObs] = (
-        vec_env if isinstance(vec_env, VectorEnvNormObs) else None
+        _find_vec_wrapper(vec_env, VectorEnvNormObs)
     )
 
     # ---- 3. 推断维度 ----

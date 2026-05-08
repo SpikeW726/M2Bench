@@ -47,10 +47,10 @@ algo:
 # step_per_iteration = 12 × 1024 = 12288
 # max_iterations = ceil(20M / 12288) = 1628
 training:
-  num_envs: 12
+  num_envs: 48
   use_subproc: true
   num_steps: 1024
-  total_steps: 20000000
+  total_steps: 50000000
   save_interval: 500
   minibatch_size: 2048
   update_epochs: 1
