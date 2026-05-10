@@ -1254,6 +1254,11 @@ class MATOnPolicyCollector(BaseCollector):
         """收集 n_steps 仿真步，只存决策步到 buffer。"""
         if n_steps is None:
             raise ValueError("MATOnPolicyCollector 暂只支持 n_steps 模式")
+        if self.num_envs != 1:
+            raise ValueError(
+                f"MATOnPolicyCollector 当前仅支持 num_envs=1，"
+                f"当前 num_envs={self.num_envs}。请在实验 YAML 中将 training.num_envs 设为 1。"
+            )
         if self._obs is None:
             self.reset()
 

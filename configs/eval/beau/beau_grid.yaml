@@ -1,0 +1,25 @@
+# BEAU / grid — 与 happo_beau_grid 实验对齐
+
+env_type: beau
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 0.5
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
+  episode_len: 500
+  custom_configs:
+    reward_scale: 0.01
+    truncate_by_time: true
+
+eval:
+  num_episodes: 6
+  save_plot: evaluators/results/beau/happo_grid_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 600
+
+algo_name: happo

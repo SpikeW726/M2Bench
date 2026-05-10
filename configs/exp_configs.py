@@ -50,6 +50,8 @@ class ExperimentConfig(ToStringMixin):
     seed: Optional[int] = None  # 训练可复现；None 表示不固定（与历史行为一致）
     actor_path: Optional[str] = None
     critic_path: Optional[str] = None
+    # 若设置， train.py 主入口在未传 --eval-config 时回退到该路径（与 sweep --eval-config 一致）
+    eval_config_path: Optional[str] = None
 
     def __post_init__(self):
         """初始化时锁定时间戳，保证 run_name 在整个生命周期内不变。"""

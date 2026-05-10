@@ -15,6 +15,15 @@ MATOnPolicyCollector 完全不读 per-agent obs，只调用上面四个图接口
 -------------
 agent 的先后顺序在 MATDecoder 内部自回归循环中体现，env 侧仍为标准
 PettingZoo ParallelEnv 联合动作 dict，无需任何修改。
+
+与官方 MARL_to_solve_patrol（栅格+可见性）相比的主要差异
+----------------------------------------------------
+- 地图：本仓库为 JSON 拓扑 + NetworkX 生成 2D 归一化坐标，非四邻栅格；节点特征为 [x,y,归一化 idleness]。
+- 奖励：原文 env.py 为 shared_reward = -avg_since_visit/100 + 1；BEAU 用连续时间 IGI（TickResult.pre_arrival_igi）
+  的负值再乘 reward_scale，**无 +1 偏置**（仅尺度与可训性不同，最优点均为压低 idleness）。
+- 时间：PatrolWorld 为事件驱动真实旅行时间；原文为同步栅格时间步。决策步疏密、change_reward 累积与 asy_ppo
+  中按决策步存 buffer 的设计一致，但数值轨迹不可逐格对齐。
+- 可见性/局部观测：原文含视野与 heatmap；BEAU 不实现，GAT 输入为全图结构上的节点特征（与公开仓库图任务常见设定一致）。
 """
 
 from __future__ import annotations

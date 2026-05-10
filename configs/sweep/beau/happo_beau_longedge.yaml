@@ -1,0 +1,64 @@
+# WandB sweep：happo + BEAU @ LongEdge
+# 先建 sweep:  python sweep.py --base-config configs/experiments/beau/happo_beau_longedge.yaml \
+#              --sweep-config configs/sweep/beau/happo_beau_longedge.yaml --create-only
+# 跑 trial:   python sweep.py --base-config configs/experiments/beau/happo_beau_longedge.yaml \
+#              --sweep-id <ID> --count 20
+# 建议加 --eval-config configs/eval/beau/beau_longedge.yaml 以记录 eval/igi 供早停
+
+method: bayes
+
+metric:
+  # 需训练 YAML 中 eval_interval>0 且传入 --eval-config 或 eval_config_path
+  name: eval/igi
+  goal: minimize
+
+parameters:
+  seed:
+    value: 42
+  lr:
+    min: 1.0e-6
+    max: 1.0e-3
+    distribution: log_uniform_values
+  gamma:
+    values: [0.97, 0.99, 0.999]
+  clip_coef:
+    min: 0.1
+    max: 0.3
+  ent_coef:
+    min: 0.0
+    max: 0.05
+  vf_coef:
+    min: 0.1
+    max: 1.0
+  policy_update_steps:
+    values: [3, 5, 8]
+  hidden_dim:
+    values: [32, 64, 128]
+  num_heads:
+    values: [2, 4, 8]
+  encoder_layers:
+    values: [1, 2, 3]
+  custom_configs.reward_scale:
+    values: [0.005, 0.01, 0.02]
+  num_steps:
+    values: [384, 512, 768]
+  num_envs:
+    # MATOnPolicyCollector 仅支持 num_envs=1
+    value: 1
+  total_steps:
+    value: 5000000
+  save_interval:
+    value: 500
+  eval_interval:
+    value: 8
+  eval_episodes:
+    value: 4
+
+early_terminate:
+  min_trial: 5
+  min_steps: 2500000
+  terminate_ratio: 0.45
+  early_stop_iters: 12
+  slope_horizons: [4, 8, 16]
+  slope_threshold: 1.0e-4
+  state_file: .sweep_es_happo_beau_longedge.json

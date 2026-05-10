@@ -1,0 +1,52 @@
+# HAPPO 语境（happo = MAT PPO，实现同 mappo_mat）+ BEAU，规则网格图
+# 训练: python train.py configs/experiments/beau/happo_beau_grid.yaml
+# 评估: python evaluators/test.py --model <save_dir>/final --env_config configs/eval/beau/beau_grid.yaml
+
+algo_name: happo
+env_type: beau
+
+exp_name: happo-beau-grid
+graph_name: grid
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 0.5
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
+  episode_len: 500
+  custom_configs:
+    reward_scale: 0.01
+    truncate_by_time: true
+
+algo:
+  gamma: 0.99
+  clip_coef: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 10.0
+  lr: 5.0e-5
+  policy_update_steps: 5
+  factor: 0.5
+  patience: 100
+  hidden_dim: 64
+  num_heads: 4
+  encoder_layers: 2
+
+training:
+  # MATOnPolicyCollector 当前仅支持 num_envs=1
+  num_envs: 1
+  use_subproc: false
+  num_steps: 800
+  total_steps: 20000000
+  save_interval: 1000
+  minibatch_size: 256
+  update_epochs: 5
+  eval_interval: 15
+  eval_episodes: 4
+
+eval_config_path: configs/eval/beau/beau_grid.yaml

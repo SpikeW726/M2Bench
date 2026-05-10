@@ -117,13 +117,21 @@ ALGO_REGISTRY: Dict[str, Dict[str, Any]] = {
         "params_class": QTableParams,
         "trainer_type": "tabular",
     },
-    # ---- MAT（Multi-Agent Transformer）PPO ----
+    # ---- MAT（Multi-Agent Transformer）PPO（asy_ppo.py 路径）----
     "mappo_mat": {
         "module": "algorithms.marl.mappo_mat",
         "class_name": "MAPPOMATAlgo",
         "params_class": MAPPOMATParams,
         "trainer_type": "on_policy",
         "policy_type": "mat",   # 特殊路径：MATMultiAgentPolicy
+    },
+    # 论文中 HAPPO/顺序信用分配语境；实现与 mappo_mat 相同（MAT+联合 PPO）
+    "happo": {
+        "module": "algorithms.marl.mappo_mat",
+        "class_name": "MAPPOMATAlgo",
+        "params_class": MAPPOMATParams,
+        "trainer_type": "on_policy",
+        "policy_type": "mat",
     },
 }
 

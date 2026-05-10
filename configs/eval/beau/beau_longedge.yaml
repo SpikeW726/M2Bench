@@ -1,0 +1,26 @@
+# BEAU / LongEdge — 与 configs/experiments/beau/happo_beau_longedge.yaml 对齐
+# 用法: python evaluators/test.py --model <run>/final --env_config configs/eval/beau/beau_longedge.yaml
+
+env_type: beau
+
+env:
+  graph_path: graphs/long_edge.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 0.5
+  num_agents: 3
+  init_positions: [0, 1, 2]
+  episode_len: 100
+  custom_configs:
+    reward_scale: 0.01
+    truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/beau/happo_long_edge_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 400
+
+algo_name: happo

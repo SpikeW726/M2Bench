@@ -1,0 +1,26 @@
+# BEAU / SF — 与 happo_beau_sf 实验对齐
+
+env_type: beau
+
+env:
+  graph_path: graphs/SFcrimemap.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 20.0
+  num_agents: 3
+  init_positions: [0, 5, 11]
+  episode_len: 3000
+  edge_time_jitter: false
+  custom_configs:
+    reward_scale: 0.01
+    truncate_by_time: true
+
+eval:
+  num_episodes: 8
+  save_plot: evaluators/results/beau/happo_sf_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 500
+
+algo_name: happo

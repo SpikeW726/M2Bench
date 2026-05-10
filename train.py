@@ -904,7 +904,12 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             f"and from_config_dict(cls, cfg) to support checkpoint saving/loading."
         )
 
-    actor_config_dict = _make_net_config_dict(actor_net, dims["obs_dim"], dims["action_dim"])
+    if get_policy_type(config.algo_name) == "mat":
+        actor_config_dict = policy.get_config_dict(dims["obs_dim"], dims["action_dim"])
+    else:
+        actor_config_dict = _make_net_config_dict(
+            actor_net, dims["obs_dim"], dims["action_dim"]
+        )
     critic_config_dict = _make_net_config_dict(critic_net, dims["critic_input_dim"], 1)
     q_config_dict = _make_net_config_dict(q_net, dims["obs_dim"], dims["action_dim"])
 
@@ -1118,4 +1123,5 @@ if __name__ == "__main__":
 
     cfg = load_config(args.config)
     print(f"[Train] Loaded config from {args.config}")
-    train(cfg, eval_config_path=args.eval_config)
+    eval_path = args.eval_config or getattr(cfg, "eval_config_path", None)
+    train(cfg, eval_config_path=eval_path)

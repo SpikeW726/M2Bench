@@ -51,6 +51,7 @@ from configs.registry import (
     _env_config_to_dicts,
 )
 from policies.marl.marl_base import MultiAgentPolicy
+from policies.marl.mat_policy import MATMultiAgentPolicy
 from utils.model_io import load_policy_for_eval, get_model_config
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
 from utils.autodl_paths import (
@@ -77,6 +78,35 @@ def _eval_metrics_history_for_plot(env, env_type: str) -> dict:
         h["wi_fromT"] = list(wfh)
         return h
     return hist
+
+
+def _beau_mat_rollout_step(
+    env,
+    mat_policy: MATMultiAgentPolicy,
+    infos: dict,
+    last_shift: torch.Tensor,
+) -> tuple[dict, dict, torch.Tensor]:
+    """单步：图状态 + 联合采样 + graph_idx_to_action，供 BEAU+MAT 评估/对齐训练 collector。"""
+    assert hasattr(env, "state_mat") and hasattr(env, "graph_idx_to_action")
+    n = mat_policy.n_agents
+    active = np.array(
+        [float(infos[aid].get("active_mask", 1.0)) for aid in env.possible_agents],
+        dtype=np.float32,
+    )
+    gs = env.state_mat()
+    ni = env.get_current_node_indices()
+    gs_b = gs[np.newaxis, ...]
+    ni_b = ni[np.newaxis, ...]
+    am_b = active[np.newaxis, ...]
+    with torch.no_grad():
+        act_np, _, _, shift_new = mat_policy.compute_joint_actions(
+            gs_b, ni_b, am_b, last_shift, deterministic=True,
+        )
+    g_list = [int(x) for x in act_np[0].tolist()]
+    raw_map = env.graph_idx_to_action(g_list)
+    actions = {k: int(v) for k, v in raw_map.items()}
+    obs, _, _, _, infos2 = env.step(actions)
+    return obs, infos2, shift_new
 
 
 def _summary_from_episode_metrics(episode_metrics, wi_fromT_finals: list | None = None) -> dict:
@@ -395,6 +425,12 @@ def test_trained_policy(
             f"entropy/gap 仅在合法动作上按 softmax 计算。"
         )
 
+    is_mat_policy = isinstance(multi_policy, MATMultiAgentPolicy)
+    if is_mat_policy and (do_logits_print or do_logits_file):
+        print("[Eval] BEAU+MAT 不支持 action_logits 记录，已跳过。")
+        do_logits_file = do_logits_print = False
+        logits_csv_w = logits_csv_f = None
+
     episode_metrics = []
     metrics_history = []
     episode_times = []
@@ -414,10 +450,28 @@ def test_trained_policy(
             anim_positions_history = [env.world.snapshot_agent_positions()]
             anim_time_intervals = []
 
+        if is_mat_policy:
+            _last_sh = torch.zeros(
+                1, multi_policy.n_agents, multi_policy.n_agents, 2,
+                dtype=torch.float32, device=multi_policy.device,
+            )
+        else:
+            _last_sh = None
+
         # 以仿真时间为截止条件；如果未配置则依靠环境的 truncated/terminated 信号
         while env.agents:
             if eff_episode_time is not None and env.world.current_time >= eff_episode_time:
                 break
+
+            if is_mat_policy:
+                obs, infos, _last_sh = _beau_mat_rollout_step(
+                    env, multi_policy, infos, _last_sh
+                )
+                step_count += 1
+                if record:
+                    anim_time_intervals.append(getattr(env, "last_time_interval", 1.0))
+                    anim_positions_history.append(env.world.snapshot_agent_positions())
+                continue
 
             action_masks = {
                 aid: torch.as_tensor(info['action_mask'], dtype=torch.bool, device=multi_policy.device)
@@ -1099,6 +1153,41 @@ def eval_qtable_inline(
 #                 内存内 inline eval（训练循环中定期调用，无需 checkpoint）
 # =============================================================================
 
+
+def _eval_policy_inline_beau_mat(
+    policy: MATMultiAgentPolicy,
+    env,
+    num_episodes: int,
+    device: torch.device,
+    episode_time: float | None,
+    env_type: str,
+) -> dict:
+    """BEAU + MAT：与 MATOnPolicyCollector 同构的逐步 rollout，返回 eval/* 指标。"""
+    is_masup_like = env_type in _MASUP_LIKE_ENV_TYPES
+    episode_metrics_list: list = []
+    wi_fromT_finals: list = []
+
+    for _ in range(num_episodes):
+        obs, infos = env.reset()
+        _last_sh = torch.zeros(
+            1, policy.n_agents, policy.n_agents, 2,
+            dtype=torch.float32, device=device,
+        )
+        while env.agents:
+            if episode_time is not None and env.world.current_time >= episode_time:
+                break
+            obs, infos, _last_sh = _beau_mat_rollout_step(
+                env, policy, infos, _last_sh
+            )
+        episode_metrics_list.append(env.world.current_metrics)
+        if is_masup_like:
+            wi_fromT_finals.append(
+                float(getattr(env, "worst_idleness_fromT", 0.0))
+            )
+
+    return _summary_from_episode_metrics(episode_metrics_list, wi_fromT_finals or None)
+
+
 def eval_policy_inline(
     policy,
     env_type: str,
@@ -1146,6 +1235,11 @@ def eval_policy_inline(
     is_multi_policy = isinstance(policy, MultiAgentPolicy)
 
     try:
+        if isinstance(policy, MATMultiAgentPolicy):
+            return _eval_policy_inline_beau_mat(
+                policy, env, num_episodes, device, episode_time, env_type
+            )
+
         for _ in range(num_episodes):
             obs, infos = env.reset()
             hidden_state = None

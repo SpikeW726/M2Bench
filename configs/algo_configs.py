@@ -216,6 +216,10 @@ class MAPPOMATParams(AlgoParams):
     policy_update_steps: int = 5    # 内层 PPO epoch 数
     factor: float = 0.5             # ReduceLROnPlateau factor
     patience: int = 100             # ReduceLROnPlateau patience
+    # GAT+MAT 结构（train._build_mat_policy 读取，必须在 dataclass 中显式声明以便 YAML 生效）
+    hidden_dim: int = 64
+    num_heads: int = 4
+    encoder_layers: int = 2
 
 
 # =============================================================================

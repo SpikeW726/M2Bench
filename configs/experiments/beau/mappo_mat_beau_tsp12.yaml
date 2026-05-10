@@ -3,6 +3,7 @@
 # 用法: python train.py configs/experiments/beau/mappo_mat_beau_tsp12.yaml
 
 # ---- 分发字段 ----
+# 与 algo_name: happo 等价（见 configs/registry.py ALGO_REGISTRY）
 algo_name: mappo_mat
 env_type: beau
 
@@ -51,3 +52,5 @@ training:
   minibatch_size: 64   # MAT: update 内部忽略此参数（使用 policy_update_steps）
   update_epochs: 5     # MAT: 忽略，使用 policy_update_steps
   eval_interval: 0
+
+# eval_config_path: configs/eval/beau/beau_tsp12.yaml  # 若需 inline/final eval 可建对应 eval 并打开

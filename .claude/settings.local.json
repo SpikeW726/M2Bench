@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "FileEditor",
+      "Replace",
+      "Bash(sed *)",
+      "Bash(printf *)",
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(cat *)",
+      "Bash(git status)",
+      "Bash(git diff)",
+      "Bash(git add *)",
+      "Bash(npm test)",
+      "Bash(npm run lint)",
+      "Skill(superpowers:using-superpowers)",
+      "Skill(superpowers:writing-plans)",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(python3:*)",
+      "Bash(poetry run python3:*)",
+      "Bash(python:*)",
+      "mcp__zread__get_repo_structure",
+      "Bash(find:*)",
+      "Bash(conda run:*)"
+    ],
+    "deny": [
+      "Bash(rm *)",
+      "Bash(mv *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(ssh *)",
+      "Bash(sudo *)",
+      "Read(./.env)",
+      "Read(./secrets/*)"
+    ]
+  }
+}

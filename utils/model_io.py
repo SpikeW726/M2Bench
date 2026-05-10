@@ -56,6 +56,7 @@ def _get_class_registry() -> Dict[str, type]:
         MASUPVDPPOQmlp, MASUPVDPPOQrnn,
     )
     from networks.mat import GATEncoder, MATDecoder
+    from policies.marl.mat_policy import MATMultiAgentPolicy
 
     return {
         "ActorMLP": ActorMLP,
@@ -80,6 +81,7 @@ def _get_class_registry() -> Dict[str, type]:
         # MAT 网络
         "GATEncoder": GATEncoder,
         "MATDecoder": MATDecoder,
+        "MATMultiAgentPolicy": MATMultiAgentPolicy,
     }
 
 
@@ -265,6 +267,7 @@ def load_policy_for_eval(
     """
     from policies.rl.rl_base import ActorPolicy, ValuePolicy
     from policies.marl.marl_base import MultiAgentPolicy
+    from policies.marl.mat_policy import MATMultiAgentPolicy
 
     model_dir = Path(model_dir)
     config = get_model_config(model_dir)
@@ -273,6 +276,27 @@ def load_policy_for_eval(
 
     policy_type = extra.get('policy_type', 'actor')
     shared = extra.get('shared_policy', True)
+
+    # ---- MAT：整网保存为 policy，actor 段为嵌套 encoder/decoder（无 MultiAgentPolicy 包装）----
+    if policy_type == "mat":
+        mat_cfg = config.get("actor")
+        if not mat_cfg or "encoder" not in mat_cfg or "decoder" not in mat_cfg:
+            raise ValueError(
+                f"MAT policy requires config.yaml['actor'] with encoder/decoder "
+                f"sub-configs: {model_dir / 'config.yaml'}"
+            )
+        policy = MATMultiAgentPolicy.from_config_dict(mat_cfg)
+        policy_path = model_dir / "policy.pt"
+        if not policy_path.exists():
+            raise FileNotFoundError(f"Policy weights not found: {policy_path}")
+        state_dict = torch.load(policy_path, map_location=device, weights_only=True)
+        policy.load_state_dict(state_dict)
+        policy.to(device)
+        dev = torch.device(device)
+        policy.device = dev
+        policy.set_training_mode(False)
+        print(f"[ModelIO] Loaded MAT (GAT+MATDecoder) from {model_dir}")
+        return policy
 
     if policy_type == 'value':
         q_cfg = config.get('q_network')

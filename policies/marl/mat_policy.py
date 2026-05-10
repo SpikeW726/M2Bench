@@ -181,6 +181,7 @@ class MATMultiAgentPolicy(nn.Module):
 
     def get_config_dict(self, *args) -> dict:
         return {
+            "type": "MATMultiAgentPolicy",
             "encoder": self.encoder.get_config_dict(
                 self.encoder.input_dim, self.encoder.output_dim
             ),

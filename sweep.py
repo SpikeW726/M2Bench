@@ -126,8 +126,8 @@ def sweep_train():
             if not key.startswith("_"):
                 print(f"  {key}: {value}")
 
-        train(config, eval_config_path=_EVAL_CONFIG_PATH or None,
-              early_stopper=early_stopper)
+        _ecp = _EVAL_CONFIG_PATH or getattr(config, "eval_config_path", None) or None
+        train(config, eval_config_path=_ecp, early_stopper=early_stopper)
 
         # 训练完成后记录 save_dir，供 eval_best_runs 事后查询
         final_dir = str(config.save_dir / "final")
