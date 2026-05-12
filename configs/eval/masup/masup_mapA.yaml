@@ -1,0 +1,30 @@
+# masup @ mapA 评估配置
+env_type: masup
+
+env:
+  graph_path: graphs/mapA.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 2.0
+  num_agents: 6
+  init_positions: [0, 10, 20, 30, 40, 49]
+  episode_len: 500
+  custom_configs:
+    T: 50.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/mapA/mappo_masup/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 600
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/mapA/mappo_masup/action_logits.csv
+  action_logits_active_only: true

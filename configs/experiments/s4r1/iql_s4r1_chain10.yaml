@@ -1,0 +1,56 @@
+# IQL + S4R1Env @ chain10
+# 图统计: nodes=10, directed_edges=18, max_out_degree=2, avg_edge=1.111, max_edge=2.000
+# 物理时间截断: episode_len=100, total_steps=20000000
+
+algo_name: iql
+env_type: s4r1
+q_type: mlp
+
+exp_name: iql-s4r1-chain10
+graph_name: chain10
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/Chain10nodes9edges.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 4
+  init_positions: [0, 3, 6, 9]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+    penalised_factor: 1.5
+
+algo:
+  sync_replay: true
+  lr: 7.5e-4
+  gamma: 0.995
+  tau: 0.001
+  target_update_freq: 1
+  epsilon_start: 0.95
+  epsilon_end: 0.005
+  epsilon_decay_steps: 4000000
+  use_double_dqn: true
+  shared_policy: false
+
+training:
+  num_envs: 64
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 20000000
+  save_interval: 250
+  batch_size: 32
+  warmup_steps: 5000
+  buffer_size: 50000
+  collect_per_step: 64
+  update_per_step: 1
+  eval_interval: 5
+
+q_network:
+  hidden: [256, 256]
+  dueling: true
+
+eval_config_path: configs/eval/s4r1/s4r1_chain10.yaml

@@ -1,0 +1,40 @@
+# QTable + ExGBLAEnv @ chain10
+# 图统计: nodes=10, directed_edges=18, max_out_degree=2, avg_edge=1.111, max_edge=2.000
+# 物理时间截断: episode_len=100, total_steps=20000000
+# Q-table 使用离散 obs 作为状态键，保持 norm_obs=false 以避免连续化状态。
+
+algo_name: qtable
+env_type: ex_gbla
+exp_name: qtable-exgbla-chain10
+graph_name: chain10
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/Chain10nodes9edges.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: false
+  num_agents: 4
+  init_positions: [0, 3, 6, 9]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.001
+  gamma: 0.99
+  epsilon_start: 0.2
+  epsilon_end: 0.05
+  sync_update: true
+  epsilon_decay_steps: 4000000
+
+training:
+  num_envs: 32
+  use_subproc: true
+  total_steps: 20000000
+  save_interval: 150
+  eval_interval: 10
+
+eval_config_path: configs/eval/exgbla/exgbla_chain10.yaml

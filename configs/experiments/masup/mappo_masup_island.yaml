@@ -1,0 +1,76 @@
+# MAPPO + MASUPEnv @ island
+# 图统计: nodes=50, directed_edges=168, max_out_degree=5, avg_edge=5.296, max_edge=17.029
+# 物理时间截断: episode_len=500, total_steps=40000000
+
+algo_name: mappo
+env_type: masup
+actor_type: masup_mlp
+critic_type: masup_mlp
+
+exp_name: mappo-masup-island
+graph_name: island
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/island.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 2.0
+  num_agents: 6
+  init_positions: [0, 10, 20, 30, 40, 49]
+  episode_len: 500
+  custom_configs:
+    T: 50.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  use_value_norm: true
+
+training:
+  num_envs: 96
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 40000000
+  save_interval: 200
+  minibatch_size: 2048
+  update_epochs: 5
+  eval_interval: 10
+
+actor:
+  graph_path: graphs/island.json
+  num_agents: 6
+  num_nodes: 50
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 50.0
+  hidden: [256, 256]
+
+critic:
+  graph_path: graphs/island.json
+  num_agents: 6
+  num_nodes: 50
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 50.0
+  input_mode: state
+  hidden: [256, 256]
+
+eval_config_path: configs/eval/masup/masup_island.yaml

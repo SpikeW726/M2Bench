@@ -1,0 +1,69 @@
+# MAPPO + MAGECEnv @ chain10
+# 图统计: nodes=10, directed_edges=18, max_out_degree=2, avg_edge=1.111, max_edge=2.000
+# 物理时间截断: episode_len=100, total_steps=20000000
+# MAGEC 图观测含 edge_src/edge_dst 索引，使用环境内部特征归一化，不叠加 VectorEnvNormObs。
+
+algo_name: mappo
+env_type: magec
+actor_type: sage
+critic_type: mlp
+
+exp_name: mappo-magec-chain10
+graph_name: chain10
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/Chain10nodes9edges.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: false
+  num_agents: 4
+  init_positions: [0, 3, 6, 9]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+    alpha: 1
+    beta: 0.5
+
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.995
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  shared_policy: true
+  use_value_norm: true
+
+training:
+  num_envs: 48
+  use_subproc: true
+  num_steps: 512
+  total_steps: 20000000
+  save_interval: 100
+  minibatch_size: 1024
+  update_epochs: 5
+  eval_interval: 10
+
+actor:
+  graph_path: graphs/Chain10nodes9edges.json
+  agent_num: 4
+  role_imformation: agent-index
+  hidden_dim: 64
+  gnn_layers: 4
+  actor_mlp_layers: 1
+  mlp_activation: relu
+  node_feat_dim: 3
+  edge_feat_dim: 2
+  global_feat_dim: 2
+  neighbor_scoring: true
+  use_jk: true
+
+critic:
+  hidden: [256, 256]
+
+eval_config_path: configs/eval/magec/magec_chain10.yaml

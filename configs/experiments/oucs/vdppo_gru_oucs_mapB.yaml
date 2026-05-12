@@ -1,0 +1,67 @@
+# VDPPO + OUCSEnv @ mapB
+# 图统计: nodes=50, directed_edges=138, max_out_degree=5, avg_edge=7.722, max_edge=22.000
+# 物理时间截断: episode_len=500, total_steps=40000000
+
+algo_name: vdppo
+env_type: oucs
+actor_type: rnn
+q_type: rnn
+
+exp_name: vdppo-gru-oucs-mapB
+graph_name: mapB
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/mapB.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 6
+  init_positions: [0, 10, 20, 30, 40, 49]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+    penalised_factor: 1.5
+
+algo:
+  use_active_mask: true
+  actor_lr: 7.0e-4
+  q_lr: 2.0e-3
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.8
+  ent_coef: 0.01
+  target_kl: 0.3
+  tau: 0.1
+  target_update_freq: 5
+  q_clip_range: null
+  mixer_embed_dim: 256
+  data_chunk_length: 10
+  reward_global: false
+
+training:
+  num_envs: 96
+  use_subproc: true
+  num_steps: 512
+  total_steps: 40000000
+  save_interval: 300
+  minibatch_size: 2048
+  update_epochs: 10
+  eval_interval: 10
+
+actor:
+  rnn_type: gru
+  hidden_size: 256
+  num_layers: 1
+  fc_hidden: [256, 256]
+
+q_network:
+  rnn_type: gru
+  hidden_size: 256
+  num_layers: 1
+  dueling: false
+
+eval_config_path: configs/eval/oucs/oucs_mapB.yaml

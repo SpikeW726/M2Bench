@@ -1,0 +1,26 @@
+# oucs @ mapA 评估配置
+env_type: oucs
+
+env:
+  graph_path: graphs/mapA.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 6
+  init_positions: [0, 10, 20, 30, 40, 49]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+    penalised_factor: 1.5
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/mapA/vdppo_oucs/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: false
+  max_frames: 1200
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/mapA/vdppo_oucs/action_logits.csv
+  action_logits_active_only: true

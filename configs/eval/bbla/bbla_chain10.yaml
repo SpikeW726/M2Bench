@@ -1,0 +1,26 @@
+# bbla @ chain10 评估配置
+algo_name: qtable
+env_type: bbla
+
+env:
+  graph_path: graphs/Chain10nodes9edges.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: false
+  num_agents: 4
+  init_positions: [0, 3, 6, 9]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/chain10/qtable_bbla/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 300
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/chain10/qtable_bbla/action_logits.csv
+  action_logits_active_only: true

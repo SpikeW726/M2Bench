@@ -1,0 +1,67 @@
+# VDPPO + OUCSEnv @ chain10
+# 图统计: nodes=10, directed_edges=18, max_out_degree=2, avg_edge=1.111, max_edge=2.000
+# 物理时间截断: episode_len=100, total_steps=20000000
+
+algo_name: vdppo
+env_type: oucs
+actor_type: rnn
+q_type: rnn
+
+exp_name: vdppo-gru-oucs-chain10
+graph_name: chain10
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/Chain10nodes9edges.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 4
+  init_positions: [0, 3, 6, 9]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+    penalised_factor: 1.5
+
+algo:
+  use_active_mask: true
+  actor_lr: 7.0e-4
+  q_lr: 2.0e-3
+  gamma: 0.995
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.8
+  ent_coef: 0.01
+  target_kl: 0.3
+  tau: 0.1
+  target_update_freq: 5
+  q_clip_range: null
+  mixer_embed_dim: 128
+  data_chunk_length: 10
+  reward_global: false
+
+training:
+  num_envs: 64
+  use_subproc: true
+  num_steps: 256
+  total_steps: 20000000
+  save_interval: 200
+  minibatch_size: 1024
+  update_epochs: 10
+  eval_interval: 10
+
+actor:
+  rnn_type: gru
+  hidden_size: 128
+  num_layers: 1
+  fc_hidden: [256, 256]
+
+q_network:
+  rnn_type: gru
+  hidden_size: 128
+  num_layers: 1
+  dueling: false
+
+eval_config_path: configs/eval/oucs/oucs_chain10.yaml

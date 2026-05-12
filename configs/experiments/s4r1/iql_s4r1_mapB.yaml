@@ -1,0 +1,56 @@
+# IQL + S4R1Env @ mapB
+# 图统计: nodes=50, directed_edges=138, max_out_degree=5, avg_edge=7.722, max_edge=22.000
+# 物理时间截断: episode_len=500, total_steps=40000000
+
+algo_name: iql
+env_type: s4r1
+q_type: mlp
+
+exp_name: iql-s4r1-mapB
+graph_name: mapB
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/mapB.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 6
+  init_positions: [0, 10, 20, 30, 40, 49]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+    penalised_factor: 1.5
+
+algo:
+  sync_replay: true
+  lr: 7.5e-4
+  gamma: 0.999
+  tau: 0.001
+  target_update_freq: 1
+  epsilon_start: 0.95
+  epsilon_end: 0.005
+  epsilon_decay_steps: 8000000
+  use_double_dqn: true
+  shared_policy: false
+
+training:
+  num_envs: 96
+  use_subproc: true
+  num_steps: 2048
+  total_steps: 40000000
+  save_interval: 500
+  batch_size: 64
+  warmup_steps: 10000
+  buffer_size: 100000
+  collect_per_step: 96
+  update_per_step: 1
+  eval_interval: 5
+
+q_network:
+  hidden: [256, 256]
+  dueling: true
+
+eval_config_path: configs/eval/s4r1/s4r1_mapB.yaml

@@ -1,0 +1,28 @@
+# beau @ chain10 评估配置
+algo_name: happo
+env_type: beau
+
+env:
+  graph_path: graphs/Chain10nodes9edges.json
+  enable_wait: true
+  norm_reward: true
+  norm_obs: true
+  deltaT: 0.5
+  num_agents: 4
+  init_positions: [0, 3, 6, 9]
+  episode_len: 100
+  custom_configs:
+    reward_scale: 0.05
+    truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/chain10/happo_beau/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 400
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/chain10/happo_beau/action_logits.csv
+  action_logits_active_only: true

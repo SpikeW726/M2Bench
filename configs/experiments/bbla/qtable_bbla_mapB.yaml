@@ -1,0 +1,40 @@
+# QTable + BBLAEnv @ mapB
+# 图统计: nodes=50, directed_edges=138, max_out_degree=5, avg_edge=7.722, max_edge=22.000
+# 物理时间截断: episode_len=500, total_steps=40000000
+# Q-table 使用离散 obs 作为状态键，保持 norm_obs=false 以避免连续化状态。
+
+algo_name: qtable
+env_type: bbla
+exp_name: qtable-bbla-mapB
+graph_name: mapB
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/mapB.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: false
+  num_agents: 6
+  init_positions: [0, 10, 20, 30, 40, 49]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.001
+  gamma: 0.999
+  epsilon_start: 0.2
+  epsilon_end: 0.05
+  sync_update: true
+  epsilon_decay_steps: 10000000
+
+training:
+  num_envs: 64
+  use_subproc: true
+  total_steps: 40000000
+  save_interval: 300
+  eval_interval: 10
+
+eval_config_path: configs/eval/bbla/bbla_mapB.yaml

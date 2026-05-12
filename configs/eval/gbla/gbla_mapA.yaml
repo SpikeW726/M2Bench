@@ -1,0 +1,26 @@
+# gbla @ mapA 评估配置
+algo_name: qtable
+env_type: gbla
+
+env:
+  graph_path: graphs/mapA.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: false
+  num_agents: 6
+  init_positions: [0, 10, 20, 30, 40, 49]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/mapA/qtable_gbla/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 600
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/mapA/qtable_gbla/action_logits.csv
+  action_logits_active_only: true

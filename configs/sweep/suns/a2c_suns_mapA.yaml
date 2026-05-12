@@ -1,0 +1,38 @@
+method: bayes
+
+metric:
+  name: eval/wi
+  goal: minimize
+
+early_terminate:
+  min_trial: 6
+  min_steps: 8000000
+  terminate_ratio: 0.4
+  early_stop_iters: 100
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
+  state_file: .sweep_es_a2c_suns_mapA.json
+
+parameters:
+  seed:
+    value: 42
+  total_steps:
+    value: 40000000
+  lr:
+    min: 1.0e-6
+    max: 5.0e-3
+    distribution: log_uniform_values
+  gamma:
+    values: [0.99, 0.995, 0.999]
+  gae_lambda:
+    values: [0.95, 0.99, 0.999]
+  max_grad_norm:
+    values: [1.0, 10.0]
+  num_steps:
+    values: [1024, 2048]
+  minibatch_size:
+    values: [512, 1024, 2048]
+  update_epochs:
+    values: [1, 3, 5]
+  save_interval:
+    value: 500

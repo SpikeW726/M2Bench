@@ -1,0 +1,57 @@
+# A2C + SUNSGymEnv @ chain10
+# 图统计: nodes=10, directed_edges=18, max_out_degree=2, avg_edge=1.111, max_edge=2.000
+# 物理时间截断: episode_len=100, total_steps=20000000
+# SUNSGymEnv 训练管线仅支持 1 agent；多智能体评估见 eval 配置。
+
+algo_name: a2c
+env_type: suns_gym
+actor_type: sun
+critic_type: sun
+
+exp_name: a2c-suns-chain10
+graph_name: chain10
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/Chain10nodes9edges.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 1
+  init_positions: [0]
+  episode_len: 100
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 7.0e-4
+  gamma: 0.995
+  gae_lambda: 0.95
+  vf_coef: 0.5
+  ent_coef: 0.01
+
+training:
+  num_envs: 32
+  use_subproc: true
+  num_steps: 512
+  total_steps: 20000000
+  save_interval: 250
+  minibatch_size: 1024
+  update_epochs: 1
+  eval_interval: 10
+
+actor:
+  num_nodes: 10
+  node_feat_dim: 2
+  f1_hidden: 4
+  f2_hidden: 6
+
+critic:
+  num_nodes: 10
+  node_feat_dim: 2
+  f1_hidden: 4
+  f2_hidden: 6
+
+eval_config_path: configs/eval/suns/suns_chain10.yaml
