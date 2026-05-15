@@ -15,13 +15,32 @@ from algorithms.tabular.qtable import QTableAlgo
 from configs.training_configs import TrainerConfig
 
 
+def _build_qtable_yaml_extra(
+    vec_env: Any,
+    base_extra: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """合并训练元数据与向量环境上的观测/回报 RMS（与 deep RL checkpoint 同级字段）。"""
+    from envs.venv_wrappers import VectorEnvNormObs, VectorEnvNormReward, find_vec_wrapper
+    from utils.model_io import running_mean_std_to_yaml_dict
+
+    extra = dict(base_extra or {})
+    obs_w = find_vec_wrapper(vec_env, VectorEnvNormObs)
+    if obs_w is not None:
+        extra["obs_rms_state"] = running_mean_std_to_yaml_dict(obs_w.get_obs_rms())
+    rew_w = find_vec_wrapper(vec_env, VectorEnvNormReward)
+    if rew_w is not None:
+        extra["reward_rms_state"] = running_mean_std_to_yaml_dict(rew_w.get_reward_rms())
+    return extra if extra else None
+
+
 def _save_qtable_final(
     algo: QTableAlgo,
+    vec_env,
     save_dir: Path,
     episode: int,
     total_steps: int,
     verbose: bool,
-    extra_info: Optional[Dict[str, Any]] = None,
+    base_extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """写入 save_dir/final/，与 RL checkpoint 约定一致（sweep summary、自动评估）。"""
     final_dir = Path(save_dir) / "final"
@@ -33,8 +52,9 @@ def _save_qtable_final(
         "epsilon": algo.get_epsilon(),
         "qtable_sizes": {aid: len(pol.q_table) for aid, pol in algo.policies.items()},
     }
-    if extra_info:
-        meta["extra"] = extra_info
+    yaml_extra = _build_qtable_yaml_extra(vec_env, base_extra)
+    if yaml_extra:
+        meta["extra"] = yaml_extra
     with open(final_dir / "config.yaml", "w") as f:
         yaml.dump(meta, f, default_flow_style=False)
     if verbose:
@@ -178,8 +198,8 @@ class QTableTrainer:
 
         self._save_checkpoint(ep)
         _save_qtable_final(
-            self.algo, self.save_dir, ep, self.total_steps, self.verbose,
-            extra_info=self.extra_info,
+            self.algo, self.vec_env, self.save_dir, ep, self.total_steps, self.verbose,
+            base_extra=self.extra_info,
         )
 
         total_time = time.time() - start_time
@@ -426,8 +446,9 @@ class QTableTrainer:
                 aid: len(pol.q_table) for aid, pol in self.algo.policies.items()
             },
         }
-        if self.extra_info:
-            meta["extra"] = self.extra_info
+        yaml_extra = _build_qtable_yaml_extra(self.vec_env, self.extra_info)
+        if yaml_extra:
+            meta["extra"] = yaml_extra
         with open(ckpt_dir / "config.yaml", "w") as f:
             yaml.dump(meta, f, default_flow_style=False)
 
@@ -527,8 +548,8 @@ class JointQTableTrainer:
 
         self._save_checkpoint(ep)
         _save_qtable_final(
-            self.algo, self.save_dir, ep, self.total_steps, self.verbose,
-            extra_info=self.extra_info,
+            self.algo, self.vec_env, self.save_dir, ep, self.total_steps, self.verbose,
+            base_extra=self.extra_info,
         )
 
         total_time = time.time() - start_time
@@ -655,8 +676,9 @@ class JointQTableTrainer:
             "epsilon": self.algo.get_epsilon(),
             "qtable_size": len(self.algo.policies[self.POLICY_KEY].q_table),
         }
-        if self.extra_info:
-            meta["extra"] = self.extra_info
+        yaml_extra = _build_qtable_yaml_extra(self.vec_env, self.extra_info)
+        if yaml_extra:
+            meta["extra"] = yaml_extra
         with open(ckpt_dir / "config.yaml", "w") as f:
             yaml.dump(meta, f, default_flow_style=False)
 

@@ -682,6 +682,15 @@ def test_trained_policy(
 #                     Q-table 评估（BBLA / GBLA / ExGBLA 等）
 # =============================================================================
 
+def _qtable_obs_for_policy(obs, obs_rms):
+    """与训练时 VectorEnvNormObs 一致；Q-table 状态 key 依赖归一化后观测。"""
+    if obs_rms is None:
+        return obs
+    if isinstance(obs, dict):
+        return {aid: obs_rms.norm(np.asarray(o)) for aid, o in obs.items()}
+    return obs_rms.norm(np.asarray(obs))
+
+
 def test_qtable_policy(
     model_dir: str,
     env_config_path: str,
@@ -773,6 +782,15 @@ def test_qtable_policy(
     for pol in algo.policies.values():
         pol.set_epsilon(0.0)
 
+    from utils.model_io import load_obs_rms
+
+    obs_rms = load_obs_rms(str(model_dir))
+    if obs_rms is not None:
+        print(
+            f"[Eval] qtable obs_rms loaded: mean≈{float(np.mean(obs_rms.mean)):.3f}, "
+            f"std≈{float(np.mean(np.sqrt(obs_rms.var))):.3f}, count={obs_rms.count:.0f}"
+        )
+
     qtable_sizes = {aid: len(pol.q_table) for aid, pol in algo.policies.items()}
     print(f"\n=== Q-table loaded from {model_dir} ===")
     print(f"Q-table sizes: {qtable_sizes}")
@@ -814,6 +832,7 @@ def test_qtable_policy(
             anim_time_intervals = []
 
         while not (truncated or terminated):
+            obs_k = _qtable_obs_for_policy(obs, obs_rms)
             if is_parallel:
                 actions = {}
                 for agent_str in env.agents:
@@ -824,9 +843,9 @@ def test_qtable_policy(
 
                     if active:
                         if action_mask is not None:
-                            actions[agent_str] = pol.select_action(obs[agent_str], action_mask)
+                            actions[agent_str] = pol.select_action(obs_k[agent_str], action_mask)
                         else:
-                            actions[agent_str] = int(np.argmax(pol.get_q(obs[agent_str])))
+                            actions[agent_str] = int(np.argmax(pol.get_q(obs_k[agent_str])))
                     else:
                         # ON_EDGE：选 action_mask 中最后一个有效位（no-op）
                         if action_mask is not None:
@@ -845,7 +864,7 @@ def test_qtable_policy(
                         step=step_count,
                         sim_time=float(getattr(env.world, "current_time", step_count)),
                         agent_id=agent_str,
-                        q_values=pol.get_q(obs[agent_str]).copy(),
+                        q_values=pol.get_q(obs_k[agent_str]).copy(),
                         action_mask=action_mask,
                         chosen_action=int(actions[agent_str]),
                         active=active,
@@ -863,9 +882,9 @@ def test_qtable_policy(
                 action_mask = info_i.get("action_mask", None)
                 pol = algo.policies["agent_0"]
                 if action_mask is not None:
-                    action = pol.select_action(obs, action_mask)
+                    action = pol.select_action(obs_k, action_mask)
                 else:
-                    action = int(np.argmax(pol.get_q(obs)))
+                    action = int(np.argmax(pol.get_q(obs_k)))
                 logits_print_count = _record_qtable_action_scores(
                     writer=logits_csv_w,
                     do_print=do_logits_print,
@@ -876,7 +895,7 @@ def test_qtable_policy(
                     step=step_count,
                     sim_time=float(getattr(getattr(env, "world", None), "current_time", step_count)),
                     agent_id="agent_0",
-                    q_values=pol.get_q(obs).copy(),
+                    q_values=pol.get_q(obs_k).copy(),
                     action_mask=action_mask,
                     chosen_action=int(action),
                     active=1,
@@ -1088,8 +1107,9 @@ def eval_qtable_inline(
     env_type: str,
     env_config,
     num_episodes: int = 5,
+    obs_rms=None,
 ) -> dict:
-    """用内存中的当前 Q-table 直接评估，行为与 DRL 的 inline eval 对齐。"""
+    """用内存中的当前 Q-table 直接评估；norm_obs 训练路径须传入与 vec_env 一致的 obs_rms。"""
     env = _create_env(env_type, env_config)
     is_parallel = hasattr(env, "possible_agents")
     prev_eps = {aid: pol.epsilon for aid, pol in algo.policies.items()}
@@ -1105,6 +1125,7 @@ def eval_qtable_inline(
             truncated = False
 
             while not (terminated or truncated):
+                obs_k = _qtable_obs_for_policy(obs, obs_rms)
                 if is_parallel:
                     actions = {}
                     for agent_str in env.agents:
@@ -1113,9 +1134,9 @@ def eval_qtable_inline(
                         pol = algo.policies[agent_str]
                         if info_i.get("active_mask", 1):
                             if action_mask is not None:
-                                actions[agent_str] = pol.select_action(obs[agent_str], action_mask)
+                                actions[agent_str] = pol.select_action(obs_k[agent_str], action_mask)
                             else:
-                                actions[agent_str] = int(np.argmax(pol.get_q(obs[agent_str])))
+                                actions[agent_str] = int(np.argmax(pol.get_q(obs_k[agent_str])))
                         else:
                             if action_mask is not None:
                                 valid = np.where(action_mask)[0]
@@ -1131,9 +1152,9 @@ def eval_qtable_inline(
                     action_mask = info_i.get("action_mask", None)
                     pol = algo.policies["agent_0"]
                     if action_mask is not None:
-                        action = pol.select_action(obs, action_mask)
+                        action = pol.select_action(obs_k, action_mask)
                     else:
-                        action = int(np.argmax(pol.get_q(obs)))
+                        action = int(np.argmax(pol.get_q(obs_k)))
                     obs, _, terminated, truncated, infos = env.step(action)
 
             final_metrics = env.world.current_metrics

@@ -1,7 +1,8 @@
 from envs.venvs import BaseVectorEnv, DummyVectorEnv, SubprocVectorEnv
-from envs.venv_wrappers import VectorEnvWrapper, VectorEnvNormObs, VectorEnvNormReward
+from envs.venv_wrappers import VectorEnvWrapper, VectorEnvNormObs, VectorEnvNormReward, find_vec_wrapper
 
 __all__ = [
     "BaseVectorEnv", "DummyVectorEnv", "SubprocVectorEnv",
     "VectorEnvWrapper", "VectorEnvNormObs", "VectorEnvNormReward",
+    "find_vec_wrapper",
 ]

@@ -1,10 +1,22 @@
 """向量化环境包装器。"""
 
-from typing import Any, List
+from typing import Any, List, Optional, Type
 import numpy as np
 
 from envs.venvs import BaseVectorEnv
 from utils.log_utils import RunningMeanStd as NumpyRMS
+
+
+def find_vec_wrapper(vec_env: Any, wrapper_type: Type[Any]) -> Optional[Any]:
+    """沿 BaseVectorEnv 外包链查找指定 wrapper 实例。"""
+    cur = vec_env
+    seen = set()
+    while cur is not None and id(cur) not in seen:
+        if isinstance(cur, wrapper_type):
+            return cur
+        seen.add(id(cur))
+        cur = getattr(cur, "venv", None)
+    return None
 
 
 class VectorEnvWrapper(BaseVectorEnv):

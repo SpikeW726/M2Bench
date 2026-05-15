@@ -378,6 +378,20 @@ def get_model_config(model_dir: str | Path) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
+def running_mean_std_to_yaml_dict(rms) -> Dict[str, Any]:
+    """将 RunningMeanStd / NumpyRMS 写成与 checkpoint ``extra.obs_rms_state`` 相同结构的 dict。"""
+
+    def _to_list(v):
+        return v.tolist() if isinstance(v, np.ndarray) else float(v)
+
+    return {
+        "mean": _to_list(rms.mean),
+        "var": _to_list(rms.var),
+        "count": float(rms.count),
+        "clip_max": rms.clip_max,
+    }
+
+
 def load_obs_rms(model_dir: str | Path):
     """从 checkpoint 的 config.yaml extra.obs_rms_state 重建 NumpyRMS。
 

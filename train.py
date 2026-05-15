@@ -85,60 +85,6 @@ def _maybe_seed_vec_env(vec_env, seed: Optional[int]) -> None:
     vec_env.seed(seed)
 
 
-def _find_vec_wrapper(vec_env, wrapper_type):
-    """沿 venv 链查找指定 wrapper。"""
-    cur = vec_env
-    seen = set()
-    while cur is not None and id(cur) not in seen:
-        if isinstance(cur, wrapper_type):
-            return cur
-        seen.add(id(cur))
-        cur = getattr(cur, "venv", None)
-    return None
-
-
-# WandB：同一进程内多次 train 时按 run.id 重新注册 step 轴
-_WANDB_ENV_STEP_AXIS_RUN_ID: Optional[str] = None
-
-
-def _configure_wandb_env_step_axis() -> None:
-    """注册 global_step 为自定义横轴指标；实际主横轴由 SimpleLogger 的 wandb.log(..., step=) 锁定为环境步数。
-
-    不传 step= 时 WandB 会对每次 log 自增内部计数 → 横轴变成 iteration，与 sweep/直连 train 路径均会不一致。
-    """
-    global _WANDB_ENV_STEP_AXIS_RUN_ID
-    import wandb
-
-    if wandb.run is None:
-        return
-    rid = getattr(wandb.run, "id", None)
-    if rid is None or rid == _WANDB_ENV_STEP_AXIS_RUN_ID:
-        return
-    wandb.define_metric("global_step")
-    wandb.define_metric("*", step_metric="global_step")
-    _WANDB_ENV_STEP_AXIS_RUN_ID = rid
-
-
-# =============================================================================
-#                          随机种子
-# =============================================================================
-
-
-def _set_training_random_seed(seed: int) -> None:
-    """固定 Python / NumPy / PyTorch RNG（训练可复现）。"""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def _maybe_seed_vec_env(vec_env, seed: Optional[int]) -> None:
-    if seed is None:
-        return
-    vec_env.seed(seed)
-
-
 # =============================================================================
 #                              Logger
 # =============================================================================
@@ -637,6 +583,9 @@ def _train_qtable(
     if eval_config_path and tc.eval_interval > 0:
         from evaluators.test import eval_qtable_inline
         from configs.registry import load_eval_config
+        from envs.venv_wrappers import VectorEnvNormObs, find_vec_wrapper
+
+        _obs_norm_for_inline = find_vec_wrapper(vec_env, VectorEnvNormObs)
         _eval_env_type, _eval_env_cfg = load_eval_config(eval_config_path)
         _train_custom = dict(config.env.custom_configs or {})
         if _train_custom:
@@ -647,11 +596,17 @@ def _train_qtable(
         _eval_episodes = tc.eval_episodes
 
         def inline_eval_fn():
+            _rms = (
+                _obs_norm_for_inline.get_obs_rms()
+                if _obs_norm_for_inline is not None
+                else None
+            )
             return eval_qtable_inline(
                 algo=algo,
                 env_type=_eval_env_type,
                 env_config=_eval_env_cfg,
                 num_episodes=_eval_episodes,
+                obs_rms=_rms,
             )
 
     if vec_env.is_parallel_env:
@@ -789,9 +744,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
           f"({'subproc' if tc.use_subproc else 'dummy'})")
 
     # 若启用了 obs 归一化，保留内层 wrapper 引用，供 checkpoint 和 eval 使用
-    from envs.venv_wrappers import VectorEnvNormObs
+    from envs.venv_wrappers import VectorEnvNormObs, find_vec_wrapper
     _obs_norm_wrapper: Optional[VectorEnvNormObs] = (
-        _find_vec_wrapper(vec_env, VectorEnvNormObs)
+        find_vec_wrapper(vec_env, VectorEnvNormObs)
     )
 
     # ---- 3. 推断维度 ----
@@ -939,16 +894,9 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         """序列化当前 obs_rms 统计量，供 checkpoint 写入和评估时还原。"""
         if _obs_norm_wrapper is None:
             return None
-        rms = _obs_norm_wrapper.get_obs_rms()
-        import numpy as _np
-        def _to_list(v):
-            return v.tolist() if isinstance(v, _np.ndarray) else float(v)
-        return {
-            "mean": _to_list(rms.mean),
-            "var":  _to_list(rms.var),
-            "count": float(rms.count),
-            "clip_max": rms.clip_max,
-        }
+        from utils.model_io import running_mean_std_to_yaml_dict
+
+        return running_mean_std_to_yaml_dict(_obs_norm_wrapper.get_obs_rms())
 
     def save_checkpoint_fn(iteration: int):
         ckpt_dir = config.save_dir / f"iter_{iteration}"
