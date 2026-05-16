@@ -1,6 +1,7 @@
 """RL Trainers: coordinate Collector and Algorithm for training."""
 
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from typing import Any, Callable, Dict, List, Optional
 import time
 import numpy as np
@@ -34,6 +35,8 @@ class BaseTrainer(ABC):
         logger: Optional[Any] = None,
         # Inline eval callback：() -> Dict[str, float]，返回指标由 trainer 负责记录
         eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        # 运行时 profiler：由 train.py 注入，避免污染 YAML 配置。
+        profiler: Optional[Any] = None,
     ):
         self.algorithm = algorithm
         self.collector = collector
@@ -51,6 +54,7 @@ class BaseTrainer(ABC):
         self.stop_fn = stop_fn
         self.logger = logger
         self.eval_fn = eval_fn
+        self.profiler = profiler
 
         # State
         self.iteration = 0
@@ -85,6 +89,25 @@ class BaseTrainer(ABC):
         if self.logger is not None:
             self.logger.log(data, step=self.total_steps)
 
+    def _profile(self, name: str):
+        if self.profiler is None:
+            return nullcontext()
+        return self.profiler.time_block(name)
+
+    def _add_profile_metrics(self, log_data: Dict[str, float]) -> None:
+        if self.profiler is None:
+            return
+        metrics = self.profiler.consume_iteration_metrics()
+        if metrics:
+            log_data.update(metrics)
+
+    def _print_profile_summary(self) -> None:
+        if self.profiler is None:
+            return
+        summary = self.profiler.format_last()
+        if summary:
+            print(f"[Profile] {summary}")
+
     def _maybe_run_eval(self):
         """若配置了 eval_fn 且当前 iteration 命中间隔，则执行 inline eval 并记录指标。"""
         if not self.eval_fn or self.eval_interval <= 0:
@@ -95,7 +118,8 @@ class BaseTrainer(ABC):
             print(f"[Eval] Running inline eval at iteration {self.iteration} ...")
         self.algorithm.set_training_mode(False)
         try:
-            eval_metrics = self.eval_fn()
+            with self._profile("train/eval"):
+                eval_metrics = self.eval_fn()
         except Exception as e:
             print(f"[Eval] Inline eval failed: {e}")
             eval_metrics = {}
@@ -109,6 +133,12 @@ class BaseTrainer(ABC):
             if self.verbose:
                 parts = ", ".join(f"{k}={v:.4f}" for k, v in eval_metrics.items())
                 print(f"[Eval] {parts}")
+        if self.profiler is not None:
+            profile_metrics = self.profiler.consume_iteration_metrics()
+            if profile_metrics:
+                self._log(profile_metrics)
+                if self.verbose:
+                    self._print_profile_summary()
 
 
 class OnPolicyTrainer(BaseTrainer):
@@ -133,6 +163,7 @@ class OnPolicyTrainer(BaseTrainer):
         stop_fn: Optional[Callable[[float], bool]] = None,
         logger: Optional[Any] = None,
         eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        profiler: Optional[Any] = None,
     ):
         super().__init__(
             algorithm=algorithm,
@@ -143,6 +174,7 @@ class OnPolicyTrainer(BaseTrainer):
             stop_fn=stop_fn,
             logger=logger,
             eval_fn=eval_fn,
+            profiler=profiler,
         )
         # On-policy 特有参数
         self.minibatch_size = config.minibatch_size
@@ -156,7 +188,8 @@ class OnPolicyTrainer(BaseTrainer):
         for self.iteration in range(1, self.max_iteration + 1):
             # Checkpoint
             if self.save_checkpoint_fn and self.iteration % self.save_interval == 0:
-                self.save_checkpoint_fn(self.iteration)
+                with self._profile("train/checkpoint"):
+                    self.save_checkpoint_fn(self.iteration)
 
             # Train one iteration
             iter_result = self._train_iteration()
@@ -176,7 +209,8 @@ class OnPolicyTrainer(BaseTrainer):
 
         # Final checkpoint
         if self.save_checkpoint_fn:
-            self.save_checkpoint_fn(self.iteration)
+            with self._profile("train/checkpoint"):
+                self.save_checkpoint_fn(self.iteration)
 
         total_time = time.time() - self.start_time
         final_stats = {
@@ -197,22 +231,26 @@ class OnPolicyTrainer(BaseTrainer):
         """Execute one collect-update iteration."""
         # 1. Collect (eval mode)
         self.algorithm.set_training_mode(False)
-        result = self.collector.collect(n_steps=self.step_per_iteration)
+        with self._profile("train/collect"):
+            result = self.collector.collect(n_steps=self.step_per_iteration)
         self.total_steps += result.n_steps
 
         # 2. Prepare batch (compute GAE)
-        batch = self.algorithm.prepare_batch(result.batch)
+        with self._profile("train/prepare_batch"):
+            batch = self.algorithm.prepare_batch(result.batch)
 
         # 3. Update (train mode)
         self.algorithm.set_training_mode(True)
-        stats = self.algorithm.update(
-            batch,
-            minibatch_size=self.minibatch_size,
-            update_epochs=self.update_epochs,
-        )
+        with self._profile("train/update"):
+            stats = self.algorithm.update(
+                batch,
+                minibatch_size=self.minibatch_size,
+                update_epochs=self.update_epochs,
+            )
 
         # 4. Clear buffer
-        self.collector.reset_buffer()
+        with self._profile("train/reset_buffer"):
+            self.collector.reset_buffer()
 
         # 5. Build result dict
         iter_result = {
@@ -253,10 +291,12 @@ class OnPolicyTrainer(BaseTrainer):
             log_data["rollout/n_episodes"] = result.n_episodes
 
         if self.log_extra_fn:
-            extra = self.log_extra_fn()
+            with self._profile("train/log_extra"):
+                extra = self.log_extra_fn()
             if extra:
                 log_data.update(extra)
 
+        self._add_profile_metrics(log_data)
         self._log(log_data)
 
         if self.verbose and (self.iteration % 10 == 0 or self.iteration == 1):
@@ -270,6 +310,7 @@ class OnPolicyTrainer(BaseTrainer):
                 f"pg_loss={stats.policy_loss:.4f}, v_loss={stats.value_loss:.4f}, "
                 f"SPS={sps}"
             )
+            self._print_profile_summary()
 
 
 class OffPolicyTrainer(BaseTrainer):
@@ -295,6 +336,7 @@ class OffPolicyTrainer(BaseTrainer):
         stop_fn: Optional[Callable[[float], bool]] = None,
         logger: Optional[Any] = None,
         eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
+        profiler: Optional[Any] = None,
     ):
         super().__init__(
             algorithm=algorithm,
@@ -305,6 +347,7 @@ class OffPolicyTrainer(BaseTrainer):
             stop_fn=stop_fn,
             logger=logger,
             eval_fn=eval_fn,
+            profiler=profiler,
         )
         self.collect_per_step = config.collect_per_step
         self.update_per_step = config.update_per_step
@@ -323,16 +366,24 @@ class OffPolicyTrainer(BaseTrainer):
             self.algorithm.set_training_mode(True)
             warmup_collected = 0
             while warmup_collected < self.warmup_steps:
-                result = self.collector.collect(n_steps=self.collect_per_step)
+                with self._profile("warmup/collect"):
+                    result = self.collector.collect(n_steps=self.collect_per_step)
                 warmup_collected += result.n_steps
                 self.total_steps += result.n_steps
             if self.verbose:
                 print(f"Warmup done, collected {warmup_collected} steps")
+            if self.profiler is not None:
+                warmup_metrics = self.profiler.consume_iteration_metrics()
+                if warmup_metrics:
+                    self._log(warmup_metrics)
+                    if self.verbose:
+                        self._print_profile_summary()
 
         # ---- 主训练循环 ----
         for self.iteration in range(1, self.max_iteration + 1):
             if self.save_checkpoint_fn and self.iteration % self.save_interval == 0:
-                self.save_checkpoint_fn(self.iteration)
+                with self._profile("train/checkpoint"):
+                    self.save_checkpoint_fn(self.iteration)
 
             iter_result = self._train_iteration()
             self._log_iteration(iter_result)
@@ -347,7 +398,8 @@ class OffPolicyTrainer(BaseTrainer):
                 break
 
         if self.save_checkpoint_fn:
-            self.save_checkpoint_fn(self.iteration)
+            with self._profile("train/checkpoint"):
+                self.save_checkpoint_fn(self.iteration)
 
         total_time = time.time() - self.start_time
         return {
@@ -364,19 +416,22 @@ class OffPolicyTrainer(BaseTrainer):
 
         while iter_steps < self.step_per_iteration:
             self.algorithm.set_training_mode(True)
-            result = self.collector.collect(n_steps=self.collect_per_step)
+            with self._profile("train/collect"):
+                result = self.collector.collect(n_steps=self.collect_per_step)
             iter_steps += result.n_steps
             self.total_steps += result.n_steps
             all_rewards.extend(result.episode_rewards)
 
             if self.collector.can_sample(self.batch_size):
                 for _ in range(self.update_per_step):
-                    batch = self.collector.sample(self.batch_size)
-                    stats = self.algorithm.update(
-                        batch,
-                        global_step=self.total_steps,
-                        warmup_steps=self.warmup_steps,
-                    )
+                    with self._profile("train/sample"):
+                        batch = self.collector.sample(self.batch_size)
+                    with self._profile("train/update"):
+                        stats = self.algorithm.update(
+                            batch,
+                            global_step=self.total_steps,
+                            warmup_steps=self.warmup_steps,
+                        )
                     all_stats.append(stats)
 
         iter_result: Dict[str, Any] = {
@@ -413,10 +468,12 @@ class OffPolicyTrainer(BaseTrainer):
             log_data["rollout/n_episodes"] = iter_result["n_episodes"]
 
         if self.log_extra_fn:
-            extra = self.log_extra_fn()
+            with self._profile("train/log_extra"):
+                extra = self.log_extra_fn()
             if extra:
                 log_data.update(extra)
 
+        self._add_profile_metrics(log_data)
         self._log(log_data)
 
         if self.verbose and (self.iteration % 10 == 0 or self.iteration == 1):
@@ -433,3 +490,4 @@ class OffPolicyTrainer(BaseTrainer):
                 f"steps={self.total_steps}, reward={reward_str}, "
                 f"loss={loss_str}, SPS={iter_result['sps']}"
             )
+            self._print_profile_summary()

@@ -10,6 +10,7 @@ Off-policy:
 """
 
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
@@ -37,6 +38,7 @@ class BaseCollector(ABC):
         # 当前 obs（reset 后保存）
         self._obs = None
         self._info = None
+        self.profiler = None
 
         # Episode 统计
         self._episode_rewards: List[float] = []
@@ -79,6 +81,11 @@ class BaseCollector(ABC):
         self._episode_lengths.append(length)
         self._current_rewards[env_idx] = 0.0
         self._current_lengths[env_idx] = 0
+
+    def _profile(self, name: str):
+        if self.profiler is None:
+            return nullcontext()
+        return self.profiler.time_block(name)
 
 
 # =============================================================================
@@ -154,27 +161,30 @@ class OnPolicyCollector(BaseCollector):
                     self._hidden.transpose(0, 1).cpu().numpy()
                 )
 
-            with torch.no_grad():
-                output = policy.forward(
-                    obs_t,
-                    state=self._hidden if self._is_recurrent else None,
-                    action_mask=action_mask,
-                )
+            with self._profile("collect/policy_forward"):
+                with torch.no_grad():
+                    output = policy.forward(
+                        obs_t,
+                        state=self._hidden if self._is_recurrent else None,
+                        action_mask=action_mask,
+                    )
 
-            act = output['act'].cpu().numpy()
-            log_prob = output['log_prob'].cpu().numpy()
+                act = output['act'].cpu().numpy()
+                log_prob = output['log_prob'].cpu().numpy()
 
             # RNN: 更新 hidden
             if self._is_recurrent:
                 self._hidden = output['state']
 
-            self._obs_buf.append(self._obs.copy())
-            self._act_buf.append(act)
-            self._log_prob_buf.append(log_prob)
-            if action_mask is not None:
-                self._action_mask_buf.append(action_mask.cpu().numpy())
+            with self._profile("collect/buffer_write"):
+                self._obs_buf.append(self._obs.copy())
+                self._act_buf.append(act)
+                self._log_prob_buf.append(log_prob)
+                if action_mask is not None:
+                    self._action_mask_buf.append(action_mask.cpu().numpy())
 
-            next_obs, rew, term, trunc, info = self.env.step(act)
+            with self._profile("collect/env_step"):
+                next_obs, rew, term, trunc, info = self.env.step(act)
             done = term | trunc
 
             self._rew_buf.append(rew)
@@ -199,19 +209,20 @@ class OnPolicyCollector(BaseCollector):
         if self._is_recurrent and self._rnn_hidden_buf:
             rnn_h = np.concatenate(self._rnn_hidden_buf, axis=0)
 
-        batch = RolloutBatch(
-            obs=np.concatenate(self._obs_buf, axis=0),
-            act=np.concatenate(self._act_buf, axis=0),
-            rew=np.concatenate(self._rew_buf, axis=0),
-            done=np.concatenate(self._done_buf, axis=0).astype(np.float32),
-            log_prob=np.concatenate(self._log_prob_buf, axis=0),
-            action_mask=(
-                np.concatenate(self._action_mask_buf, axis=0)
-                if self._action_mask_buf
-                else None
-            ),
-            rnn_hidden=rnn_h,
-        )
+        with self._profile("collect/batch_build"):
+            batch = RolloutBatch(
+                obs=np.concatenate(self._obs_buf, axis=0),
+                act=np.concatenate(self._act_buf, axis=0),
+                rew=np.concatenate(self._rew_buf, axis=0),
+                done=np.concatenate(self._done_buf, axis=0).astype(np.float32),
+                log_prob=np.concatenate(self._log_prob_buf, axis=0),
+                action_mask=(
+                    np.concatenate(self._action_mask_buf, axis=0)
+                    if self._action_mask_buf
+                    else None
+                ),
+                rnn_hidden=rnn_h,
+            )
 
         return CollectResult(
             batch=batch,
@@ -305,7 +316,8 @@ class MAOnPolicyCollector(BaseCollector):
 
         step_count = 0
         while step_count < n_steps:
-            global_states = self._get_global_states()
+            with self._profile("collect/state_query"):
+                global_states = self._get_global_states()
 
             # RNN: 存储当前步的 hidden（作为该步的 initial hidden）
             if self._is_recurrent:
@@ -315,35 +327,38 @@ class MAOnPolicyCollector(BaseCollector):
                         self._hidden[agent].transpose(0, 1).cpu().numpy()
                     )
 
-            actions, outputs, new_hidden = policy.compute_actions(
-                self._obs, self._info, hidden_dict=self._hidden,
-            )
+            with self._profile("collect/policy_forward"):
+                actions, outputs, new_hidden = policy.compute_actions(
+                    self._obs, self._info, hidden_dict=self._hidden,
+                )
 
             # RNN: 更新 hidden
             if self._is_recurrent and new_hidden is not None:
                 self._hidden = new_hidden
 
-            for agent in self.agents:
-                buf = self._buffers[agent]
-                buf['obs'].append(self._obs[agent].copy())
-                buf['act'].append(actions[agent].copy())
-                buf['log_prob'].append(outputs[agent]['log_prob'].cpu().numpy())
+            with self._profile("collect/buffer_write"):
+                for agent in self.agents:
+                    buf = self._buffers[agent]
+                    buf['obs'].append(self._obs[agent].copy())
+                    buf['act'].append(actions[agent].copy())
+                    buf['log_prob'].append(outputs[agent]['log_prob'].cpu().numpy())
 
-                if global_states is not None:
-                    buf['global_state'].append(global_states.copy())
+                    if global_states is not None:
+                        buf['global_state'].append(global_states.copy())
 
-                if self._info is not None and agent in self._info:
-                    info_arr = self._info[agent]
-                    masks, actives = [], []
-                    for i in range(self.num_envs):
-                        if 'action_mask' in info_arr[i]:
-                            masks.append(info_arr[i]['action_mask'])
-                        actives.append(info_arr[i].get('active_mask', 1))
-                    if masks:
-                        buf['action_mask'].append(np.stack(masks))
-                    buf['active_mask'].append(np.array(actives, dtype=np.float32))
+                    if self._info is not None and agent in self._info:
+                        info_arr = self._info[agent]
+                        masks, actives = [], []
+                        for i in range(self.num_envs):
+                            if 'action_mask' in info_arr[i]:
+                                masks.append(info_arr[i]['action_mask'])
+                            actives.append(info_arr[i].get('active_mask', 1))
+                        if masks:
+                            buf['action_mask'].append(np.stack(masks))
+                        buf['active_mask'].append(np.array(actives, dtype=np.float32))
 
-            next_obs, rew, term, trunc, info = self.env.step(actions)
+            with self._profile("collect/env_step"):
+                next_obs, rew, term, trunc, info = self.env.step(actions)
 
             for agent in self.agents:
                 done = term[agent] | trunc[agent]
@@ -397,40 +412,42 @@ class MAOnPolicyCollector(BaseCollector):
 
         # rollout 结束后立刻采集边界 global state（= 下一步的初始 state）。
         # 供 VDPPO 修正 next_states[-1]，其他算法忽略此字段。
-        boundary_gs = self._get_global_states()
+        with self._profile("collect/state_query"):
+            boundary_gs = self._get_global_states()
 
-        batch_dict: Dict[str, RolloutBatch] = {}
-        for agent in self.agents:
-            buf = self._buffers[agent]
-            final_gs = buf['final_global_state'] if buf['final_global_state'] else None
-            rnn_h = None
-            if self._is_recurrent and buf.get('rnn_hidden'):
-                rnn_h = np.concatenate(buf['rnn_hidden'], axis=0)
-            final_obs = buf['final_obs'] if buf['final_obs'] else None
-            batch_dict[agent] = RolloutBatch(
-                obs=np.concatenate(buf['obs'], axis=0),
-                act=np.concatenate(buf['act'], axis=0),
-                rew=np.concatenate(buf['rew'], axis=0),
-                done=np.concatenate(buf['done'], axis=0),
-                truncated=np.concatenate(buf['truncated'], axis=0),
-                log_prob=np.concatenate(buf['log_prob'], axis=0),
-                global_state=(
-                    np.concatenate(buf['global_state'], axis=0)
-                    if buf['global_state'] else None
-                ),
-                action_mask=(
-                    np.concatenate(buf['action_mask'], axis=0)
-                    if buf['action_mask'] else None
-                ),
-                active_mask=(
-                    np.concatenate(buf['active_mask'], axis=0)
-                    if buf['active_mask'] else None
-                ),
-                final_global_state=final_gs,
-                final_obs=final_obs,
-                rnn_hidden=rnn_h,
-                boundary_global_state=boundary_gs,
-            )
+        with self._profile("collect/batch_build"):
+            batch_dict: Dict[str, RolloutBatch] = {}
+            for agent in self.agents:
+                buf = self._buffers[agent]
+                final_gs = buf['final_global_state'] if buf['final_global_state'] else None
+                rnn_h = None
+                if self._is_recurrent and buf.get('rnn_hidden'):
+                    rnn_h = np.concatenate(buf['rnn_hidden'], axis=0)
+                final_obs = buf['final_obs'] if buf['final_obs'] else None
+                batch_dict[agent] = RolloutBatch(
+                    obs=np.concatenate(buf['obs'], axis=0),
+                    act=np.concatenate(buf['act'], axis=0),
+                    rew=np.concatenate(buf['rew'], axis=0),
+                    done=np.concatenate(buf['done'], axis=0),
+                    truncated=np.concatenate(buf['truncated'], axis=0),
+                    log_prob=np.concatenate(buf['log_prob'], axis=0),
+                    global_state=(
+                        np.concatenate(buf['global_state'], axis=0)
+                        if buf['global_state'] else None
+                    ),
+                    action_mask=(
+                        np.concatenate(buf['action_mask'], axis=0)
+                        if buf['action_mask'] else None
+                    ),
+                    active_mask=(
+                        np.concatenate(buf['active_mask'], axis=0)
+                        if buf['active_mask'] else None
+                    ),
+                    final_global_state=final_gs,
+                    final_obs=final_obs,
+                    rnn_hidden=rnn_h,
+                    boundary_global_state=boundary_gs,
+                )
 
         return CollectResult(
             batch=batch_dict,
@@ -536,52 +553,55 @@ class OffPolicyCollector(BaseCollector):
             obs_t = torch.as_tensor(self._obs, dtype=torch.float32, device=device)
             action_mask = _extract_action_mask_single(self._info, self.num_envs, device)
 
-            with torch.no_grad():
-                output = policy.forward(
-                    obs_t,
-                    state=self._hidden if self._is_recurrent else None,
-                    action_mask=action_mask,
-                )
+            with self._profile("collect/policy_forward"):
+                with torch.no_grad():
+                    output = policy.forward(
+                        obs_t,
+                        state=self._hidden if self._is_recurrent else None,
+                        action_mask=action_mask,
+                    )
 
-            act = output['act'].cpu().numpy()
-            action_mask_np = action_mask.cpu().numpy() if action_mask is not None else None
+                act = output['act'].cpu().numpy()
+                action_mask_np = action_mask.cpu().numpy() if action_mask is not None else None
 
             if self._is_recurrent:
                 self._hidden = output['state']
 
-            next_obs, rew, term, trunc, info = self.env.step(act)
+            with self._profile("collect/env_step"):
+                next_obs, rew, term, trunc, info = self.env.step(act)
             done = term | trunc
 
             next_action_mask_np = _extract_action_mask_single_np(
                 info, self.num_envs
             )
 
-            if self._is_recurrent:
-                for i in range(self.num_envs):
-                    eb = self._episode_buffers[i]
-                    eb["obs"].append(self._obs[i].copy())
-                    eb["act"].append(act[i])
-                    eb["rew"].append(rew[i])
-                    eb["next_obs"].append(next_obs[i].copy())
-                    eb["done"].append(float(done[i]))
-                    if action_mask_np is not None:
-                        eb["action_mask"].append(action_mask_np[i].copy())
-                    if next_action_mask_np is not None:
-                        eb["next_action_mask"].append(next_action_mask_np[i].copy())
+            with self._profile("collect/buffer_write"):
+                if self._is_recurrent:
+                    for i in range(self.num_envs):
+                        eb = self._episode_buffers[i]
+                        eb["obs"].append(self._obs[i].copy())
+                        eb["act"].append(act[i])
+                        eb["rew"].append(rew[i])
+                        eb["next_obs"].append(next_obs[i].copy())
+                        eb["done"].append(float(done[i]))
+                        if action_mask_np is not None:
+                            eb["action_mask"].append(action_mask_np[i].copy())
+                        if next_action_mask_np is not None:
+                            eb["next_action_mask"].append(next_action_mask_np[i].copy())
 
-                    if done[i]:
-                        self._flush_episode(i)
-                        self._hidden[:, i, :] = 0.0
-            else:
-                self.buffer.add_batch(
-                    obs=self._obs,
-                    act=act,
-                    rew=rew,
-                    next_obs=next_obs,
-                    done=done.astype(np.float32),
-                    action_mask=action_mask_np,
-                    next_action_mask=next_action_mask_np,
-                )
+                        if done[i]:
+                            self._flush_episode(i)
+                            self._hidden[:, i, :] = 0.0
+                else:
+                    self.buffer.add_batch(
+                        obs=self._obs,
+                        act=act,
+                        rew=rew,
+                        next_obs=next_obs,
+                        done=done.astype(np.float32),
+                        action_mask=action_mask_np,
+                        next_action_mask=next_action_mask_np,
+                    )
 
             self._current_rewards += rew
             self._current_lengths += 1
@@ -745,10 +765,11 @@ class MAOffPolicyCollector(BaseCollector):
 
         step_count = 0
         while step_count < n_steps:
-            actions, _outputs, new_hidden = policy.compute_actions(
-                self._obs, self._info,
-                hidden_dict=self._hidden if self._is_recurrent else None,
-            )
+            with self._profile("collect/policy_forward"):
+                actions, _outputs, new_hidden = policy.compute_actions(
+                    self._obs, self._info,
+                    hidden_dict=self._hidden if self._is_recurrent else None,
+                )
 
             if self._is_recurrent and new_hidden is not None:
                 self._hidden = new_hidden
@@ -763,11 +784,14 @@ class MAOffPolicyCollector(BaseCollector):
                     self._info, agent, self.num_envs
                 )
 
-            cur_state = self._get_global_states() if self._collect_state else None
+            with self._profile("collect/state_query"):
+                cur_state = self._get_global_states() if self._collect_state else None
 
-            next_obs, rew, term, trunc, info = self.env.step(actions)
+            with self._profile("collect/env_step"):
+                next_obs, rew, term, trunc, info = self.env.step(actions)
 
-            next_state = self._get_global_states() if self._collect_state else None
+            with self._profile("collect/state_query"):
+                next_state = self._get_global_states() if self._collect_state else None
 
             if self._collect_state and (cur_state is None or next_state is None):
                 raise RuntimeError(
@@ -782,77 +806,76 @@ class MAOffPolicyCollector(BaseCollector):
                     info, agent, self.num_envs
                 )
 
-            if self._is_recurrent:
-                for agent in self.agents:
-                    next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
-                    am = cur_action_masks[agent]
-                    actm = cur_active_masks[agent]
-                    for i in range(self.num_envs):
-                        eb = self._episode_buffers[agent][i]
-                        eb["obs"].append(self._obs[agent][i].copy())
-                        eb["act"].append(actions[agent][i])
-                        eb["rew"].append(rew[agent][i])
-                        # 截断≠真实终止：截断步的 next_obs 应用真实 final_obs（截断前最后一个状态），
-                        # 而非 auto-reset 后的初始 obs；done 只由 terminated 决定
-                        if trunc[agent][i] and isinstance(info[agent][i], dict):
-                            final_obs = info[agent][i].get("final_obs")
-                            next_obs_i = final_obs if final_obs is not None else next_obs[agent][i].copy()
-                        else:
-                            next_obs_i = next_obs[agent][i].copy()
-                        eb["next_obs"].append(next_obs_i)
-                        eb["done"].append(float(term[agent][i]))  # trunc 不视为 terminal
-                        if am is not None:
-                            eb["action_mask"].append(am[i].copy())
-                        if next_am is not None:
-                            eb["next_action_mask"].append(next_am[i].copy())
-                        if "active_mask" in eb:
-                            eb["active_mask"].append(
-                                actm[i] if actm is not None else 1.0
-                            )
-                        if "state" in eb:
-                            eb["state"].append(
-                                cur_state[i].copy() if cur_state is not None else None
-                            )
-                        if "next_state" in eb:
-                            eb["next_state"].append(
-                                next_state[i].copy() if next_state is not None else None
-                            )
-            elif self._sync_mode:
-                self._collect_sync_mlp(
-                    actions, rew, next_obs, term, trunc, info,
-                    cur_action_masks, cur_active_masks, next_active_masks,
-                    cur_state, next_state,
-                )
-            elif self._shared_sync_mode:
-                self._collect_shared_sync_mlp(
-                    actions, rew, next_obs, term, trunc, info,
-                    cur_action_masks, cur_active_masks, next_active_masks,
-                    cur_state, next_state,
-                )
-            else:
-                for agent in self.agents:
-                    # TD 语义：截断≠真实终止，done 只由 term 决定；
-                    # 截断步的 next_obs 替换为真实 final_obs（截断前最后一个状态）
-                    done_td = term[agent].astype(np.float32)
-                    next_obs_td = next_obs[agent].copy()
-                    for i in range(self.num_envs):
-                        if trunc[agent][i] and isinstance(info[agent][i], dict):
-                            final_obs = info[agent][i].get("final_obs")
-                            if final_obs is not None:
-                                next_obs_td[i] = final_obs
-                    next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
-                    self.buffers[agent].add_batch(
-                        obs=self._obs[agent],
-                        act=actions[agent],
-                        rew=rew[agent],
-                        next_obs=next_obs_td,
-                        done=done_td,
-                        action_mask=cur_action_masks[agent],
-                        next_action_mask=next_am,
-                        state=cur_state,
-                        next_state=next_state,
-                        active_mask=cur_active_masks[agent],
+            with self._profile("collect/buffer_write"):
+                if self._is_recurrent:
+                    for agent in self.agents:
+                        next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
+                        am = cur_action_masks[agent]
+                        actm = cur_active_masks[agent]
+                        for i in range(self.num_envs):
+                            eb = self._episode_buffers[agent][i]
+                            eb["obs"].append(self._obs[agent][i].copy())
+                            eb["act"].append(actions[agent][i])
+                            eb["rew"].append(rew[agent][i])
+                            # 截断≠真实终止：trunc step 使用 final_obs，done 只由 terminated 决定。
+                            if trunc[agent][i] and isinstance(info[agent][i], dict):
+                                final_obs = info[agent][i].get("final_obs")
+                                next_obs_i = final_obs if final_obs is not None else next_obs[agent][i].copy()
+                            else:
+                                next_obs_i = next_obs[agent][i].copy()
+                            eb["next_obs"].append(next_obs_i)
+                            eb["done"].append(float(term[agent][i]))  # trunc 不视为 terminal
+                            if am is not None:
+                                eb["action_mask"].append(am[i].copy())
+                            if next_am is not None:
+                                eb["next_action_mask"].append(next_am[i].copy())
+                            if "active_mask" in eb:
+                                eb["active_mask"].append(
+                                    actm[i] if actm is not None else 1.0
+                                )
+                            if "state" in eb:
+                                eb["state"].append(
+                                    cur_state[i].copy() if cur_state is not None else None
+                                )
+                            if "next_state" in eb:
+                                eb["next_state"].append(
+                                    next_state[i].copy() if next_state is not None else None
+                                )
+                elif self._sync_mode:
+                    self._collect_sync_mlp(
+                        actions, rew, next_obs, term, trunc, info,
+                        cur_action_masks, cur_active_masks, next_active_masks,
+                        cur_state, next_state,
                     )
+                elif self._shared_sync_mode:
+                    self._collect_shared_sync_mlp(
+                        actions, rew, next_obs, term, trunc, info,
+                        cur_action_masks, cur_active_masks, next_active_masks,
+                        cur_state, next_state,
+                    )
+                else:
+                    for agent in self.agents:
+                        # TD 语义：截断≠真实终止，done 只由 term 决定。
+                        done_td = term[agent].astype(np.float32)
+                        next_obs_td = next_obs[agent].copy()
+                        for i in range(self.num_envs):
+                            if trunc[agent][i] and isinstance(info[agent][i], dict):
+                                final_obs = info[agent][i].get("final_obs")
+                                if final_obs is not None:
+                                    next_obs_td[i] = final_obs
+                        next_am = _extract_agent_action_mask_np(info, agent, self.num_envs)
+                        self.buffers[agent].add_batch(
+                            obs=self._obs[agent],
+                            act=actions[agent],
+                            rew=rew[agent],
+                            next_obs=next_obs_td,
+                            done=done_td,
+                            action_mask=cur_action_masks[agent],
+                            next_action_mask=next_am,
+                            state=cur_state,
+                            next_state=next_state,
+                            active_mask=cur_active_masks[agent],
+                        )
 
             first_agent = self.agents[0]
             mean_rew = sum(rew[a] for a in self.agents) / len(self.agents)
@@ -1272,8 +1295,9 @@ class MATOnPolicyCollector(BaseCollector):
         while sim_step_count < n_steps:
             # ---- 从环境获取图结构全局状态（每 env 一份）----
             # 假设 num_envs=1（多 env 扩展见注释）
-            graph_states = self.env.call_env_method("state_mat")      # List[(N,G,3)]
-            node_idxs    = self.env.call_env_method("get_current_node_indices")  # List[(N,)]
+            with self._profile("collect/state_query"):
+                graph_states = self.env.call_env_method("state_mat")      # List[(N,G,3)]
+                node_idxs = self.env.call_env_method("get_current_node_indices")  # List[(N,)]
 
             # 取 env 0（num_envs=1 时）
             graph_state = graph_states[0]   # (N, G, 3)
@@ -1288,9 +1312,10 @@ class MATOnPolicyCollector(BaseCollector):
             am_batch          = active_mask[np.newaxis]   # (1, N)
             last_shift_env    = self._last_shift[0:1]     # (1, N, N, 2)
 
-            actions_np, log_probs_t, _, shift_new = policy.compute_joint_actions(
-                graph_state_batch, node_idx_batch, am_batch, last_shift_env
-            )
+            with self._profile("collect/policy_forward"):
+                actions_np, log_probs_t, _, shift_new = policy.compute_joint_actions(
+                    graph_state_batch, node_idx_batch, am_batch, last_shift_env
+                )
             # actions_np: (1, N)  log_probs_t: (1, N, G)  shift_new: (1, N, N, 2)
 
             actions_env = actions_np[0]           # (N,) int
@@ -1301,11 +1326,13 @@ class MATOnPolicyCollector(BaseCollector):
             # BEAU 与 MASUPEnv 相同：Discrete(max_neighbors+2)
             # 但 MAT 输出的是 graph index；需要在 env 侧映射
             # 通过 call_env_method 请求环境将 graph_index 转为实际动作
-            actions_env_mapped = self._map_graph_idx_to_env_actions(actions_env, node_idx)
+            with self._profile("collect/state_query"):
+                actions_env_mapped = self._map_graph_idx_to_env_actions(actions_env, node_idx)
 
             # ---- 环境步 ----
-            obs_dict, rew_dict, term_dict, trunc_dict, info_dict = \
-                self.env.step(actions_env_mapped)
+            with self._profile("collect/env_step"):
+                obs_dict, rew_dict, term_dict, trunc_dict, info_dict = \
+                    self.env.step(actions_env_mapped)
 
             # 共享奖励：取 agent_0 的奖励（与原论文 shared_reward 对应）
             shared_rew = self._get_shared_reward(rew_dict)
@@ -1323,14 +1350,15 @@ class MATOnPolicyCollector(BaseCollector):
             # ---- 只在有 READY agent 时存入 buffer（决策步缓冲）----
             any_ready = bool(active_mask.any())
             if any_ready:
-                self._graph_state_buf.append(graph_state.copy())
-                self._actions_buf.append(actions_env.copy())
-                self._log_probs_buf.append(log_probs_env.copy())
-                self._rewards_buf.append(float(self._change_rewards[0]))
-                self._shift_buf.append(shift_new[0].cpu().numpy().copy())
-                self._node_idx_buf.append(node_idx.copy())
-                self._active_mask_buf.append(active_mask.copy())
-                self._change_rewards[0] = 0.0  # 重置 change_reward
+                with self._profile("collect/buffer_write"):
+                    self._graph_state_buf.append(graph_state.copy())
+                    self._actions_buf.append(actions_env.copy())
+                    self._log_probs_buf.append(log_probs_env.copy())
+                    self._rewards_buf.append(float(self._change_rewards[0]))
+                    self._shift_buf.append(shift_new[0].cpu().numpy().copy())
+                    self._node_idx_buf.append(node_idx.copy())
+                    self._active_mask_buf.append(active_mask.copy())
+                    self._change_rewards[0] = 0.0  # 重置 change_reward
 
             # episode 结束时重置
             if done:
@@ -1344,8 +1372,9 @@ class MATOnPolicyCollector(BaseCollector):
             self._info = info_dict
 
         # 保存最后一步状态供 MC return bootstrap
-        last_gs = self.env.call_env_method("state_mat")[0]
-        last_ni = self.env.call_env_method("get_current_node_indices")[0]
+        with self._profile("collect/state_query"):
+            last_gs = self.env.call_env_method("state_mat")[0]
+            last_ni = self.env.call_env_method("get_current_node_indices")[0]
         last_am = self._extract_active_mask_all_agents()
         self._last_graph_state = last_gs
         self._last_node_idx = last_ni
@@ -1353,32 +1382,33 @@ class MATOnPolicyCollector(BaseCollector):
         self._last_shift_np = self._last_shift[0].cpu().numpy()
 
         # ---- 构建 MATBatch ----
-        T = len(self._rewards_buf)
-        if T == 0:
-            # 极端情况：整个 n_steps 内无决策步（不应发生）
-            batch = self._MATBatch(
-                graph_state=np.zeros((1, self.n_agents, 1, 3), dtype=np.float32),
-                actions=np.zeros((1, self.n_agents), dtype=np.int64),
-                log_probs=np.zeros((1, self.n_agents, 1), dtype=np.float32),
-                rewards=np.zeros(1, dtype=np.float32),
-                shift_action=np.zeros((1, self.n_agents, self.n_agents, 2), dtype=np.float32),
-                node_last_idx=np.zeros((1, self.n_agents), dtype=np.int32),
-                active_mask=np.ones((1, self.n_agents), dtype=np.float32),
-            )
-        else:
-            batch = self._MATBatch(
-                graph_state=np.stack(self._graph_state_buf),   # (T,N,G,3)
-                actions=np.stack(self._actions_buf),            # (T,N)
-                log_probs=np.stack(self._log_probs_buf),        # (T,N,G)
-                rewards=np.array(self._rewards_buf, dtype=np.float32),  # (T,)
-                shift_action=np.stack(self._shift_buf),         # (T,N,N,2)
-                node_last_idx=np.stack(self._node_idx_buf),     # (T,N)
-                active_mask=np.stack(self._active_mask_buf),    # (T,N)
-                last_graph_state=self._last_graph_state,
-                last_node_idx=self._last_node_idx,
-                last_active_mask=self._last_active_mask,
-                last_shift=self._last_shift_np,
-            )
+        with self._profile("collect/batch_build"):
+            T = len(self._rewards_buf)
+            if T == 0:
+                # 极端情况：整个 n_steps 内无决策步（不应发生）
+                batch = self._MATBatch(
+                    graph_state=np.zeros((1, self.n_agents, 1, 3), dtype=np.float32),
+                    actions=np.zeros((1, self.n_agents), dtype=np.int64),
+                    log_probs=np.zeros((1, self.n_agents, 1), dtype=np.float32),
+                    rewards=np.zeros(1, dtype=np.float32),
+                    shift_action=np.zeros((1, self.n_agents, self.n_agents, 2), dtype=np.float32),
+                    node_last_idx=np.zeros((1, self.n_agents), dtype=np.int32),
+                    active_mask=np.ones((1, self.n_agents), dtype=np.float32),
+                )
+            else:
+                batch = self._MATBatch(
+                    graph_state=np.stack(self._graph_state_buf),   # (T,N,G,3)
+                    actions=np.stack(self._actions_buf),            # (T,N)
+                    log_probs=np.stack(self._log_probs_buf),        # (T,N,G)
+                    rewards=np.array(self._rewards_buf, dtype=np.float32),  # (T,)
+                    shift_action=np.stack(self._shift_buf),         # (T,N,N,2)
+                    node_last_idx=np.stack(self._node_idx_buf),     # (T,N)
+                    active_mask=np.stack(self._active_mask_buf),    # (T,N)
+                    last_graph_state=self._last_graph_state,
+                    last_node_idx=self._last_node_idx,
+                    last_active_mask=self._last_active_mask,
+                    last_shift=self._last_shift_np,
+                )
 
         return CollectResult(
             batch=batch,

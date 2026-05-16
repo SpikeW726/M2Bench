@@ -8,6 +8,9 @@
 
 import math
 import random
+import time
+from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Optional
@@ -109,6 +112,82 @@ class SimpleLogger:
             gs = int(step)
             payload["global_step"] = gs
             wandb.log(payload, step=gs)
+
+
+class TrainingStageProfiler:
+    """按 iteration 聚合训练阶段耗时，CUDA 路径会同步以避免低估 GPU update。"""
+
+    def __init__(self, device: torch.device, sync_cuda: Optional[bool] = None):
+        self.device = device
+        self.sync_cuda = (
+            device.type == "cuda" and torch.cuda.is_available()
+            if sync_cuda is None
+            else bool(sync_cuda)
+        )
+        self._iter_times: Dict[str, float] = defaultdict(float)
+        self._total_times: Dict[str, float] = defaultdict(float)
+        self._iter_inclusive_times: Dict[str, float] = defaultdict(float)
+        self._total_inclusive_times: Dict[str, float] = defaultdict(float)
+        self._last_times: Dict[str, float] = {}
+        self._stack: list[list[object]] = []
+
+    def _sync(self) -> None:
+        if self.sync_cuda:
+            torch.cuda.synchronize(self.device)
+
+    @contextmanager
+    def time_block(self, name: str):
+        self._sync()
+        start = time.perf_counter()
+        frame = [name, start, 0.0]  # name, start, nested_child_time
+        self._stack.append(frame)
+        try:
+            yield
+        finally:
+            self._sync()
+            elapsed = time.perf_counter() - start
+            popped = self._stack.pop()
+            child_time = float(popped[2])
+            exclusive = max(0.0, elapsed - child_time)
+            self._iter_times[name] += exclusive
+            self._total_times[name] += exclusive
+            self._iter_inclusive_times[name] += elapsed
+            self._total_inclusive_times[name] += elapsed
+            if self._stack:
+                self._stack[-1][2] = float(self._stack[-1][2]) + elapsed
+
+    def consume_iteration_metrics(self) -> Dict[str, float]:
+        if not self._iter_times:
+            return {}
+
+        times = dict(self._iter_times)
+        inclusive_times = dict(self._iter_inclusive_times)
+        total = sum(times.values())
+        metrics: Dict[str, float] = {
+            "profile/iter_profiled_s": float(total),
+            "profile/cuda_synchronized": float(self.sync_cuda),
+        }
+        for name, seconds in times.items():
+            metrics[f"profile/{name}_s"] = float(seconds)
+            metrics[f"profile_pct/{name}"] = float(100.0 * seconds / total) if total > 0 else 0.0
+        for name, seconds in inclusive_times.items():
+            metrics[f"profile_inclusive/{name}_s"] = float(seconds)
+
+        self._last_times = times
+        self._iter_times.clear()
+        self._iter_inclusive_times.clear()
+        return metrics
+
+    def format_last(self, top_k: int = 6) -> str:
+        if not self._last_times:
+            return ""
+        total = sum(self._last_times.values())
+        ranked = sorted(self._last_times.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+        parts = []
+        for name, seconds in ranked:
+            pct = 100.0 * seconds / total if total > 0 else 0.0
+            parts.append(f"{name}={seconds:.3f}s({pct:.0f}%)")
+        return ", ".join(parts)
 
 
 # =============================================================================
@@ -847,6 +926,8 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
 
     # ---- 8. 构建 Collector ----
     collector = _build_collector(config, algorithm, vec_env, dims)
+    profiler = TrainingStageProfiler(device)
+    collector.profiler = profiler
 
     # ---- 9. 定义 Callbacks ----
     def _make_net_config_dict(net, input_dim, output_dim):
@@ -962,6 +1043,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         log_extra_fn=log_extra_fn,
         logger=logger,
         eval_fn=inline_eval_fn,
+        profiler=profiler,
     )
 
     # ---- 10.5. 若提供 early_stopper，patch trainer 的 log_extra_fn + on_eval_complete ----
@@ -997,6 +1079,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         print(f"  Buffer size: {tc.buffer_size}, Batch size: {tc.batch_size}, "
               f"Warmup: {tc.warmup_steps}")
     print(f"  Device: {device}")
+    print(f"  Profiling: enabled (cuda_sync={profiler.sync_cuda})")
     print(f"  Save dir: {config.save_dir}")
 
     final_dir = config.save_dir / "final"
