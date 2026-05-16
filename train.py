@@ -160,33 +160,47 @@ class TrainingStageProfiler:
         if not self._iter_times:
             return {}
 
-        times = dict(self._iter_times)
-        inclusive_times = dict(self._iter_inclusive_times)
-        total = sum(times.values())
+        excl = dict(self._iter_times)          # exclusive：各阶段自身耗时，无重叠
+        incl = dict(self._iter_inclusive_times) # inclusive：含所有子阶段的墙钟时间
+        total_excl = sum(excl.values())
         metrics: Dict[str, float] = {
-            "profile/iter_profiled_s": float(total),
+            "profile/iter_profiled_s": float(total_excl),
             "profile/cuda_synchronized": float(self.sync_cuda),
         }
-        for name, seconds in times.items():
-            metrics[f"profile/{name}_s"] = float(seconds)
-            metrics[f"profile_pct/{name}"] = float(100.0 * seconds / total) if total > 0 else 0.0
-        for name, seconds in inclusive_times.items():
-            metrics[f"profile_inclusive/{name}_s"] = float(seconds)
+        # profile/{name}_s = inclusive（含子阶段），便于直接与其他 inclusive 指标对比
+        all_names = set(excl) | set(incl)
+        for name in all_names:
+            inc_s = incl.get(name, excl.get(name, 0.0))
+            exc_s = excl.get(name, 0.0)
+            metrics[f"profile/{name}_s"] = float(inc_s)
+            # 百分比用 exclusive，保证所有叶节点之和 ≈ 100%
+            metrics[f"profile_pct/{name}"] = (
+                float(100.0 * exc_s / total_excl) if total_excl > 0 else 0.0
+            )
 
-        self._last_times = times
+        # _last_times 存 inclusive，供 format_last 打印有意义的时间
+        self._last_times = {n: incl.get(n, excl.get(n, 0.0)) for n in all_names}
         self._iter_times.clear()
         self._iter_inclusive_times.clear()
         return metrics
 
     def format_last(self, top_k: int = 6) -> str:
+        """打印 inclusive 耗时 top-k，百分比相对于 exclusive 总量（不重叠）。"""
         if not self._last_times:
             return ""
-        total = sum(self._last_times.values())
+        excl = dict(self._total_times)  # 用累计 exclusive 做占比分母
+        total_excl = sum(
+            v for k, v in excl.items()
+            if k in self._last_times
+        )
+        if total_excl == 0:
+            total_excl = sum(self._last_times.values()) or 1.0
         ranked = sorted(self._last_times.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
         parts = []
-        for name, seconds in ranked:
-            pct = 100.0 * seconds / total if total > 0 else 0.0
-            parts.append(f"{name}={seconds:.3f}s({pct:.0f}%)")
+        for name, inc_s in ranked:
+            exc_s = excl.get(name, inc_s)
+            pct = 100.0 * exc_s / total_excl if total_excl > 0 else 0.0
+            parts.append(f"{name}={inc_s:.3f}s({pct:.0f}%)")
         return ", ".join(parts)
 
 
@@ -455,13 +469,18 @@ def _build_policy(
                 shared=shared,
             )
         else:
+            shared = (
+                getattr(config.algo, "shared_policy", False)
+                if config.algo_name == "ippo"
+                else True
+            )
             return MultiAgentPolicy(
                 agent_ids=dims["agent_ids"],
                 obs_space=dims["obs_space"],
                 action_space=dims["action_space"],
                 policy_class=ActorPolicy,
                 policy_kwargs={"actor": actor_net},
-                shared=True,
+                shared=shared,
             )
     else:
         # ---- 单体路径（集中式 Gymnasium 环境） ----

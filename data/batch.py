@@ -81,8 +81,21 @@ class BaseBatch:
             yield self
             return
         
-        # Generate indices
-        indices = np.random.permutation(length) if shuffle else np.arange(length)
+        # Generate indices on the same device as tensor batches to avoid CPU index hops.
+        index_device = None
+        for f in fields(self):
+            val = getattr(self, f.name)
+            if isinstance(val, torch.Tensor):
+                index_device = val.device
+                break
+        if index_device is not None:
+            indices = (
+                torch.randperm(length, device=index_device)
+                if shuffle
+                else torch.arange(length, device=index_device)
+            )
+        else:
+            indices = np.random.permutation(length) if shuffle else np.arange(length)
         
         # Check if we need to merge last batch
         merge_last = merge_last and (length % size > 0)

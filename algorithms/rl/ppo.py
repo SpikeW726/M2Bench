@@ -63,8 +63,8 @@ class PPOBase(A2CBase):
             ent_loss = entropy.mean()
 
         with torch.no_grad():
-            clipfrac = ((ratio - 1.0).abs() > self.clip_range).float().mean().item()
-            approx_kl = ((ratio - 1) - logratio).mean().item()
+            clipfrac = ((ratio - 1.0).abs() > self.clip_range).float().mean().detach()
+            approx_kl = ((ratio - 1) - logratio).mean().detach()
 
         return pg_loss, ent_loss, {"clipfrac": clipfrac, "approx_kl": approx_kl}
 
@@ -88,6 +88,8 @@ class PPOBase(A2CBase):
         """KL early stopping。"""
         kl_values = [e.get("approx_kl", 0.0) for e in epoch_extra_list if "approx_kl" in e]
         if kl_values and self.target_kl is not None:
+            if isinstance(kl_values[0], torch.Tensor):
+                return bool(torch.stack(kl_values).mean().item() > self.target_kl)
             return np.mean(kl_values) > self.target_kl
         return False
 

@@ -29,6 +29,7 @@ env:
     contribution_scale: 0.05
 
 algo:
+  shared_policy: false
   use_active_mask: true
   lr: 3.0e-4
   gamma: 0.99

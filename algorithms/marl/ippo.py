@@ -179,8 +179,8 @@ class IPPOAlgo(PPOBase):
                 total_pg_loss = torch.tensor(0.0, device=self.device)
                 total_v_loss = torch.tensor(0.0, device=self.device)
                 total_entropy = torch.tensor(0.0, device=self.device)
-                mb_clipfrac = 0.0
-                mb_approx_kl_val = 0.0
+                mb_clipfrac = torch.tensor(0.0, device=self.device)
+                mb_approx_kl_val = torch.tensor(0.0, device=self.device)
 
                 for agent in agents:
                     mb = agent_mbs[agent][mb_idx]
@@ -279,8 +279,12 @@ class IPPOAlgo(PPOBase):
                     total_entropy = total_entropy + ent_loss
 
                     with torch.no_grad():
-                        mb_clipfrac += ((ratio - 1.0).abs() > self.clip_range).float().mean().item()
-                        mb_approx_kl_val += ((ratio - 1) - logratio).mean().item()
+                        mb_clipfrac = mb_clipfrac + (
+                            (ratio - 1.0).abs() > self.clip_range
+                        ).float().mean().detach()
+                        mb_approx_kl_val = mb_approx_kl_val + (
+                            (ratio - 1) - logratio
+                        ).mean().detach()
 
                 avg_pg = total_pg_loss / n_agents
                 avg_v = total_v_loss / n_agents
@@ -298,28 +302,33 @@ class IPPOAlgo(PPOBase):
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
 
-                all_pg_loss.append(avg_pg.item())
-                all_v_loss.append(avg_v.item())
-                all_entropy.append(avg_ent.item())
-                all_clipfrac.append(mb_clipfrac / n_agents)
-                all_grad_norm.append(grad_norm.item())
-                epoch_approx_kl.append(mb_approx_kl_val / n_agents)
+                all_pg_loss.append(avg_pg.detach())
+                all_v_loss.append(avg_v.detach())
+                all_entropy.append(avg_ent.detach())
+                all_clipfrac.append((mb_clipfrac / n_agents).detach())
+                all_grad_norm.append(grad_norm.detach())
+                epoch_approx_kl.append((mb_approx_kl_val / n_agents).detach())
 
             if epoch_approx_kl:
-                avg_epoch_kl = np.mean(epoch_approx_kl)
+                avg_epoch_kl = torch.stack(epoch_approx_kl).mean()
                 all_approx_kl.append(avg_epoch_kl)
-                if self.target_kl is not None and avg_epoch_kl > self.target_kl:
+                if self.target_kl is not None and avg_epoch_kl.item() > self.target_kl:
                     break
 
+        def _mean_stat(vals) -> float:
+            if vals and isinstance(vals[0], torch.Tensor):
+                return float(torch.stack([v.detach() for v in vals]).mean().item())
+            return float(np.mean(vals))
+
         return TrainingStats(
-            loss=np.mean(all_pg_loss) + self.vf_coef * np.mean(all_v_loss),
-            policy_loss=np.mean(all_pg_loss),
-            value_loss=np.mean(all_v_loss),
-            entropy=np.mean(all_entropy),
+            loss=_mean_stat(all_pg_loss) + self.vf_coef * _mean_stat(all_v_loss),
+            policy_loss=_mean_stat(all_pg_loss),
+            value_loss=_mean_stat(all_v_loss),
+            entropy=_mean_stat(all_entropy),
             extra={
-                "clipfrac": np.mean(all_clipfrac),
-                "approx_kl": np.mean(all_approx_kl) if all_approx_kl else 0.0,
-                "grad_norm": np.mean(all_grad_norm),
+                "clipfrac": _mean_stat(all_clipfrac),
+                "approx_kl": _mean_stat(all_approx_kl) if all_approx_kl else 0.0,
+                "grad_norm": _mean_stat(all_grad_norm),
             },
         )
 

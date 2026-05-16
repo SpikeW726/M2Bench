@@ -102,7 +102,7 @@ class A2CBase(ActorCriticOnPolicyAlgo):
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
 
-        return {"grad_norm": grad_norm.item()}
+        return {"grad_norm": grad_norm.detach()}
 
     def _on_epoch_end(self, epoch_extra_list: List[dict]) -> bool:
         """每个 epoch 结束后调用。返回 True 触发 early stopping。"""
@@ -262,9 +262,9 @@ class A2CBase(ActorCriticOnPolicyAlgo):
                 )
 
                 # ---- collect stats ----
-                all_pg_loss.append(pg_loss.item())
-                all_v_loss.append(v_loss.item())
-                all_entropy.append(ent_loss.item())
+                all_pg_loss.append(pg_loss.detach())
+                all_v_loss.append(v_loss.detach())
+                all_entropy.append(ent_loss.detach())
                 epoch_extra.append(pg_extra)
                 all_grad.append(grad_info)
 
@@ -274,25 +274,30 @@ class A2CBase(ActorCriticOnPolicyAlgo):
                 break
 
         # ---- aggregate stats ----
+        def _mean_stat(vals) -> float:
+            if vals and isinstance(vals[0], torch.Tensor):
+                return float(torch.stack([v.detach() for v in vals]).mean().item())
+            return float(np.mean(vals))
+
         extra: Dict[str, float] = {}
         if all_extra:
             all_keys = {k for e in all_extra for k in e}
             for key in all_keys:
                 vals = [e[key] for e in all_extra if key in e]
                 if vals:
-                    extra[key] = float(np.mean(vals))
+                    extra[key] = _mean_stat(vals)
         if all_grad:
             all_keys = {k for g in all_grad for k in g}
             for key in all_keys:
                 vals = [g[key] for g in all_grad if key in g]
                 if vals:
-                    extra[key] = float(np.mean(vals))
+                    extra[key] = _mean_stat(vals)
 
         return TrainingStats(
-            loss=np.mean(all_pg_loss) + self.vf_coef * np.mean(all_v_loss),
-            policy_loss=np.mean(all_pg_loss),
-            value_loss=np.mean(all_v_loss),
-            entropy=np.mean(all_entropy),
+            loss=_mean_stat(all_pg_loss) + self.vf_coef * _mean_stat(all_v_loss),
+            policy_loss=_mean_stat(all_pg_loss),
+            value_loss=_mean_stat(all_v_loss),
+            entropy=_mean_stat(all_entropy),
             extra=extra,
         )
 

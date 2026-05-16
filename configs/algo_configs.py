@@ -59,8 +59,13 @@ class PPOParams(OnPolicyParams):
 
 @dataclass(kw_only=True)
 class IPPOParams(PPOParams):
-    """单优化器 PPO 参数 (PPO / IPPO 共用)"""
+    """IPPO 参数。
+
+    shared_policy=False 表示每个 agent 使用独立 actor 参数，符合 IPPO 语义。
+    如需旧的参数共享行为，可在 YAML 中显式设置 shared_policy: true。
+    """
     lr: float = 3e-4
+    shared_policy: bool = False
     # LR scheduler (单优化器)
     use_lr_scheduler: bool = False
     lr_start_factor: float = 1.0

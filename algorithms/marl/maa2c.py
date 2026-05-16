@@ -102,7 +102,7 @@ class MAA2CAlgo(A2CBase, CentralizedCriticMixin):
                 self.policy.parameters(), self.max_grad_norm,
             )
             self.actor_optimizer.step()
-            grad_info["actor_grad_norm"] = actor_grad.item()
+            grad_info["actor_grad_norm"] = actor_grad.detach()
 
         critic_loss = self.vf_coef * v_loss
         self.critic_optimizer.zero_grad()
@@ -111,7 +111,7 @@ class MAA2CAlgo(A2CBase, CentralizedCriticMixin):
             self.critic.parameters(), self.max_grad_norm,
         )
         self.critic_optimizer.step()
-        grad_info["critic_grad_norm"] = critic_grad.item()
+        grad_info["critic_grad_norm"] = critic_grad.detach()
 
         if self.actor_scheduler is not None:
             self.actor_scheduler.step()

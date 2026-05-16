@@ -228,7 +228,8 @@ class MultiAgentPolicy(nn.Module):
                     np.stack(masks), dtype=torch.bool, device=self.device
                 )
 
-        with torch.no_grad():
+        infer_ctx = torch.no_grad() if self.is_recurrent else torch.inference_mode()
+        with infer_ctx:
             outputs = self.forward(
                 obs_tensor,
                 state_dict=hidden_dict,

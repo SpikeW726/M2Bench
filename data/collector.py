@@ -162,7 +162,8 @@ class OnPolicyCollector(BaseCollector):
                 )
 
             with self._profile("collect/policy_forward"):
-                with torch.no_grad():
+                infer_ctx = torch.no_grad() if self._is_recurrent else torch.inference_mode()
+                with infer_ctx:
                     output = policy.forward(
                         obs_t,
                         state=self._hidden if self._is_recurrent else None,
@@ -321,11 +322,13 @@ class MAOnPolicyCollector(BaseCollector):
 
             # RNN: 存储当前步的 hidden（作为该步的 initial hidden）
             if self._is_recurrent:
-                for agent in self.agents:
-                    # (recurrent_N, num_envs, H) → (num_envs, recurrent_N, H)
-                    self._buffers[agent]['rnn_hidden'].append(
-                        self._hidden[agent].transpose(0, 1).cpu().numpy()
-                    )
+                # 一次性搬到 CPU，避免每个 agent 各触发一次同步。
+                hidden_np = torch.stack(
+                    [self._hidden[agent].transpose(0, 1) for agent in self.agents],
+                    dim=0,
+                ).cpu().numpy()
+                for agent_idx, agent in enumerate(self.agents):
+                    self._buffers[agent]['rnn_hidden'].append(hidden_np[agent_idx])
 
             with self._profile("collect/policy_forward"):
                 actions, outputs, new_hidden = policy.compute_actions(
@@ -337,11 +340,16 @@ class MAOnPolicyCollector(BaseCollector):
                 self._hidden = new_hidden
 
             with self._profile("collect/buffer_write"):
-                for agent in self.agents:
+                # log_prob 同步合并为一次 CPU copy，减少采样阶段 GPU 同步次数。
+                log_prob_np = torch.stack(
+                    [outputs[agent]['log_prob'] for agent in self.agents],
+                    dim=0,
+                ).cpu().numpy()
+                for agent_idx, agent in enumerate(self.agents):
                     buf = self._buffers[agent]
                     buf['obs'].append(self._obs[agent].copy())
                     buf['act'].append(actions[agent].copy())
-                    buf['log_prob'].append(outputs[agent]['log_prob'].cpu().numpy())
+                    buf['log_prob'].append(log_prob_np[agent_idx])
 
                     if global_states is not None:
                         buf['global_state'].append(global_states.copy())
@@ -554,7 +562,8 @@ class OffPolicyCollector(BaseCollector):
             action_mask = _extract_action_mask_single(self._info, self.num_envs, device)
 
             with self._profile("collect/policy_forward"):
-                with torch.no_grad():
+                infer_ctx = torch.no_grad() if self._is_recurrent else torch.inference_mode()
+                with infer_ctx:
                     output = policy.forward(
                         obs_t,
                         state=self._hidden if self._is_recurrent else None,

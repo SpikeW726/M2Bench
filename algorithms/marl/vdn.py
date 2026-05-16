@@ -231,14 +231,14 @@ class VDNAlgo(BaseAlgorithm):
         td_err = (td_target - q_tot).detach().abs()
         if active_mask is not None:
             am_sum = active_mask.sum().clamp(min=1)
-            td_err_scalar = (td_err * active_mask).sum().item() / am_sum.item()
+            td_err_scalar = (td_err * active_mask).sum() / am_sum
             q_active = q_tot.detach()[active_mask > 0.5]
         else:
-            td_err_scalar = td_err.mean().item()
+            td_err_scalar = td_err.mean()
             q_active = q_tot.detach()
         info = {
-            "q_tot_mean": q_active.mean().item() if q_active.numel() > 0 else 0.0,
-            "q_tot_max":  q_active.max().item()  if q_active.numel() > 0 else 0.0,
+            "q_tot_mean": q_active.mean() if q_active.numel() > 0 else torch.tensor(0.0, device=q_tot.device),
+            "q_tot_max":  q_active.max()  if q_active.numel() > 0 else torch.tensor(0.0, device=q_tot.device),
             "td_error": td_err_scalar,
         }
         return loss, info
@@ -384,9 +384,9 @@ class VDNAlgo(BaseAlgorithm):
         loss  = (td_loss * mask_train).sum() / denom
 
         info = {
-            "q_tot_mean": q_tot.detach().mean().item(),
-            "q_tot_max":  q_tot.detach().max().item(),
-            "td_error":   ((td_target - q_tot).abs() * mask_train).sum().item() / denom.item(),
+            "q_tot_mean": q_tot.detach().mean(),
+            "q_tot_max":  q_tot.detach().max(),
+            "td_error":   ((td_target - q_tot).detach().abs() * mask_train).sum() / denom,
         }
         return loss, info
 
@@ -424,12 +424,15 @@ class VDNAlgo(BaseAlgorithm):
         if self._update_count % self.target_update_freq == 0:
             self._update_target_networks()
 
+        def _as_float(value) -> float:
+            return float(value.detach().item()) if isinstance(value, torch.Tensor) else float(value)
+
         return TrainingStats(
-            loss=loss.item(),
+            loss=float(loss.detach().item()),
             extra={
-                "q_tot_mean": info["q_tot_mean"],
-                "q_tot_max": info["q_tot_max"],
-                "td_error": info["td_error"],
+                "q_tot_mean": _as_float(info["q_tot_mean"]),
+                "q_tot_max": _as_float(info["q_tot_max"]),
+                "td_error": _as_float(info["td_error"]),
                 "epsilon": self._get_current_epsilon(),
             },
         )

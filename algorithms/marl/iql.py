@@ -152,9 +152,9 @@ class IQLAlgo(BaseAlgorithm):
             loss = per_sample_loss.mean()
 
         info = {
-            "q_mean": q_values.mean().item(),
-            "q_max": q_values.max().item(),
-            "td_error": (td_target - q_current).detach().abs().mean().item(),
+            "q_mean": q_values.detach().mean(),
+            "q_max": q_values.detach().max(),
+            "td_error": (td_target - q_current).detach().abs().mean(),
         }
         return loss, info
 
@@ -258,10 +258,12 @@ class IQLAlgo(BaseAlgorithm):
         loss = (td_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1)
 
         info = {
-            "q_mean": q_train.mean().item(),
-            "q_max": q_train.max().item(),
-            "td_error": ((td_target - q_current).abs() * loss_mask).sum().item()
-            / loss_mask.sum().clamp(min=1).item(),
+            "q_mean": q_train.detach().mean(),
+            "q_max": q_train.detach().max(),
+            "td_error": (
+                ((td_target - q_current).detach().abs() * loss_mask).sum()
+                / loss_mask.sum().clamp(min=1)
+            ),
         }
         return loss, info
 
@@ -357,7 +359,7 @@ class IQLAlgo(BaseAlgorithm):
                 )
             optimizer.step()
 
-            all_loss.append(loss.item())
+            all_loss.append(loss.detach())
             all_q_mean.append(info["q_mean"])
             all_q_max.append(info["q_max"])
             all_td_error.append(info["td_error"])
@@ -379,12 +381,17 @@ class IQLAlgo(BaseAlgorithm):
         if self._update_count % self.target_update_freq == 0:
             self._update_target_networks()
 
+        def _mean_stat(vals) -> float:
+            if vals and isinstance(vals[0], torch.Tensor):
+                return float(torch.stack([v.detach() for v in vals]).mean().item())
+            return float(np.mean(vals))
+
         return TrainingStats(
-            loss=float(np.mean(all_loss)),
+            loss=_mean_stat(all_loss),
             extra={
-                "q_mean": float(np.mean(all_q_mean)),
-                "q_max": float(np.mean(all_q_max)),
-                "td_error": float(np.mean(all_td_error)),
+                "q_mean": _mean_stat(all_q_mean),
+                "q_max": _mean_stat(all_q_max),
+                "td_error": _mean_stat(all_td_error),
                 "epsilon_mean": float(np.mean(all_epsilon)),
             },
         )

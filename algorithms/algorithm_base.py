@@ -530,7 +530,12 @@ class QLearningOffPolicyAlgo(BaseAlgorithm):
             nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
         self.optimizer.step()
 
-        stats.loss = loss.item()
+        stats.loss = float(loss.detach().item())
+        if stats.extra:
+            stats.extra = {
+                k: float(v.detach().item()) if isinstance(v, torch.Tensor) else v
+                for k, v in stats.extra.items()
+            }
 
         self._update_count += 1
         if self._update_count % self.target_update_freq == 0:

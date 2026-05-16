@@ -58,7 +58,8 @@ class RLBasePolicy(nn.Module, ABC):
         """
         obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
         
-        with torch.no_grad():
+        infer_ctx = torch.no_grad() if self.is_recurrent else torch.inference_mode()
+        with infer_ctx:
             output = self.forward(obs_tensor, state=state, **kwargs)
         
         act = output['act']
