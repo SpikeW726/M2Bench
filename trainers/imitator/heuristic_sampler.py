@@ -6,6 +6,7 @@ HeuristicSampler: 使用启发式策略采集样本用于预训练 Actor/Critic 
 - critic_states: [N, T, M, State_Dim+M] Float32 - Centralized Critic输入 (global_state + agent_one_hot)
 - actions: [N, T, M, 1] Int64 - 动作索引
 - action_masks: [N, T, M, Act_Dim] Int8 - 动作掩码
+- active_masks: [N, T, M, 1] Int8 - 决策步掩码 (1=READY, 0=ON_EDGE)
 - rewards: [N, T, M, 1] Float32 - 每个智能体的奖励
 - padded_mask: [N, T, 1] Int8 - 填充掩码 (1=真实, 0=填充)
 - returns: [N, T, M, 1] Float32 - 每个智能体的累计折扣回报
@@ -33,6 +34,37 @@ from policies.heuritic.er import ERPolicy
 from envs.mdps.base_envs import EventDrivenEnv
 from configs.registry import ENV_REGISTRY, _import_class
 
+# 策略注册表：name -> (module, class_name)
+_POLICY_REGISTRY: Dict[str, tuple] = {
+    "er":           ("policies.heuritic.er",                    "ERPolicy"),
+    "hpcc":         ("policies.heuritic.hpcc",                  "HPCCPolicy"),
+    "random":       ("policies.heuritic.random",                "RandomPolicy"),
+    "ahpa":         ("policies.heuritic.ahpa",                  "AHPAPolicy"),
+    "baps":         ("policies.heuritic.baps",                  "BAPSPolicy"),
+    "gbs":          ("policies.heuritic.gbs",                   "GBSPolicy"),
+    "cc":           ("policies.heuritic.conscientious_cognitive","ConscientiousCognitivePolicy"),
+    "cr":           ("policies.heuritic.conscientious_reactive", "ConscientiousReactivePolicy"),
+    "msp":          ("policies.heuritic.msp",                   "MSPPolicy"),
+    "cid":          ("policies.heuritic.cid",                   "CIDPolicy"),
+    "sebs":         ("policies.heuritic.sebs",                  "SEBSPolicy"),
+    "cbls":         ("policies.heuritic.cbls",                  "CBLSPolicy"),
+    "dta_greedy":   ("policies.heuritic.dta_greedy",            "DTAGreedyPolicy"),
+    "dta_ssi":      ("policies.heuritic.dta_ssi",               "DTASSIPolicy"),
+}
+
+
+def _create_policy(policy_type: str, num_agents: int, policy_config: dict) -> HeuriticBasePolicy:
+    """根据 policy_type 名称实例化对应的启发式策略。"""
+    key = policy_type.lower()
+    if key not in _POLICY_REGISTRY:
+        raise ValueError(
+            f"Unknown policy_type '{policy_type}'. "
+            f"Available: {list(_POLICY_REGISTRY.keys())}"
+        )
+    module_path, class_name = _POLICY_REGISTRY[key]
+    cls = _import_class(module_path, class_name)
+    return cls(num_agents, policy_config)
+
 
 @dataclass
 class EpisodeData:
@@ -41,6 +73,7 @@ class EpisodeData:
     critic_states: List[np.ndarray] = field(default_factory=list)     # [T_ep, M, State_Dim+M]
     actions: List[np.ndarray] = field(default_factory=list)           # [T_ep, M, 1]
     action_masks: List[np.ndarray] = field(default_factory=list)      # [T_ep, M, Act_Dim]
+    active_masks: List[np.ndarray] = field(default_factory=list)      # [T_ep, M, 1]
     rewards: List[np.ndarray] = field(default_factory=list)           # [T_ep, M]
     
     @property
@@ -55,12 +88,15 @@ def _worker_collect_episodes(
     Worker 进程：采集指定数量的 episodes (旧版本，保留向后兼容)
     
     Args:
-        args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config[, env_type])
+        args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config[, env_type[, policy_type]])
     
     Returns:
         List of episode data dicts (已转换为 numpy arrays)
     """
-    if len(args) == 7:
+    policy_type = "er"
+    if len(args) == 8:
+        num_episodes, worker_id, eps, env_config, custom_config, policy_config, env_type, policy_type = args
+    elif len(args) == 7:
         num_episodes, worker_id, eps, env_config, custom_config, policy_config, env_type = args
     else:
         num_episodes, worker_id, eps, env_config, custom_config, policy_config = args
@@ -71,7 +107,7 @@ def _worker_collect_episodes(
     env_cls = _import_class(entry["module"], entry["class_name"])
     env = env_cls(env_config, **custom_config)
     num_agents = env_config.get("num_agents", 3)
-    policy = ERPolicy(num_agents, policy_config)
+    policy = _create_policy(policy_type, num_agents, policy_config)
     
     # 缓存维度信息
     obs_dim = env.observation_space(env.possible_agents[0]).shape[0]
@@ -97,12 +133,16 @@ def _worker_collect_to_file(args: Tuple) -> str:
     
     Args:
         args: (num_episodes, worker_id, eps, env_config, custom_config, policy_config,
-               temp_dir, chunk_size, gamma[, env_type])
+               temp_dir, chunk_size, gamma[, env_type[, policy_type]])
     
     Returns:
         临时文件路径列表（逗号分隔）
     """
-    if len(args) == 10:
+    policy_type = "er"
+    if len(args) == 11:
+        (num_episodes, worker_id, eps, env_config, custom_config, policy_config,
+         temp_dir, chunk_size, gamma, env_type, policy_type) = args
+    elif len(args) == 10:
         (num_episodes, worker_id, eps, env_config, custom_config, policy_config,
          temp_dir, chunk_size, gamma, env_type) = args
     else:
@@ -115,7 +155,7 @@ def _worker_collect_to_file(args: Tuple) -> str:
     env_cls = _import_class(entry["module"], entry["class_name"])
     env = env_cls(env_config, **custom_config)
     num_agents = env_config.get("num_agents", 3)
-    policy = ERPolicy(num_agents, policy_config)
+    policy = _create_policy(policy_type, num_agents, policy_config)
     
     # 缓存维度信息
     obs_dim = env.observation_space(env.possible_agents[0]).shape[0]
@@ -172,6 +212,7 @@ def _save_chunk_to_file(
     critic_states = np.zeros([N, max_len, num_agents, critic_state_dim], dtype=np.float32)
     actions = np.zeros([N, max_len, num_agents, 1], dtype=np.int64)
     action_masks = np.zeros([N, max_len, num_agents, act_dim], dtype=np.int8)
+    active_masks = np.zeros([N, max_len, num_agents, 1], dtype=np.int8)
     rewards = np.zeros([N, max_len, num_agents, 1], dtype=np.float32)
     padded_mask = np.zeros([N, max_len, 1], dtype=np.int8)
     returns = np.zeros([N, max_len, num_agents, 1], dtype=np.float32)
@@ -182,6 +223,10 @@ def _save_chunk_to_file(
         critic_states[i, :L] = ep['critic_states']
         actions[i, :L] = ep['actions']
         action_masks[i, :L] = ep['action_masks']
+        active_masks[i, :L] = ep.get(
+            'active_masks',
+            np.ones((L, num_agents, 1), dtype=np.int8),
+        )
         rewards[i, :L, :, 0] = ep['rewards']
         padded_mask[i, :L, 0] = 1
         
@@ -190,7 +235,8 @@ def _save_chunk_to_file(
         returns[i, :L, :, 0] = ep_returns
     
     np.savez(save_path, obs=obs, critic_states=critic_states, actions=actions,
-             action_masks=action_masks, rewards=rewards, padded_mask=padded_mask, returns=returns)
+             action_masks=action_masks, active_masks=active_masks,
+             rewards=rewards, padded_mask=padded_mask, returns=returns)
 
 
 def _compute_returns_static(rewards: np.ndarray, gamma: float) -> np.ndarray:
@@ -221,6 +267,7 @@ def _collect_single_episode(
     critic_states_list = []
     actions_list = []
     action_masks_list = []
+    active_masks_list = []
     rewards_list = []
     
     obs_rl, info = env.reset()
@@ -268,6 +315,13 @@ def _collect_single_episode(
         # action_masks: [M, Act_Dim]
         masks_arr = np.stack([info[f"agent_{i}"]['action_mask'] for i in range(num_agents)], axis=0).astype(np.int8)
         action_masks_list.append(masks_arr)
+
+        # active_masks: [M, 1]，用于预训练阶段对齐 RL 的 loss masking
+        active_arr = np.array(
+            [[info[f"agent_{i}"].get('active_mask', 1)] for i in range(num_agents)],
+            dtype=np.int8,
+        )
+        active_masks_list.append(active_arr)
         
         # 5. 执行动作
         obs_rl, rewards, terms, truncs, info = env.step(masup_actions)
@@ -284,6 +338,7 @@ def _collect_single_episode(
         'critic_states': np.stack(critic_states_list, axis=0),  # [T, M, State_Dim+M]
         'actions': np.stack(actions_list, axis=0),      # [T, M, 1]
         'action_masks': np.stack(action_masks_list, axis=0),    # [T, M, Act_Dim]
+        'active_masks': np.stack(active_masks_list, axis=0),     # [T, M, 1]
         'rewards': np.stack(rewards_list, axis=0),      # [T, M]
     }
 
@@ -303,6 +358,7 @@ class HeuristicSampler:
         env_config: Optional[Dict] = None,
         custom_config: Optional[Dict] = None,
         policy_config: Optional[Dict] = None,
+        policy_type: str = "er",
     ) -> None:
         """
         Args:
@@ -312,10 +368,12 @@ class HeuristicSampler:
             env_config: 环境配置 (并行采样时用于创建 worker 环境)
             custom_config: 环境自定义配置 (并行采样时使用)
             policy_config: 策略配置 (并行采样时用于创建 worker 策略)
+            policy_type: 策略类型名称，用于并行采样时在 worker 中重建策略（默认 "er"）
         """
         self.policy = policy
         self.env = env
         self.env_type = env_type
+        self.policy_type = policy_type
 
         # 保存配置用于并行采样
         self._env_config = env_config
@@ -434,6 +492,7 @@ class HeuristicSampler:
             episode.critic_states.append(self._build_critic_states())
             episode.actions.append(self._extract_actions(masup_actions, info))
             episode.action_masks.append(self._extract_masks(info))
+            episode.active_masks.append(self._extract_active_masks(info))
             
             # 5. 执行动作
             obs_rl, rewards, terms, truncs, info = self.env.step(masup_actions)
@@ -514,6 +573,14 @@ class HeuristicSampler:
             agent_str = f"agent_{i}"
             mask_list.append(info[agent_str]['action_mask'])
         return np.stack(mask_list, axis=0).astype(np.int8)  # [M, Act_Dim]
+
+    def _extract_active_masks(self, info: Dict[str, Dict]) -> np.ndarray:
+        """从 info 中提取 active_mask，缺省按 active 处理。"""
+        mask_list = []
+        for i in range(self.num_agents):
+            agent_str = f"agent_{i}"
+            mask_list.append([info[agent_str].get('active_mask', 1)])
+        return np.array(mask_list, dtype=np.int8)  # [M, 1]
     
     def _extract_rewards(self, rewards: Dict[str, float]) -> np.ndarray:
         """
@@ -570,6 +637,7 @@ class HeuristicSampler:
         critic_states = np.zeros([N, max_len, M, self.critic_state_dim], dtype=np.float32)
         actions = np.zeros([N, max_len, M, 1], dtype=np.int64)
         action_masks = np.zeros([N, max_len, M, self.act_dim], dtype=np.int8)
+        active_masks = np.zeros([N, max_len, M, 1], dtype=np.int8)
         rewards = np.zeros([N, max_len, M, 1], dtype=np.float32)
         padded_mask = np.zeros([N, max_len, 1], dtype=np.int8)
         returns = np.zeros([N, max_len, M, 1], dtype=np.float32)
@@ -581,6 +649,7 @@ class HeuristicSampler:
             critic_states[i, :L] = np.stack(ep.critic_states, axis=0)
             actions[i, :L] = np.stack(ep.actions, axis=0)
             action_masks[i, :L] = np.stack(ep.action_masks, axis=0)
+            active_masks[i, :L] = np.stack(ep.active_masks, axis=0)
             
             # rewards: [L, M] -> [L, M, 1]
             ep_rewards = np.stack(ep.rewards, axis=0)  # [L, M]
@@ -599,6 +668,7 @@ class HeuristicSampler:
             critic_states=critic_states,
             actions=actions,
             action_masks=action_masks,
+            active_masks=active_masks,
             rewards=rewards,
             padded_mask=padded_mask,
             returns=returns
@@ -610,6 +680,7 @@ class HeuristicSampler:
         print(f"  critic_states: {critic_states.shape}")
         print(f"  actions:       {actions.shape}")
         print(f"  action_masks:  {action_masks.shape}")
+        print(f"  active_masks:  {active_masks.shape}")
         print(f"  rewards:       {rewards.shape}")
         print(f"  padded_mask:   {padded_mask.shape}")
         print(f"  returns:       {returns.shape}")
@@ -665,6 +736,7 @@ class HeuristicSampler:
                     chunk_size,
                     gamma,
                     self.env_type,
+                    self.policy_type,
                 ))
         
         print(f"[HeuristicSampler] Starting parallel sampling with {num_workers} workers...")
@@ -819,6 +891,7 @@ class HeuristicSampler:
         critic_states = np.zeros([total_episodes, max_len, M, critic_state_dim], dtype=np.float32)
         actions = np.zeros([total_episodes, max_len, M, 1], dtype=np.int64)
         action_masks = np.zeros([total_episodes, max_len, M, act_dim], dtype=np.int8)
+        active_masks = np.zeros([total_episodes, max_len, M, 1], dtype=np.int8)
         rewards = np.zeros([total_episodes, max_len, M, 1], dtype=np.float32)
         padded_mask = np.zeros([total_episodes, max_len, 1], dtype=np.int8)
         returns = np.zeros([total_episodes, max_len, M, 1], dtype=np.float32)
@@ -835,6 +908,10 @@ class HeuristicSampler:
                 critic_states[offset:offset+N_batch, :T_batch] = batch_data['critic_states']
                 actions[offset:offset+N_batch, :T_batch] = batch_data['actions']
                 action_masks[offset:offset+N_batch, :T_batch] = batch_data['action_masks']
+                if 'active_masks' in batch_data:
+                    active_masks[offset:offset+N_batch, :T_batch] = batch_data['active_masks']
+                else:
+                    active_masks[offset:offset+N_batch, :T_batch] = 1
                 rewards[offset:offset+N_batch, :T_batch] = batch_data['rewards']
                 padded_mask[offset:offset+N_batch, :T_batch] = batch_data['padded_mask']
                 returns[offset:offset+N_batch, :T_batch] = batch_data['returns']
@@ -848,6 +925,7 @@ class HeuristicSampler:
             critic_states=critic_states,
             actions=actions,
             action_masks=action_masks,
+            active_masks=active_masks,
             rewards=rewards,
             padded_mask=padded_mask,
             returns=returns
@@ -859,6 +937,7 @@ class HeuristicSampler:
         print(f"  critic_states: {critic_states.shape}")
         print(f"  actions:       {actions.shape}")
         print(f"  action_masks:  {action_masks.shape}")
+        print(f"  active_masks:  {active_masks.shape}")
         print(f"  rewards:       {rewards.shape}")
         print(f"  padded_mask:   {padded_mask.shape}")
         print(f"  returns:       {returns.shape}")
@@ -895,6 +974,8 @@ class HeuristicSampler:
                               dtype='int64', chunks=(chunk_size, max_len, M, 1))
             hf.create_dataset('action_masks', shape=(total_episodes, max_len, M, act_dim),
                               dtype='int8', chunks=(chunk_size, max_len, M, act_dim))
+            hf.create_dataset('active_masks', shape=(total_episodes, max_len, M, 1),
+                              dtype='int8', chunks=(chunk_size, max_len, M, 1))
             hf.create_dataset('rewards', shape=(total_episodes, max_len, M, 1),
                               dtype='float32', chunks=(chunk_size, max_len, M, 1))
             hf.create_dataset('padded_mask', shape=(total_episodes, max_len, 1),
@@ -914,6 +995,10 @@ class HeuristicSampler:
                     hf['critic_states'][offset:offset+N_batch, :T_batch] = batch_data['critic_states']
                     hf['actions'][offset:offset+N_batch, :T_batch] = batch_data['actions']
                     hf['action_masks'][offset:offset+N_batch, :T_batch] = batch_data['action_masks']
+                    if 'active_masks' in batch_data:
+                        hf['active_masks'][offset:offset+N_batch, :T_batch] = batch_data['active_masks']
+                    else:
+                        hf['active_masks'][offset:offset+N_batch, :T_batch] = 1
                     hf['rewards'][offset:offset+N_batch, :T_batch] = batch_data['rewards']
                     hf['padded_mask'][offset:offset+N_batch, :T_batch] = batch_data['padded_mask']
                     hf['returns'][offset:offset+N_batch, :T_batch] = batch_data['returns']
@@ -923,7 +1008,7 @@ class HeuristicSampler:
         # 打印统计信息
         print(f"[HeuristicSampler] Saved HDF5: {save_path}")
         print(f"  shape: ({total_episodes}, {max_len}, {M}, *)")
-        print(f"  datasets: obs, critic_states, actions, action_masks, rewards, padded_mask, returns")
+        print(f"  datasets: obs, critic_states, actions, action_masks, active_masks, rewards, padded_mask, returns")
 
 
 if __name__ == "__main__":
@@ -942,13 +1027,19 @@ if __name__ == "__main__":
     parser.add_argument("--eps", type=float, default=0.0, help="Epsilon-greedy 随机探索概率")
     parser.add_argument("--batch_size", type=int, default=2048, help="分批大小（避免内存溢出）")
     parser.add_argument("--num_workers", type=int, default=1, help="并行 worker 数量 (>1 启用多进程)")
-    parser.add_argument("--policy_config", type=str, default="configs/policies/ER.yaml",
-                        help="策略配置 YAML")
+    parser.add_argument("--policy_type", type=str, default="er",
+                        help=f"启发式策略类型，可选: {list(_POLICY_REGISTRY.keys())}")
+    parser.add_argument("--policy_config", type=str, default=None,
+                        help="策略参数 YAML（默认按 policy_type 自动匹配 configs/heuristic/<TYPE>.yaml）")
     parser.add_argument("--env_config", type=str, default="configs/eval/masup/masup_tsp12.yaml",
                         help="环境配置 YAML (experiment YAML 或独立 eval YAML)")
     parser.add_argument("--env_type", type=str, default="masup",
                         help="环境类型 (masup / masup_gnn 等，需在 ENV_REGISTRY 中注册)")
     args = parser.parse_args()
+
+    # 自动匹配 policy_config 路径（未指定时按 policy_type 推断）
+    if args.policy_config is None:
+        args.policy_config = f"configs/heuristic/{args.policy_type.upper()}.yaml"
 
     # 加载策略配置
     with open(args.policy_config, 'r', encoding='utf-8') as f:
@@ -959,7 +1050,7 @@ if __name__ == "__main__":
     env_config, custom_config = _env_config_to_dicts(env_cfg)
 
     num_agents = env_config.get("num_agents", 3)
-    policy = ERPolicy(num_agents, policy_config)
+    policy = _create_policy(args.policy_type, num_agents, policy_config)
 
     # 通过 ENV_REGISTRY 动态创建环境，支持 masup / masup_gnn 等
     _entry = ENV_REGISTRY[args.env_type]
@@ -973,7 +1064,7 @@ if __name__ == "__main__":
     _act_dim = env.action_space(_agent0).n
     _state_dim = len(env.state())
     _critic_state_dim = _state_dim + env.world.num_agents
-    print(f"[HeuristicSampler] 维度确认 (env_type={args.env_type}):")
+    print(f"[HeuristicSampler] policy_type={args.policy_type}, env_type={args.env_type}")
     print(f"  obs_dim={_obs_dim}, action_dim={_act_dim}, critic_state_dim={_critic_state_dim}")
 
     # 创建采样器（传入 dict 配置以支持并行采样中 worker 进程创建独立环境）
@@ -984,6 +1075,7 @@ if __name__ == "__main__":
         env_config=env_config,
         custom_config=custom_config,
         policy_config=policy_config,
+        policy_type=args.policy_type,
     )
 
     # 开始采样
@@ -998,4 +1090,4 @@ if __name__ == "__main__":
 
     # 用法示例:
     #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 1
-    #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 4
+    #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 4 --policy_type ahpa --env_config configs/eval/masup/masup_island.yaml

@@ -347,6 +347,8 @@ class imi_trainer:
 
             flattened_data = {}
             load_keys = {"obs", "actions", "action_masks", "returns"}
+            if "active_masks" in data.files:
+                load_keys.add("active_masks")
             if self.mode == "actor_critic":
                 load_keys.add(self.value_input_key)
             elif self.mode == "q_net":
@@ -360,12 +362,16 @@ class imi_trainer:
                 flattened_data[key] = valid_step_data.reshape(-1, valid_step_data.shape[-1])
 
             total_samples = len(flattened_data["obs"])
+            if "active_masks" not in flattened_data:
+                flattened_data["active_masks"] = np.ones((total_samples, 1), dtype=np.float32)
             print(f"[ImiTrainer] Loaded {total_samples} valid samples (K*M={num_valid_steps}*{M})")
 
             returns_data = flattened_data["returns"]
             if self.use_value_norm:
-                self.ret_mean = float(returns_data.mean())
-                self.ret_std = float(returns_data.std())
+                active = flattened_data["active_masks"].reshape(-1) > 0.5
+                norm_returns = returns_data[active] if active.any() else returns_data
+                self.ret_mean = float(norm_returns.mean())
+                self.ret_std = float(norm_returns.std())
                 print(f"[ImiTrainer] Value Normalization: mean={self.ret_mean:.4f}, std={self.ret_std:.4f}")
 
             data_idx = np.arange(total_samples)
@@ -374,7 +380,7 @@ class imi_trainer:
 
             for itr in range(iteration):
                 np.random.shuffle(data_idx)
-                itr_stats = {"actor_loss": 0.0, "value_loss": 0.0, "correct": 0, "total": 0}
+                itr_stats = {"actor_loss": 0.0, "actor_total": 0, "value_loss": 0.0, "value_total": 0, "correct": 0, "total": 0}
 
                 for start in range(0, len(data_idx), batch_size):
                     idx = data_idx[start:start + batch_size]
@@ -404,6 +410,7 @@ class imi_trainer:
             total_samples = valid_per_ep.sum()
             print(f"[ImiTrainer] HDF5 mode: {total_samples} valid samples from {N} episodes")
 
+            has_active_masks = "active_masks" in hf
             if self.use_value_norm:
                 print("[ImiTrainer] Computing value normalization stats from HDF5...")
                 sum_ret, sum_sq_ret, count = 0.0, 0.0, 0
@@ -411,10 +418,19 @@ class imi_trainer:
                     valid_t = np.where(flat_mask[n])[0]
                     if len(valid_t) == 0:
                         continue
-                    ep_returns = hf["returns"][n, valid_t, :, 0].flatten()
+                    ep_returns = hf["returns"][n, valid_t, :, 0]
+                    if has_active_masks:
+                        ep_active = hf["active_masks"][n, valid_t, :, 0].astype(bool)
+                        ep_returns = ep_returns[ep_active]
+                    else:
+                        ep_returns = ep_returns.reshape(-1)
+                    if ep_returns.size == 0:
+                        continue
                     sum_ret += ep_returns.sum()
                     sum_sq_ret += (ep_returns ** 2).sum()
-                    count += len(ep_returns)
+                    count += ep_returns.size
+                if count == 0:
+                    raise ValueError("active_masks 中没有任何 active 样本，无法计算 value normalization")
                 self.ret_mean = sum_ret / count
                 self.ret_std = np.sqrt(sum_sq_ret / count - self.ret_mean ** 2)
                 print(f"[ImiTrainer] Value Normalization: mean={self.ret_mean:.4f}, std={self.ret_std:.4f}")
@@ -424,7 +440,7 @@ class imi_trainer:
 
             for itr in range(iteration):
                 ep_perm = np.random.permutation(N)
-                itr_stats = {"actor_loss": 0.0, "value_loss": 0.0, "correct": 0, "total": 0}
+                itr_stats = {"actor_loss": 0.0, "actor_total": 0, "value_loss": 0.0, "value_total": 0, "correct": 0, "total": 0}
 
                 for ep_start in range(0, N, episode_batch_size):
                     ep_end = min(ep_start + episode_batch_size, N)
@@ -460,30 +476,44 @@ class imi_trainer:
         actions_batch = torch.tensor(data["actions"][idx], dtype=torch.long, device=self.device)
         action_masks_batch = torch.tensor(data["action_masks"][idx], dtype=torch.long, device=self.device)
         returns_batch = torch.tensor(data["returns"][idx], dtype=torch.float32, device=self.device)
+        value_mask_batch = None
+        if "active_masks" in data:
+            value_mask_batch = torch.tensor(data["active_masks"][idx], dtype=torch.float32, device=self.device)
 
         normalized_returns = returns_batch
         if self.use_value_norm:
             normalized_returns = (returns_batch - self.ret_mean) / (self.ret_std + 1e-8)
 
         if self.mode in ("actor_critic", "actor_only"):
-            self._step_actor(obs_batch, actions_batch, action_masks_batch, stats)
+            self._step_actor(obs_batch, actions_batch, action_masks_batch, stats, value_mask_batch)
 
             if self.mode == "actor_critic":
                 value_input = torch.tensor(
                     data[self.value_input_key][idx], dtype=torch.float32, device=self.device)
-                self._step_critic(value_input, normalized_returns, stats)
+                self._step_critic(value_input, normalized_returns, stats, value_mask_batch)
 
         elif self.mode == "q_net":
             self._step_q_net(obs_batch, actions_batch, action_masks_batch,
-                             normalized_returns, stats)
+                             normalized_returns, stats, value_mask_batch)
 
-    def _step_actor(self, obs_batch, actions_batch, action_masks_batch, stats):
-        """Actor BC 更新（含早停处理）"""
+    def _step_actor(self, obs_batch, actions_batch, action_masks_batch, stats, active_mask=None):
+        """Actor BC 更新；有 active_mask 时只对 READY 步计算损失。"""
+        def _compute_loss(logits, acts, mask):
+            """masked mean 负对数似然。"""
+            per_sample = F.cross_entropy(logits, acts.squeeze(-1), reduction="none")
+            if mask is not None:
+                m = mask.squeeze(-1)
+                denom = m.sum()
+                if denom.item() <= 0:
+                    return per_sample.mean() * 0.0, 0
+                return (per_sample * m).sum() / denom, int(denom.item())
+            return per_sample.mean(), len(logits)
+
         if not self.actor_stopped:
             _out = self.actor(obs_batch)
             actor_logits = _out[0] if isinstance(_out, tuple) else _out
             actor_logits = actor_logits.masked_fill(~action_masks_batch.bool(), float("-inf"))
-            actor_loss = F.cross_entropy(actor_logits, actions_batch.squeeze(-1))
+            actor_loss, actor_count = _compute_loss(actor_logits, actions_batch, active_mask)
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
@@ -493,11 +523,11 @@ class imi_trainer:
                 _out = self.actor(obs_batch)
                 actor_logits = _out[0] if isinstance(_out, tuple) else _out
                 actor_logits = actor_logits.masked_fill(~action_masks_batch.bool(), float("-inf"))
-                actor_loss = F.cross_entropy(actor_logits, actions_batch.squeeze(-1))
+                actor_loss, actor_count = _compute_loss(actor_logits, actions_batch, active_mask)
 
-        n = len(obs_batch)
-        stats["actor_loss"] += actor_loss.item() * n
-        stats["total"] += n
+        stats["actor_loss"] += actor_loss.item() * actor_count
+        stats["actor_total"] += actor_count
+        stats["total"] += len(obs_batch)
         with torch.no_grad():
             _out2 = self.actor(obs_batch)
             logits2 = _out2[0] if isinstance(_out2, tuple) else _out2
@@ -505,19 +535,29 @@ class imi_trainer:
             pred = logits2.argmax(dim=-1)
         stats["correct"] += (pred == actions_batch.squeeze(-1)).sum().item()
 
-    def _step_critic(self, value_input, normalized_returns, stats):
-        """Critic MSE 更新"""
+    def _step_critic(self, value_input, normalized_returns, stats, value_mask=None):
+        """Critic MSE 更新；有 active_mask 时只监督 READY 步。"""
         critic_pred = self.critic(value_input)
-        critic_loss = F.mse_loss(critic_pred, normalized_returns)
+        if value_mask is not None:
+            loss_per_sample = (critic_pred - normalized_returns) ** 2
+            denom = value_mask.sum()
+            if denom.item() <= 0:
+                return
+            critic_loss = (loss_per_sample * value_mask).sum() / denom
+            value_count = int(denom.item())
+        else:
+            critic_loss = F.mse_loss(critic_pred, normalized_returns)
+            value_count = len(value_input)
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        stats["value_loss"] += critic_loss.item() * len(value_input)
+        stats["value_loss"] += critic_loss.item() * value_count
+        stats["value_total"] += value_count
 
     def _step_q_net(self, obs_batch, actions_batch, action_masks_batch,
-                    normalized_returns, stats):
+                    normalized_returns, stats, value_mask=None):
         """Q-network BC + Value MSE 联合更新。
 
         flat 训练：RNN 每步 hidden=None（自动 zero-init），不跨 timestep 传递 hidden state。
@@ -531,7 +571,19 @@ class imi_trainer:
 
         # Value loss：专家动作对应 Q 值逼近真实 return
         q_taken = q_all.gather(1, actions_batch).squeeze(-1)
-        value_loss = F.mse_loss(q_taken, normalized_returns.squeeze(-1))
+        if value_mask is not None:
+            value_mask_1d = value_mask.squeeze(-1)
+            value_loss_per_sample = (q_taken - normalized_returns.squeeze(-1)) ** 2
+            denom = value_mask_1d.sum()
+            if denom.item() > 0:
+                value_loss = (value_loss_per_sample * value_mask_1d).sum() / denom
+                value_count = int(denom.item())
+            else:
+                value_loss = q_taken.sum() * 0.0
+                value_count = 0
+        else:
+            value_loss = F.mse_loss(q_taken, normalized_returns.squeeze(-1))
+            value_count = len(obs_batch)
 
         total_loss = self.bc_lambda * bc_loss + self.value_lambda * value_loss
 
@@ -541,7 +593,8 @@ class imi_trainer:
 
         n = len(obs_batch)
         stats["actor_loss"] += bc_loss.item() * n      # actor_loss 字段复用于 q_net bc_loss
-        stats["value_loss"] += value_loss.item() * n
+        stats["value_loss"] += value_loss.item() * value_count
+        stats["value_total"] += value_count
         stats["total"] += n
         with torch.no_grad():
             pred = q_all.argmax(dim=-1)
@@ -553,8 +606,10 @@ class imi_trainer:
     def _log_and_check_early_stop(self, itr: int, iteration: int,
                                   stats: dict, global_step: int, start_time: float):
         total = max(stats["total"], 1)
-        avg_actor_loss = stats["actor_loss"] / total
-        avg_value_loss = stats["value_loss"] / total
+        actor_total = stats.get("actor_total", 0)
+        value_total = stats.get("value_total", 0)
+        avg_actor_loss = stats["actor_loss"] / actor_total if actor_total > 0 else 0.0
+        avg_value_loss = stats["value_loss"] / value_total if value_total > 0 else 0.0
         accuracy = stats["correct"] / total
         sps = int(global_step / (time.time() - start_time + 1e-8))
 
@@ -597,11 +652,12 @@ class imi_trainer:
         actor_critic 模式额外加载 value_input_key（critic_states 或 obs）。
         q_net 模式只需要 obs（value_input_key 也是 obs）。
         """
-        obs_list, actions_list, masks_list, returns_list = [], [], [], []
+        obs_list, actions_list, masks_list, active_list, returns_list = [], [], [], [], []
         value_list = []
 
         need_value = self.mode in ("actor_critic", "q_net")
         value_key = self.value_input_key
+        has_active_masks = "active_masks" in hf
 
         for n in ep_indices:
             valid_t = np.where(flat_mask[n])[0]
@@ -611,6 +667,10 @@ class imi_trainer:
             actions_list.append(hf["actions"][n, valid_t, :, :].reshape(-1, 1))
             masks_list.append(
                 hf["action_masks"][n, valid_t, :, :].reshape(-1, hf["action_masks"].shape[-1]))
+            if has_active_masks:
+                active_list.append(hf["active_masks"][n, valid_t, :, :].reshape(-1, 1))
+            else:
+                active_list.append(np.ones((len(valid_t) * hf["obs"].shape[2], 1), dtype=np.float32))
             returns_list.append(hf["returns"][n, valid_t, :, :].reshape(-1, 1))
             if need_value:
                 value_list.append(
@@ -623,6 +683,7 @@ class imi_trainer:
             "obs": np.concatenate(obs_list, axis=0),
             "actions": np.concatenate(actions_list, axis=0),
             "action_masks": np.concatenate(masks_list, axis=0),
+            "active_masks": np.concatenate(active_list, axis=0),
             "returns": np.concatenate(returns_list, axis=0),
         }
         if need_value:

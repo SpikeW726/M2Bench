@@ -5,7 +5,7 @@ env:
   graph_path: graphs/island.json
   enable_wait: true
   norm_reward: true
-  deltaT: 2.0
+  deltaT: 3.0
   num_agents: 6
   init_positions: [0, 10, 20, 30, 40, 49]
   episode_len: 500
