@@ -5,7 +5,7 @@
 
 直接与 PatrolWorld 交互，不依赖 MDP 封装。
 支持多 episode 评估、指标聚合、可视化绘图和 MP4 动画生成。
-环境配置通过 --env_config 指定 YAML 文件加载（支持 experiment YAML 或独立 eval YAML）。
+环境配置通过 --policy --config 指定 YAML 文件加载（支持 experiment YAML 或独立 eval YAML）。
 """
 import os
 import sys

@@ -43,14 +43,14 @@ algo:
   reward_global: false
 
 training:
-  num_envs: 64
+  num_envs: 96
   use_subproc: true
   num_steps: 256
   total_steps: 20000000
-  save_interval: 200
+  save_interval: 100
   minibatch_size: 1024
-  update_epochs: 10
-  eval_interval: 10
+  update_epochs: 5
+  eval_interval: 5
 
 actor:
   rnn_type: gru

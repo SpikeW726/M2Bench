@@ -7,7 +7,7 @@ env:
   norm_reward: true
   deltaT: 0.5
   num_agents: 4
-  init_positions: [0, 3, 6, 9]
+  init_positions: [1, 3, 6, 9]
   episode_len: 100
   custom_configs:
     T: 10.0

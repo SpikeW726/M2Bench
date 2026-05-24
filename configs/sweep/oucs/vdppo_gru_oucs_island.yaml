@@ -6,9 +6,9 @@ metric:
 
 early_terminate:
   min_trial: 6
-  min_steps: 10000000
-  terminate_ratio: 0.4
-  early_stop_iters: 150
+  min_steps: 15000000
+  terminate_ratio: 0.5
+  early_stop_iters: 75
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
   state_file: .sweep_es_vdppo_oucs_island.json
@@ -40,11 +40,11 @@ parameters:
   gae_lambda:
     values: [0.95, 0.99, 0.999]
   tau:
-    values: [0.01, 0.05, 0.1]
+    values: [0.01, 0.05]
   target_update_freq:
-    value: 5
+    values: [1, 5]
   mixer_embed_dim:
-    values: [128, 256]
+    value: 256
   data_chunk_length:
     values: [8, 10, 16]
   minibatch_size:

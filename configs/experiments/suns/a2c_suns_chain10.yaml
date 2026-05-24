@@ -27,13 +27,13 @@ env:
 
 algo:
   lr: 7.0e-4
-  gamma: 0.995
+  gamma: 0.999
   gae_lambda: 0.95
   vf_coef: 0.5
   ent_coef: 0.01
 
 training:
-  num_envs: 32
+  num_envs: 96
   use_subproc: true
   num_steps: 512
   total_steps: 20000000

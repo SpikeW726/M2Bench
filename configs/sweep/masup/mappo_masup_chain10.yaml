@@ -6,12 +6,11 @@ metric:
 
 early_terminate:
   min_trial: 6
-  min_steps: 2000000
+  min_steps: 5000000
   terminate_ratio: 0.4
   early_stop_iters: 50
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
-  state_file: .sweep_es_mappo_masup_chain10.json
 
 parameters:
   seed:
@@ -38,7 +37,7 @@ parameters:
   gae_lambda:
     values: [0.95, 0.99, 0.999]
   gamma:
-    values: [0.95, 0.99, 0.995]
+    values: [0.99, 0.999]
   use_value_norm:
     value: true
   num_steps:

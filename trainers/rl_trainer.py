@@ -61,6 +61,8 @@ class BaseTrainer(ABC):
         self.total_steps = 0
         self.best_reward = -float('inf')
         self.start_time: float = 0.0
+        # 纯训练时长（不含 inline eval、checkpoint 等开销），用于计算 SPS
+        self._train_elapsed: float = 0.0
         # eval 完成时的外部 hook：(metrics: dict, total_steps: int) -> None
         # 由 train.py 注入，用于将 eval 指标实时喂给 SweepEarlyStopper
         self.on_eval_complete: Optional[Callable] = None
@@ -76,8 +78,8 @@ class BaseTrainer(ABC):
         pass
 
     def _compute_sps(self) -> int:
-        elapsed = time.time() - self.start_time
-        return int(self.total_steps / elapsed) if elapsed > 0 else 0
+        # 只除以纯训练时长，不含 inline eval / checkpoint 等额外开销
+        return int(self.total_steps / self._train_elapsed) if self._train_elapsed > 0 else 0
 
     def _update_best(self, mean_reward: float) -> bool:
         if mean_reward > self.best_reward:
@@ -229,6 +231,8 @@ class OnPolicyTrainer(BaseTrainer):
 
     def _train_iteration(self) -> Dict[str, Any]:
         """Execute one collect-update iteration."""
+        _iter_t0 = time.time()
+
         # 1. Collect (eval mode)
         self.algorithm.set_training_mode(False)
         with self._profile("train/collect"):
@@ -251,6 +255,8 @@ class OnPolicyTrainer(BaseTrainer):
         # 4. Clear buffer
         with self._profile("train/reset_buffer"):
             self.collector.reset_buffer()
+
+        self._train_elapsed += time.time() - _iter_t0
 
         # 5. Build result dict
         iter_result = {
@@ -410,6 +416,7 @@ class OffPolicyTrainer(BaseTrainer):
         }
 
     def _train_iteration(self) -> Dict[str, Any]:
+        _iter_t0 = time.time()
         all_stats: List[TrainingStats] = []
         all_rewards: List[float] = []
         iter_steps = 0
@@ -433,6 +440,8 @@ class OffPolicyTrainer(BaseTrainer):
                             warmup_steps=self.warmup_steps,
                         )
                     all_stats.append(stats)
+
+        self._train_elapsed += time.time() - _iter_t0
 
         iter_result: Dict[str, Any] = {
             "stats_list": all_stats,

@@ -1,13 +1,12 @@
 env:
-  graph_path: graphs/SFcrimemap.json
-  num_agents: 3
-  deltaT: 20.0
-  init_positions: [0, 5, 11]
-  episode_len: 3000
+  graph_path: graphs/island.json
+  num_agents: 6
+  init_positions: [0, 10, 20, 30, 40, 49]
+  episode_len: 500
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/SF/msp/MSP_eval.png
+  save_plot: evaluators/results/island/msp/MSP_eval.png
   show_plot: false
   animation: false
   event_driven: true

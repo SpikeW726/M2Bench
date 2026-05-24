@@ -36,11 +36,12 @@ training:
   num_envs: 48
   use_subproc: true
   num_steps: 1024
-  total_steps: 40000000
+  total_steps: 60000000
   save_interval: 500
   minibatch_size: 2048
   update_epochs: 1
-  eval_interval: 10
+  eval_interval: 1
+  eval_episodes: 1
 
 actor:
   num_nodes: 50

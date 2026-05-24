@@ -59,7 +59,7 @@ actor:
   proj_dim: 16
   use_log_idleness: true
   T_time: 50.0
-  hidden: [256, 256]
+  hidden: [256, 512]
 
 critic:
   graph_path: graphs/mapA.json
@@ -71,6 +71,6 @@ critic:
   use_log_idleness: true
   T_time: 50.0
   input_mode: state
-  hidden: [256, 256]
+  hidden: [256, 512]
 
 eval_config_path: configs/eval/masup/masup_mapA.yaml

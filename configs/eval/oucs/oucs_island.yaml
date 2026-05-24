@@ -19,7 +19,7 @@ eval:
   show_plot: false
   animation: true
   event_driven: false
-  max_frames: 1200
+  max_frames: 800
   log_action_logits: true
   log_action_logits_max_lines: 5
   action_logits_csv: evaluators/results/island/vdppo_oucs/action_logits.csv
