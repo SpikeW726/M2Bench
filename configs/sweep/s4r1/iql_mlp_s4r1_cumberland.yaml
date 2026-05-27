@@ -1,0 +1,55 @@
+method: bayes
+
+metric:
+  name: eval/wi
+  goal: minimize
+
+early_terminate:
+  min_trial: 4
+  min_steps: 15000000
+  terminate_ratio: 0.5
+  early_stop_iters: 100
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
+  state_file: .sweep_es_iql_s4r1_cumberland.json
+
+parameters:
+  seed:
+    value: 42
+  total_steps:
+    value: 40000000
+  lr:
+    min: 1.0e-5
+    max: 5.0e-4
+    distribution: log_uniform_values
+  gamma:
+    values: [0.995, 0.999]
+  tau:
+    min: 0.001
+    max: 0.01
+  target_update_freq:
+    values: [1, 5, 10]
+  epsilon_start:
+    value: 1.0
+  epsilon_end:
+    value: 0.05
+  epsilon_decay_steps:
+    values: [6000000, 8000000, 12000000]
+  max_grad_norm:
+    values: [5.0, 10.0]
+  use_double_dqn:
+    value: true
+  batch_size:
+    values: [64, 128, 256]
+  buffer_size:
+    values: [50000, 100000]
+  warmup_steps:
+    values: [5000, 10000]
+  update_per_step:
+    values: [1, 5, 10]
+  collect_per_step:
+    value: 96
+  num_steps:
+    values: [512, 2048]
+  save_interval:
+    value: 500

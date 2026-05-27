@@ -1,0 +1,39 @@
+# QTable + GBLAEnv @ cumberland
+# 图统计: nodes=40, directed_edges=88, max_out_degree=4, avg_edge=5.702, max_edge=13.275
+# 物理时间截断: episode_len=500, total_steps=40000000
+
+algo_name: qtable
+env_type: gbla
+exp_name: qtable-gbla-cumberland
+graph_name: cumberland
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/cumberland.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 6
+  init_positions: [0, 8, 16, 24, 32, 39]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.001
+  gamma: 0.999
+  epsilon_start: 0.2
+  epsilon_end: 0.05
+  sync_update: true
+  epsilon_decay_steps: 10000000
+
+training:
+  num_envs: 64
+  use_subproc: true
+  total_steps: 40000000
+  save_interval: 300
+  eval_interval: 10
+
+eval_config_path: configs/eval/gbla/gbla_cumberland.yaml

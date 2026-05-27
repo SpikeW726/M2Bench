@@ -11,24 +11,24 @@ early_terminate:
   early_stop_iters: 100
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
-  state_file: .sweep_es_mappo_masup_mapA.json
+  state_file: .sweep_es_mappo_masup_cumberland.json
 
 parameters:
   seed:
     value: 42
   total_steps:
-    value: 50000000
+    value: 40000000
   actor_lr:
     min: 1.0e-6
-    max: 1.0e-4
+    max: 1.0e-3
     distribution: log_uniform_values
   critic_lr:
-    min: 5.0e-6
-    max: 5.0e-4
+    min: 1.0e-5
+    max: 5.0e-3
     distribution: log_uniform_values
   clip_range:
     min: 0.1
-    max: 0.3
+    max: 0.4
   vf_coef:
     min: 0.5
     max: 1.0
@@ -38,7 +38,7 @@ parameters:
   gae_lambda:
     values: [0.99, 0.999]
   gamma:
-    value: 0.999
+    values: [0.99, 0.999]
   use_value_norm:
     value: true
   num_steps:
@@ -53,8 +53,3 @@ parameters:
     values: [0.0, 0.05, 0.1]
   custom_configs.contribution_scale:
     values: [0.0, 0.05, 0.1]
-
-  actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-mapA/imi_pre_masup_mlp_mappo_mapA__1779644117_final/policy.pt
-  critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-mapA/imi_pre_masup_mlp_mappo_mapA__1779644117_final/critic.pt

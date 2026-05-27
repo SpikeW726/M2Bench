@@ -38,7 +38,7 @@ parameters:
   gae_lambda:
     values: [0.99, 0.999]
   gamma:
-    values: [0.99, 0.999]
+    value: 0.999
   use_value_norm:
     value: true
   num_steps:
