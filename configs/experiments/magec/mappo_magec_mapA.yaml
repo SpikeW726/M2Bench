@@ -43,7 +43,7 @@ training:
   num_envs: 64
   use_subproc: true
   num_steps: 1024
-  total_steps: 40000000
+  total_steps: 50000000
   save_interval: 200
   minibatch_size: 2048
   update_epochs: 5
@@ -54,7 +54,7 @@ actor:
   agent_num: 6
   role_imformation: agent-index
   hidden_dim: 128
-  gnn_layers: 3
+  gnn_layers: 5
   actor_mlp_layers: 1
   mlp_activation: relu
   node_feat_dim: 3

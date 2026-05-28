@@ -41,7 +41,7 @@ algo:
   use_value_norm: true
 
 training:
-  num_envs: 96
+  num_envs: 80
   use_subproc: true
   num_steps: 1024
   total_steps: 50000000

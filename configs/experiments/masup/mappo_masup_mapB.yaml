@@ -17,7 +17,7 @@ env:
   graph_path: graphs/mapB.json
   enable_wait: true
   norm_reward: true
-  deltaT: 2.0
+  deltaT: 3.0
   num_agents: 6
   init_positions: [0, 10, 20, 30, 40, 49]
   episode_len: 500
@@ -41,10 +41,10 @@ algo:
   use_value_norm: true
 
 training:
-  num_envs: 96
+  num_envs: 80
   use_subproc: true
   num_steps: 1024
-  total_steps: 40000000
+  total_steps: 50000000
   save_interval: 200
   minibatch_size: 2048
   update_epochs: 5
@@ -59,7 +59,7 @@ actor:
   proj_dim: 16
   use_log_idleness: true
   T_time: 50.0
-  hidden: [256, 256]
+  hidden: [256, 512]
 
 critic:
   graph_path: graphs/mapB.json
@@ -71,6 +71,6 @@ critic:
   use_log_idleness: true
   T_time: 50.0
   input_mode: state
-  hidden: [256, 256]
+  hidden: [256, 512]
 
 eval_config_path: configs/eval/masup/masup_mapB.yaml
