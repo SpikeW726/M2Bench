@@ -1,0 +1,52 @@
+# HAPPO + BEAU @ milwaukee
+# 图统计: nodes=40, directed_edges=112, max_out_degree=5, avg_edge=10.961, max_edge=14.14
+# 物理时间截断: episode_len=800, total_steps=50000000
+
+algo_name: happo
+env_type: beau
+
+exp_name: happo-beau-milwaukee
+graph_name: milwaukee
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/milwaukee.json
+  enable_wait: true
+  norm_reward: true
+  norm_obs: true
+  deltaT: 2.0
+  num_agents: 6
+  init_positions: [0, 8, 16, 24, 32, 39]
+  episode_len: 800
+  custom_configs:
+    reward_scale: 0.01
+    truncate_by_time: true
+
+algo:
+  gamma: 0.99
+  clip_coef: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 10.0
+  lr: 5.0e-5
+  policy_update_steps: 5
+  factor: 0.5
+  patience: 100
+  hidden_dim: 128
+  num_heads: 4
+  encoder_layers: 3
+
+training:
+  num_envs: 1
+  use_subproc: false
+  num_steps: 800
+  total_steps: 50000000
+  save_interval: 1000
+  minibatch_size: 256
+  update_epochs: 5
+  eval_interval: 15
+  eval_episodes: 4
+
+eval_config_path: configs/eval/beau/beau_milwaukee.yaml

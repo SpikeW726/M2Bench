@@ -1,0 +1,68 @@
+# MAPPO + MAGECEnv @ milwaukee
+# 图统计: nodes=40, directed_edges=112, max_out_degree=5, avg_edge=10.961, max_edge=14.14
+# 物理时间截断: episode_len=800, total_steps=50000000
+
+algo_name: mappo
+env_type: magec
+actor_type: sage
+critic_type: mlp
+
+exp_name: mappo-magec-milwaukee
+graph_name: milwaukee
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/milwaukee.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 6
+  init_positions: [0, 8, 16, 24, 32, 39]
+  episode_len: 800
+  custom_configs:
+    truncate_by_time: true
+    alpha: 1
+    beta: 0.5
+
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  shared_policy: true
+  use_value_norm: true
+
+training:
+  num_envs: 64
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 50000000
+  save_interval: 200
+  minibatch_size: 2048
+  update_epochs: 5
+  eval_interval: 10
+
+actor:
+  graph_path: graphs/milwaukee.json
+  agent_num: 6
+  role_imformation: agent-index
+  hidden_dim: 128
+  gnn_layers: 3
+  actor_mlp_layers: 1
+  mlp_activation: relu
+  node_feat_dim: 3
+  edge_feat_dim: 2
+  global_feat_dim: 2
+  neighbor_scoring: true
+  use_jk: true
+
+critic:
+  hidden: [256, 256]
+
+eval_config_path: configs/eval/magec/magec_milwaukee.yaml

@@ -33,9 +33,13 @@ class EnvConfig(ToStringMixin):
     # MASUP 家族使用自身的观测预处理，不建议开启
     norm_obs: bool = False
 
-    # 边上运动时间随机扰动（双轨设计：obs 始终用名义时间，物理到达由扰动时间驱动）
-    edge_time_jitter: bool = False              # 是否开启扰动
-    edge_time_jitter_frac: float = 0.1         # 扰动幅度 ε，实际时间 ∈ [T*(1-ε), T*(1+ε)]
-    edge_time_jitter_seed: Optional[int] = None # 随机种子；None 表示非确定性
+    # 边上运动时间随机扰动
+    # edge_time_jitter_mode 取值：
+    #   "none" — 不扰动（默认）
+    #   "dual" — 物理到达用扰动时间，obs 仍暴露名义时间
+    #   "full" — obs 和物理到达均使用扰动后的真实时间
+    edge_time_jitter_mode: str = "none"
+    edge_time_jitter_frac: float = 0.1          # 扰动幅度 ε，实际时间 ∈ [T*(1-ε), T*(1+ε)]
+    edge_time_jitter_seed: Optional[int] = None  # 随机种子；None 表示非确定性
 
     custom_configs: Optional[Dict] = None

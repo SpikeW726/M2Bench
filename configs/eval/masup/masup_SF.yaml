@@ -12,7 +12,7 @@ env:
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
-  # edge_time_jitter: true
+  # edge_time_jitter_mode: dual
   # edge_time_jitter_seed: 42
   custom_configs:
     T: 200.0

@@ -20,7 +20,6 @@ env:
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
-  edge_time_jitter: false
   custom_configs:
     T: 200.0
     role_imformation: decision

@@ -1,0 +1,57 @@
+# A2C + SUNSGymEnv @ milwaukee
+# 图统计: nodes=40, directed_edges=112, max_out_degree=5, avg_edge=10.961, max_edge=14.14
+# 物理时间截断: episode_len=800, total_steps=50000000
+# SUNSGymEnv 训练管线仅支持 1 agent；多智能体评估见 eval 配置。
+
+algo_name: a2c
+env_type: suns_gym
+actor_type: sun
+critic_type: sun
+
+exp_name: a2c-suns-milwaukee
+graph_name: milwaukee
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/milwaukee.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 1
+  init_positions: [0]
+  episode_len: 800
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 7.0e-4
+  gamma: 0.999
+  gae_lambda: 0.95
+  vf_coef: 0.5
+  ent_coef: 0.01
+
+training:
+  num_envs: 52
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 50000000
+  save_interval: 500
+  minibatch_size: 2048
+  update_epochs: 1
+  eval_interval: 2
+
+actor:
+  num_nodes: 40
+  node_feat_dim: 2
+  f1_hidden: 4
+  f2_hidden: 6
+
+critic:
+  num_nodes: 40
+  node_feat_dim: 2
+  f1_hidden: 4
+  f2_hidden: 6
+
+eval_config_path: configs/eval/suns/suns_milwaukee.yaml

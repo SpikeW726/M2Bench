@@ -111,12 +111,15 @@ class PatrolWorld:
         self._routes: Dict[int, List[int]] = {}
         self._acc_rewards: Dict[int, float] = {}
 
-        # 边上运动时间扰动（双轨设计）
-        self._jitter_enabled = bool(cfg.get("edge_time_jitter", False))
+        # 边上运动时间扰动（"none" | "dual" | "full"）
+        _mode = cfg.get("edge_time_jitter_mode", "none")
+        self._jitter_mode    = _mode
+        self._jitter_enabled = (_mode != "none")         # 是否产生扰动
+        self._jitter_obs_real = (_mode == "full")        # obs 是否暴露真实时间
         self._jitter_frac    = float(cfg.get("edge_time_jitter_frac", 0.1))
         import random as _random_mod
         _seed = cfg.get("edge_time_jitter_seed", None)
-        self._jitter_rng = _random_mod.Random(_seed)  # 独立实例，不干扰全局 random
+        self._jitter_rng = _random_mod.Random(_seed)     # 独立实例，不干扰全局 random
     
     def reset(self, initial_positions: Optional[List[int]] = None, seed: Optional[int] = None) -> None:
         """重置物理世界"""
@@ -320,14 +323,17 @@ class PatrolWorld:
         edge_length = self.graph.get_edge_length(current_pos, target_node)
         status.last_position = current_pos
 
-        # 双轨时间：名义时间（actor 可观测）与实际时间（物理到达，含 jitter）
         T_nom = float(edge_length) / max(status.speed, 1e-6)
         if self._jitter_enabled:
             frac = self._jitter_frac
             T_act = T_nom * self._jitter_rng.uniform(1.0 - frac, 1.0 + frac)
         else:
             T_act = T_nom
-        status.nominal_action_remaining = T_nom   # obs 始终用名义值
+        # "dual"：obs 用名义时间，物理到达用扰动时间
+        # "full"：obs 和物理到达都用扰动时间
+        # "none"：两者相同（T_act == T_nom）
+        T_obs = T_act if self._jitter_obs_real else T_nom
+        status.nominal_action_remaining = T_obs   # obs 暴露给 actor 的剩余时间
         status.action_remaining         = T_act   # 物理到达由实际值驱动
         status.planned_edge_duration    = T_act   # 动画进度分母（实际时长）
 

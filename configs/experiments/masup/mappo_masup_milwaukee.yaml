@@ -1,38 +1,36 @@
-# MAPPO + MASUP(SF) + MASUP 异构预处理（与 vdn_masup_SF_preproc / vdppo_masup_SF 对齐）
-# ---- 分发字段 ----
+# MAPPO + MASUPEnv @ milwaukee（异构预处理版本）
+# 图统计: nodes=40, directed_edges=112, max_out_degree=5, avg_edge=10.961, max_edge=14.14
+# 物理时间截断: episode_len=800 (T=80.0), total_steps=50000000
+
 algo_name: mappo
 env_type: masup
 actor_type: masup_mlp
 critic_type: masup_mlp
 
-# ---- 实验元信息 ----
-exp_name: mappo-SF-preproc
-graph_name: SF
+exp_name: mappo-masup-milwaukee
+graph_name: milwaukee
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
-  graph_path: graphs/SFcrimemap.json
+  graph_path: graphs/milwaukee.json
   enable_wait: true
-  deltaT: 20.0
   norm_reward: true
-  num_agents: 3
-  # init_positions: [0]
-  init_positions: [0, 5, 11]
-  episode_len: 3000
+  deltaT: 8.0
+  num_agents: 6
+  init_positions: [0, 8, 16, 24, 32, 39]
+  episode_len: 800
   custom_configs:
-    T: 200.0
+    T: 80.0
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true
     idi_scale: 0.05
     contribution_scale: 0.05
 
-# ---- 算法 ----
 algo:
-  use_active_mask: True
+  use_active_mask: true
   actor_lr: 3.0e-4
   critic_lr: 3.0e-4
   gamma: 0.999
@@ -42,37 +40,37 @@ algo:
   ent_coef: 0.01
   use_value_norm: true
 
-# ---- 训练 ----
 training:
-  num_envs: 108
+  num_envs: 64
   use_subproc: true
-  num_steps: 2048
+  num_steps: 1024
   total_steps: 50000000
   save_interval: 200
-  minibatch_size: 4096
+  minibatch_size: 2048
   update_epochs: 5
   eval_interval: 10
 
-# ---- 网络（须与 env.custom_configs 中 T / role_imformation 一致）----
 actor:
-  graph_path: graphs/SFcrimemap.json
-  num_agents: 3
-  num_nodes: 12
+  graph_path: graphs/milwaukee.json
+  num_agents: 6
+  num_nodes: 40
   role_imformation: decision
   gpe_dim: 8
   proj_dim: 16
   use_log_idleness: false
-  T_time: 200.0
-  hidden: [256, 256]
+  T_time: 80.0
+  hidden: [256, 512]
 
 critic:
-  graph_path: graphs/SFcrimemap.json
-  num_agents: 3
-  num_nodes: 12
+  graph_path: graphs/milwaukee.json
+  num_agents: 6
+  num_nodes: 40
   role_imformation: decision
   gpe_dim: 8
   proj_dim: 16
   use_log_idleness: false
-  T_time: 200.0
+  T_time: 80.0
   input_mode: state
-  hidden: [256, 256]
+  hidden: [256, 512]
+
+eval_config_path: configs/eval/masup/masup_milwaukee.yaml

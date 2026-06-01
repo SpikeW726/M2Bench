@@ -1,0 +1,27 @@
+# magec @ milwaukee 评估配置
+env_type: magec
+
+env:
+  graph_path: graphs/milwaukee.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: true
+  num_agents: 6
+  init_positions: [0, 8, 16, 24, 32, 39]
+  episode_len: 800
+  custom_configs:
+    truncate_by_time: true
+    alpha: 1
+    beta: 0.5
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/milwaukee/mappo_magec/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 1000
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/milwaukee/mappo_magec/action_logits.csv
+  action_logits_active_only: true

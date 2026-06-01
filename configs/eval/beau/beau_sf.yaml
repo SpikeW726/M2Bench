@@ -10,7 +10,6 @@ env:
   num_agents: 3
   init_positions: [0, 5, 11]
   episode_len: 3000
-  edge_time_jitter: false
   custom_configs:
     reward_scale: 0.01
     truncate_by_time: true
