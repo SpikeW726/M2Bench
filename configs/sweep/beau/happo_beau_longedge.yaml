@@ -20,20 +20,20 @@ parameters:
     max: 1.0e-3
     distribution: log_uniform_values
   gamma:
-    values: [0.97, 0.99, 0.999]
+    values: [0.99, 0.999]
   clip_coef:
     min: 0.1
     max: 0.3
   ent_coef:
     min: 0.0
-    max: 0.05
+    max: 0.2
   vf_coef:
     min: 0.1
     max: 1.0
   policy_update_steps:
     values: [3, 5, 8]
   hidden_dim:
-    values: [32, 64, 128]
+    values: [64, 128]
   num_heads:
     values: [2, 4, 8]
   encoder_layers:
@@ -41,24 +41,24 @@ parameters:
   custom_configs.reward_scale:
     values: [0.005, 0.01, 0.02]
   num_steps:
-    values: [384, 512, 768]
+    values: [512, 1024]
   num_envs:
     # MATOnPolicyCollector 仅支持 num_envs=1
     value: 1
   total_steps:
-    value: 5000000
+    value: 20000000
   save_interval:
     value: 500
   eval_interval:
     value: 8
   eval_episodes:
-    value: 4
+    value: 1
 
 early_terminate:
-  min_trial: 5
-  min_steps: 2500000
-  terminate_ratio: 0.45
+  min_trial: 4
+  min_steps: 500000
+  terminate_ratio: 0.5
   early_stop_iters: 12
-  slope_horizons: [4, 8, 16]
-  slope_threshold: 1.0e-4
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
   state_file: .sweep_es_happo_beau_longedge.json

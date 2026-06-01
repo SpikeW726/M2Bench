@@ -43,10 +43,10 @@ algo:
   reward_global: false
 
 training:
-  num_envs: 96
+  num_envs: 80
   use_subproc: true
   num_steps: 512
-  total_steps: 40000000
+  total_steps: 50000000
   save_interval: 300
   minibatch_size: 2048
   update_epochs: 10

@@ -18,6 +18,7 @@ WandB Sweep 超参数搜索脚本。
 """
 
 import argparse
+import shutil
 from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,7 @@ from configs.registry import load_config
 from configs.exp_configs import ExperimentConfig
 from train import train, _configure_wandb_env_step_axis
 from utils.autodl_paths import AUTODL_RESULTS_ROOT, resolve_results_path
+from utils.model_io import trial_checkpoint_dir
 from trainers.sweep_early_stopper import SweepEarlyStop, SweepEarlyStopper
 
 
@@ -79,6 +81,25 @@ _SWEEP_RAW_CONFIG: dict = {}   # 完整 sweep YAML（含 early_terminate 块）
 _EVAL_CONFIG_PATH: str = ""    # eval YAML 路径；非空时 inline eval 在每个 trial 中生效
 
 
+def _record_trial_save_dir(config: ExperimentConfig) -> None:
+    """将 trial checkpoint 目录写入 wandb summary，供 eval_best_runs 查询。"""
+    ckpt_dir = trial_checkpoint_dir(config.save_dir, config.algo_name)
+    if ckpt_dir.is_dir():
+        wandb.run.summary["save_dir"] = str(ckpt_dir)
+        print(f"[Sweep] Recorded save_dir={ckpt_dir}")
+    else:
+        print("[Sweep] No checkpoint saved for this trial (skip save_dir in summary)")
+
+
+def delete_trial_artifacts(save_dir: Path) -> None:
+    """删除被淘汰 trial 的权重与中间文件，释放磁盘。"""
+    save_dir = Path(save_dir)
+    if not save_dir.is_dir():
+        return
+    shutil.rmtree(save_dir)
+    print(f"[Sweep] Deleted eliminated trial artifacts: {save_dir}", flush=True)
+
+
 def sweep_train():
     """
     wandb.agent() 回调函数。
@@ -103,6 +124,7 @@ def sweep_train():
         state_file = et_config.get("state_file", f".sweep_es_{_SWEEP_ID}.json")
         early_stopper = SweepEarlyStopper(et_config, metric_name, metric_goal, state_file)
 
+    config = None
     try:
         wandb.init()
         # 在 train() 前注册 step 轴，避免 agent / init 侧先写历史导致默认 iter 横轴
@@ -129,21 +151,17 @@ def sweep_train():
         _ecp = _EVAL_CONFIG_PATH or getattr(config, "eval_config_path", None) or None
         train(config, eval_config_path=_ecp, early_stopper=early_stopper)
 
-        # 训练完成后记录 save_dir，供 eval_best_runs 事后查询
-        final_dir = str(config.save_dir / "final")
-        wandb.run.summary["save_dir"] = final_dir
-        print(f"[Sweep] Recorded save_dir={final_dir}")
+        _record_trial_save_dir(config)
 
     except SweepEarlyStop as e:
         # 优雅早停：不写 crash log，不 re-raise，wandb agent 会继续下一个 trial
         print(f"\n[Sweep] *** EARLY STOP *** (not a crash): {e}", flush=True)
-        # train.py 已将权重写入 save_dir/final；此处补记 summary 供 eval_best_runs 查询
         try:
-            final_dir = str(config.save_dir / "final")
-            wandb.run.summary["save_dir"] = final_dir
             wandb.run.summary["early_stopped"] = True
-        except Exception:
-            pass
+            if config is not None:
+                delete_trial_artifacts(config.save_dir)
+        except Exception as cleanup_err:
+            print(f"[Sweep] Failed to cleanup eliminated trial: {cleanup_err}", flush=True)
 
     except Exception as e:
         # 真实崩溃：强制打印完整链式错误并写文件备查

@@ -292,6 +292,7 @@ class imi_trainer:
         self.use_value_norm = kwargs.get("use_value_norm", False)
         self.ret_mean = 0.0
         self.ret_std = 1.0
+        self.ret_count = 0  # 启发式数据中参与统计的真实样本数
 
         # Logging 配置
         self.track = kwargs.get("track", False)
@@ -433,7 +434,8 @@ class imi_trainer:
                     raise ValueError("active_masks 中没有任何 active 样本，无法计算 value normalization")
                 self.ret_mean = sum_ret / count
                 self.ret_std = np.sqrt(sum_sq_ret / count - self.ret_mean ** 2)
-                print(f"[ImiTrainer] Value Normalization: mean={self.ret_mean:.4f}, std={self.ret_std:.4f}")
+                self.ret_count = int(count)
+                print(f"[ImiTrainer] Value Normalization: mean={self.ret_mean:.4f}, std={self.ret_std:.4f}, count={self.ret_count}")
 
             global_step = 0
             start_time = time.time()
@@ -711,6 +713,7 @@ class imi_trainer:
                 "use_value_norm": self.use_value_norm,
                 "ret_mean": float(self.ret_mean),
                 "ret_std": float(self.ret_std),
+                "ret_count": int(self.ret_count),
             } if self.use_value_norm else None,
         }
         config = _ensure_native_types(config)
@@ -749,6 +752,7 @@ class imi_trainer:
                     "use_value_norm": self.use_value_norm,
                     "ret_mean": float(self.ret_mean),
                     "ret_std": float(self.ret_std),
+                    "ret_count": int(self.ret_count),
                 } if self.use_value_norm else None,
             }
             if self.mode == "actor_critic":
@@ -780,6 +784,7 @@ class imi_trainer:
                     "use_value_norm": self.use_value_norm,
                     "ret_mean": float(self.ret_mean),
                     "ret_std": float(self.ret_std),
+                    "ret_count": int(self.ret_count),
                 } if self.use_value_norm else None,
             }
             config = _ensure_native_types(config)

@@ -33,7 +33,7 @@ algo:
 training:
   num_envs: 64
   use_subproc: true
-  total_steps: 40000000
+  total_steps: 60000000
   save_interval: 300
   eval_interval: 10
 

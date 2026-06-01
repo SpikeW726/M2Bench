@@ -33,32 +33,56 @@ def _build_qtable_yaml_extra(
     return extra if extra else None
 
 
-def _save_qtable_final(
+def _metric_improved(
+    value: float,
+    best: Optional[float],
+    *,
+    minimize: bool,
+) -> bool:
+    if best is None:
+        return True
+    return value < best if minimize else value > best
+
+
+def _save_qtable_checkpoint(
     algo: QTableAlgo,
     vec_env,
     save_dir: Path,
+    checkpoint_name: str,
     episode: int,
     total_steps: int,
     verbose: bool,
     base_extra: Optional[Dict[str, Any]] = None,
-) -> None:
-    """写入 save_dir/final/，与 RL checkpoint 约定一致（sweep summary、自动评估）。"""
-    final_dir = Path(save_dir) / "final"
-    algo.save(str(final_dir))
-    meta = {
-        "algo_name": "qtable",
+    algo_name: str = "qtable",
+    best_metric_name: Optional[str] = None,
+    best_metric_value: Optional[float] = None,
+) -> Path:
+    """写入 save_dir/{checkpoint_name}/（Q-table 默认 best/）。"""
+    ckpt_dir = Path(save_dir) / checkpoint_name
+    algo.save(str(ckpt_dir))
+    meta: Dict[str, Any] = {
+        "algo_name": algo_name,
         "episode": episode,
         "total_steps": total_steps,
         "epsilon": algo.get_epsilon(),
         "qtable_sizes": {aid: len(pol.q_table) for aid, pol in algo.policies.items()},
     }
+    if best_metric_name is not None:
+        meta["best_metric_name"] = best_metric_name
+        meta["best_metric_value"] = best_metric_value
     yaml_extra = _build_qtable_yaml_extra(vec_env, base_extra)
     if yaml_extra:
         meta["extra"] = yaml_extra
-    with open(final_dir / "config.yaml", "w") as f:
+    with open(ckpt_dir / "config.yaml", "w") as f:
         yaml.dump(meta, f, default_flow_style=False)
     if verbose:
-        print(f"[QTable] Saved final Q-tables to {final_dir}")
+        metric_msg = (
+            f", {best_metric_name}={best_metric_value:.4f}"
+            if best_metric_name is not None and best_metric_value is not None
+            else ""
+        )
+        print(f"[QTable] Saved best checkpoint to {ckpt_dir}{metric_msg}")
+    return ckpt_dir
 
 
 def _log_metrics(logger, data: Dict[str, float], step: int) -> None:
@@ -76,6 +100,7 @@ def _maybe_run_inline_eval(
     logger,
     total_steps: int,
     on_eval_complete: Optional[Callable],
+    save_best_fn: Optional[Callable[[Dict[str, float], int], bool]] = None,
 ) -> None:
     """对齐 DRL trainer：每隔 eval_interval 个 iteration 执行一次 inline eval。"""
     if not eval_fn or eval_interval <= 0:
@@ -93,6 +118,8 @@ def _maybe_run_inline_eval(
     finally:
         algo.set_training_mode(True)
     if eval_metrics:
+        if save_best_fn is not None:
+            save_best_fn(eval_metrics, iteration)
         _log_metrics(logger, eval_metrics, step=total_steps)
         if on_eval_complete is not None:
             on_eval_complete(eval_metrics, total_steps)
@@ -108,7 +135,7 @@ class QTableTrainer:
         1. vec_env.reset()
         2. 逐步选动作 → env.step → 对 active agent 做 Q-update
         3. 所有 env 结束后 decay epsilon
-        4. 日志 & checkpoint
+        4. 日志；inline eval 指标创新高时写入 save_dir/best/
 
     停止条件（二选一）：
         - total_steps 非 None：累计环境步数（与 _run_episode 返回的 steps 一致）>= total_steps 后停止；
@@ -134,6 +161,8 @@ class QTableTrainer:
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
         eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
         extra_info: Optional[Dict[str, Any]] = None,
+        best_metric_name: str = "eval/wi",
+        best_metric_goal: str = "minimize",
     ):
         self.algo = algo
         self.vec_env = vec_env
@@ -141,7 +170,6 @@ class QTableTrainer:
         self.agents = vec_env.agents
         self._step_budget: Optional[int] = config.total_steps
         self.max_episodes = config.max_iterations
-        self.save_interval = config.save_interval
         self.eval_interval = getattr(config, "eval_interval", 0)
         self.save_dir = Path(save_dir)
         self.logger = logger
@@ -149,6 +177,8 @@ class QTableTrainer:
         self.eval_fn = eval_fn
         self.extra_info = extra_info or {}
         self.verbose = config.verbose
+        self.best_metric_name = best_metric_name
+        self._minimize_best = best_metric_goal == "minimize"
 
         self._sync_mode = getattr(algo.params, 'sync_update', False)
         self._gamma = algo.gamma
@@ -157,6 +187,8 @@ class QTableTrainer:
         self.total_steps = 0
         self.best_reward = -float("inf")
         self.on_eval_complete: Optional[Callable] = None
+        self._best_metric_value: Optional[float] = None
+        self._best_saved = False
 
     def train(self) -> Dict[str, float]:
         start_time = time.time()
@@ -185,22 +217,14 @@ class QTableTrainer:
                 logger=self.logger,
                 total_steps=self.total_steps,
                 on_eval_complete=self.on_eval_complete,
+                save_best_fn=self.maybe_save_best_checkpoint,
             )
-
-            if ep % self.save_interval == 0:
-                self._save_checkpoint(ep)
 
             if self._step_budget is not None:
                 if self.total_steps >= self._step_budget:
                     break
             elif ep >= self.max_episodes:
                 break
-
-        self._save_checkpoint(ep)
-        _save_qtable_final(
-            self.algo, self.vec_env, self.save_dir, ep, self.total_steps, self.verbose,
-            base_extra=self.extra_info,
-        )
 
         total_time = time.time() - start_time
         if self.verbose:
@@ -212,6 +236,11 @@ class QTableTrainer:
             print(f"\n[QTable] Training complete! {budget_msg}, "
                   f"ran_episodes={ep}, Steps: {self.total_steps}, Time: {total_time:.1f}s, "
                   f"Best reward: {self.best_reward:.2f}")
+            if self._best_saved:
+                print(f"  Best checkpoint: {self.save_dir / 'best'} "
+                      f"({self.best_metric_name}={self._best_metric_value:.4f})")
+            else:
+                print("  No best checkpoint saved (inline eval never improved).")
 
         return {
             "total_episodes": ep,
@@ -219,6 +248,34 @@ class QTableTrainer:
             "total_time": total_time,
             "best_reward": self.best_reward,
         }
+
+    def maybe_save_best_checkpoint(self, metrics: Dict[str, float], episode: int) -> bool:
+        """inline eval 指标创新高时覆盖写入 save_dir/best/。"""
+        val = metrics.get(self.best_metric_name)
+        if val is None:
+            return False
+        val = float(val)
+        if not _metric_improved(val, self._best_metric_value, minimize=self._minimize_best):
+            return False
+        self._best_metric_value = val
+        _save_qtable_checkpoint(
+            self.algo,
+            self.vec_env,
+            self.save_dir,
+            "best",
+            episode,
+            self.total_steps,
+            self.verbose,
+            base_extra=self.extra_info,
+            best_metric_name=self.best_metric_name,
+            best_metric_value=val,
+        )
+        self._best_saved = True
+        return True
+
+    @property
+    def has_best_checkpoint(self) -> bool:
+        return self._best_saved
 
     def _run_episode(self) -> Dict[str, Any]:
         """运行一个 episode（所有 vec_env 并行），返回统计量。"""
@@ -433,28 +490,6 @@ class QTableTrainer:
                 f"steps={self.total_steps}, SPS={sps}"
             )
 
-    def _save_checkpoint(self, episode: int):
-        ckpt_dir = self.save_dir / f"ep_{episode}"
-        self.algo.save(str(ckpt_dir))
-
-        meta = {
-            "algo_name": "qtable",
-            "episode": episode,
-            "total_steps": self.total_steps,
-            "epsilon": self.algo.get_epsilon(),
-            "qtable_sizes": {
-                aid: len(pol.q_table) for aid, pol in self.algo.policies.items()
-            },
-        }
-        yaml_extra = _build_qtable_yaml_extra(self.vec_env, self.extra_info)
-        if yaml_extra:
-            meta["extra"] = yaml_extra
-        with open(ckpt_dir / "config.yaml", "w") as f:
-            yaml.dump(meta, f, default_flow_style=False)
-
-        if self.verbose:
-            print(f"[Checkpoint] Saved episode {episode} to {ckpt_dir}")
-
 
 # =============================================================================
 #                     JointQTableTrainer — Gymnasium Env 版本
@@ -471,7 +506,7 @@ class JointQTableTrainer:
         1. vec_env.reset()
         2. 逐步选动作 → env.step → Q-update
         3. 所有 env 结束后 decay epsilon
-        4. 日志 & checkpoint
+        4. 日志；inline eval 指标创新高时写入 save_dir/best/
 
     停止条件与 QTableTrainer 相同：total_steps 预算 或 max_iterations 个 episode。
     """
@@ -488,13 +523,14 @@ class JointQTableTrainer:
         log_extra_fn=None,
         eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
         extra_info: Optional[Dict[str, Any]] = None,
+        best_metric_name: str = "eval/wi",
+        best_metric_goal: str = "minimize",
     ):
         self.algo = algo
         self.vec_env = vec_env
         self.num_envs = vec_env.num_envs
         self._step_budget: Optional[int] = config.total_steps
         self.max_episodes = config.max_iterations
-        self.save_interval = config.save_interval
         self.eval_interval = getattr(config, "eval_interval", 0)
         self.save_dir = Path(save_dir)
         self.logger = logger
@@ -502,11 +538,15 @@ class JointQTableTrainer:
         self.eval_fn = eval_fn
         self.extra_info = extra_info or {}
         self.verbose = config.verbose
+        self.best_metric_name = best_metric_name
+        self._minimize_best = best_metric_goal == "minimize"
 
         self.iteration = 0
         self.total_steps = 0
         self.best_reward = -float("inf")
         self.on_eval_complete: Optional[Callable] = None
+        self._best_metric_value: Optional[float] = None
+        self._best_saved = False
 
     def train(self) -> Dict[str, float]:
         start_time = time.time()
@@ -535,22 +575,14 @@ class JointQTableTrainer:
                 logger=self.logger,
                 total_steps=self.total_steps,
                 on_eval_complete=self.on_eval_complete,
+                save_best_fn=self.maybe_save_best_checkpoint,
             )
-
-            if ep % self.save_interval == 0:
-                self._save_checkpoint(ep)
 
             if self._step_budget is not None:
                 if self.total_steps >= self._step_budget:
                     break
             elif ep >= self.max_episodes:
                 break
-
-        self._save_checkpoint(ep)
-        _save_qtable_final(
-            self.algo, self.vec_env, self.save_dir, ep, self.total_steps, self.verbose,
-            base_extra=self.extra_info,
-        )
 
         total_time = time.time() - start_time
         if self.verbose:
@@ -562,6 +594,11 @@ class JointQTableTrainer:
             print(f"\n[JointQTable] Training complete! {budget_msg}, "
                   f"ran_episodes={ep}, Steps: {self.total_steps}, Time: {total_time:.1f}s, "
                   f"Best reward: {self.best_reward:.2f}")
+            if self._best_saved:
+                print(f"  Best checkpoint: {self.save_dir / 'best'} "
+                      f"({self.best_metric_name}={self._best_metric_value:.4f})")
+            else:
+                print("  No best checkpoint saved (inline eval never improved).")
 
         return {
             "total_episodes": ep,
@@ -569,6 +606,34 @@ class JointQTableTrainer:
             "total_time": total_time,
             "best_reward": self.best_reward,
         }
+
+    def maybe_save_best_checkpoint(self, metrics: Dict[str, float], episode: int) -> bool:
+        val = metrics.get(self.best_metric_name)
+        if val is None:
+            return False
+        val = float(val)
+        if not _metric_improved(val, self._best_metric_value, minimize=self._minimize_best):
+            return False
+        self._best_metric_value = val
+        _save_qtable_checkpoint(
+            self.algo,
+            self.vec_env,
+            self.save_dir,
+            "best",
+            episode,
+            self.total_steps,
+            self.verbose,
+            base_extra=self.extra_info,
+            algo_name="qtable_joint",
+            best_metric_name=self.best_metric_name,
+            best_metric_value=val,
+        )
+        self._best_saved = True
+        return True
+
+    @property
+    def has_best_checkpoint(self) -> bool:
+        return self._best_saved
 
     def _run_episode(self) -> Dict[str, Any]:
         obs, info = self.vec_env.reset()   # obs: (num_envs, *obs_shape)
@@ -664,23 +729,3 @@ class JointQTableTrainer:
                 f"eps={self.algo.get_epsilon():.4f}, "
                 f"steps={self.total_steps}, SPS={sps}"
             )
-
-    def _save_checkpoint(self, episode: int):
-        ckpt_dir = self.save_dir / f"ep_{episode}"
-        self.algo.save(str(ckpt_dir))
-
-        meta = {
-            "algo_name": "qtable_joint",
-            "episode": episode,
-            "total_steps": self.total_steps,
-            "epsilon": self.algo.get_epsilon(),
-            "qtable_size": len(self.algo.policies[self.POLICY_KEY].q_table),
-        }
-        yaml_extra = _build_qtable_yaml_extra(self.vec_env, self.extra_info)
-        if yaml_extra:
-            meta["extra"] = yaml_extra
-        with open(ckpt_dir / "config.yaml", "w") as f:
-            yaml.dump(meta, f, default_flow_style=False)
-
-        if self.verbose:
-            print(f"[Checkpoint] Saved episode {episode} to {ckpt_dir}")

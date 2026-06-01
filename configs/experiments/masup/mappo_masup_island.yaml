@@ -41,9 +41,9 @@ algo:
   use_value_norm: true
 
 training:
-  num_envs: 64
+  num_envs: 80
   use_subproc: true
-  num_steps: 1024
+  num_steps: 2048
   total_steps: 60000000
   save_interval: 200
   minibatch_size: 2048

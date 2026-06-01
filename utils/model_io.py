@@ -105,6 +105,20 @@ def _build_network_from_config(net_cfg: dict, registry: Dict[str, type]) -> nn.M
 
 
 # =========================================================================
+#                         Checkpoint path helpers
+# =========================================================================
+
+def trial_checkpoint_subdir(algo_name: str) -> str:
+    """Q-table 存 best/；DRL 存 final/。"""
+    return "best" if algo_name == "qtable" else "final"
+
+
+def trial_checkpoint_dir(save_dir: str | Path, algo_name: str) -> Path:
+    """返回单次 trial 用于评估/ sweep summary 的 checkpoint 目录。"""
+    return Path(save_dir) / trial_checkpoint_subdir(algo_name)
+
+
+# =========================================================================
 #                              Save
 # =========================================================================
 

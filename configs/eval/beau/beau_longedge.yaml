@@ -21,6 +21,6 @@ eval:
   show_plot: false
   animation: true
   event_driven: true
-  max_frames: 400
+  max_frames: 350
 
 algo_name: happo

@@ -119,7 +119,8 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
             if value_norm_config is not None:
                 self.ret_rms.mean.fill_(value_norm_config.get('ret_mean', 0.0))
                 self.ret_rms.var.fill_(value_norm_config.get('ret_std', 1.0) ** 2)
-                self.ret_rms.count.fill_(1.0)
+                self.ret_rms.count.fill_(float(value_norm_config.get('ret_count', 1)))
+                # self.ret_rms.count.fill_(1.0)
 
         # RNN critic hidden state（跨 collect 持久化）
         self._critic_hidden: Optional[torch.Tensor] = None

@@ -14,7 +14,7 @@ env:
   graph_path: graphs/cumberland.json
   enable_wait: false
   norm_reward: true
-  norm_obs: true
+  norm_obs: false
   num_agents: 6
   init_positions: [0, 8, 16, 24, 32, 39]
   episode_len: 500
@@ -30,10 +30,10 @@ algo:
   epsilon_decay_steps: 10000000
 
 training:
-  num_envs: 64
+  num_envs: 32
   use_subproc: true
   total_steps: 40000000
-  save_interval: 300
+  save_interval: 2000
   eval_interval: 10
 
 eval_config_path: configs/eval/bbla/bbla_cumberland.yaml

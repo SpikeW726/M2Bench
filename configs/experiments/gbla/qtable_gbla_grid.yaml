@@ -20,6 +20,7 @@ env:
   graph_path: graphs/grid.json
   enable_wait: false
   norm_reward: true
+  norm_obs: false
   num_agents: 6
   init_positions: [1, 9, 17, 25, 33, 41]
   episode_len: 500

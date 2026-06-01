@@ -43,11 +43,11 @@ training:
   num_envs: 1
   use_subproc: false
   num_steps: 2048
-  total_steps: 5000000
+  total_steps: 20000000
   save_interval: 500
   minibatch_size: 256
   update_epochs: 5
   eval_interval: 10
-  eval_episodes: 5
+  eval_episodes: 1
 
 eval_config_path: configs/eval/beau/beau_longedge.yaml

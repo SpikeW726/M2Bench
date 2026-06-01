@@ -677,35 +677,12 @@ def _train_qtable(
         "train_env_custom_configs": dict(config.env.custom_configs or {}),
     }
 
-    inline_eval_fn = None
-    if eval_config_path and tc.eval_interval > 0:
-        from evaluators.test import eval_qtable_inline
-        from configs.registry import load_eval_config
-        from envs.venv_wrappers import VectorEnvNormObs, find_vec_wrapper
-
-        _obs_norm_for_inline = find_vec_wrapper(vec_env, VectorEnvNormObs)
-        _eval_env_type, _eval_env_cfg = load_eval_config(eval_config_path)
-        _train_custom = dict(config.env.custom_configs or {})
-        if _train_custom:
-            _eval_env_cfg.custom_configs = {
-                **(_eval_env_cfg.custom_configs or {}),
-                **_train_custom,
-            }
-        _eval_episodes = tc.eval_episodes
-
-        def inline_eval_fn():
-            _rms = (
-                _obs_norm_for_inline.get_obs_rms()
-                if _obs_norm_for_inline is not None
-                else None
-            )
-            return eval_qtable_inline(
-                algo=algo,
-                env_type=_eval_env_type,
-                env_config=_eval_env_cfg,
-                num_episodes=_eval_episodes,
-                obs_rms=_rms,
-            )
+    if early_stopper is not None:
+        best_metric_name = early_stopper.metric_name
+        best_metric_goal = "minimize" if early_stopper.minimize else "maximize"
+    else:
+        best_metric_name = "eval/wi"
+        best_metric_goal = "minimize"
 
     if vec_env.is_parallel_env:
         # ParallelEnv：每个 agent 独立 Q-table
@@ -718,11 +695,6 @@ def _train_qtable(
             for aid in agent_ids
         }
         algo = QTableAlgo(policies, config.algo)
-        trainer = QTableTrainer(
-            algo=algo, vec_env=vec_env, config=tc,
-            save_dir=config.save_dir, logger=logger, log_extra_fn=log_extra_fn,
-            eval_fn=inline_eval_fn, extra_info=qtable_eval_meta,
-        )
     else:
         # Gymnasium Env：单一集中式 Q-table，虚拟 key "agent_0"
         action_dim = vec_env.action_space.n
@@ -730,11 +702,46 @@ def _train_qtable(
               f"action_dim={action_dim}, num_envs={tc.num_envs}")
         policies = {"agent_0": QTablePolicy(action_dim, config.algo.epsilon_start)}
         algo = QTableAlgo(policies, config.algo)
-        trainer = JointQTableTrainer(
-            algo=algo, vec_env=vec_env, config=tc,
-            save_dir=config.save_dir, logger=logger, log_extra_fn=log_extra_fn,
-            eval_fn=inline_eval_fn, extra_info=qtable_eval_meta,
-        )
+
+    inline_eval_fn = None
+    if eval_config_path and tc.eval_interval > 0:
+        from evaluators.test import eval_qtable_inline
+        from configs.registry import load_eval_config
+
+        _eval_env_type, _eval_env_cfg = load_eval_config(eval_config_path)
+        _train_custom = dict(config.env.custom_configs or {})
+        if _train_custom:
+            _eval_env_cfg.custom_configs = {
+                **(_eval_env_cfg.custom_configs or {}),
+                **_train_custom,
+            }
+        _eval_episodes = tc.eval_episodes
+
+        def inline_eval_fn():
+            return eval_qtable_inline(
+                algo=algo,
+                env_type=_eval_env_type,
+                env_config=_eval_env_cfg,
+                num_episodes=_eval_episodes,
+                obs_rms=None,
+            )
+
+    _trainer_common = dict(
+        algo=algo,
+        vec_env=vec_env,
+        config=tc,
+        save_dir=config.save_dir,
+        logger=logger,
+        log_extra_fn=log_extra_fn,
+        eval_fn=inline_eval_fn,
+        extra_info=qtable_eval_meta,
+        best_metric_name=best_metric_name,
+        best_metric_goal=best_metric_goal,
+    )
+    if vec_env.is_parallel_env:
+        trainer = QTableTrainer(**_trainer_common)
+    else:
+        trainer = JointQTableTrainer(**_trainer_common)
 
     if early_stopper is not None:
         _orig_lef = trainer.log_extra_fn
@@ -762,9 +769,11 @@ def _train_qtable(
 
     trainer.train()
 
-    if eval_config_path:
+    if eval_config_path and trainer.has_best_checkpoint:
         from evaluators.test import run_eval_from_config
-        qtable_dir = config.save_dir / "final"
+        from utils.model_io import trial_checkpoint_dir
+
+        qtable_dir = trial_checkpoint_dir(config.save_dir, config.algo_name)
         print(f"\n[Train] Starting auto-eval from {eval_config_path}")
         final_eval_metrics = run_eval_from_config(str(qtable_dir), eval_config_path)
         if final_eval_metrics:
@@ -776,6 +785,8 @@ def _train_qtable(
                 if wandb.run is not None:
                     for key, value in final_eval_metrics.items():
                         wandb.run.summary[key] = value
+    elif eval_config_path:
+        print("[Train] Skipping auto-eval: no best checkpoint was saved during training.")
 
     tb_writer.close()
     if config.track_wandb:

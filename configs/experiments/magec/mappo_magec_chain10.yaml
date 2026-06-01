@@ -40,14 +40,14 @@ algo:
   use_value_norm: true
 
 training:
-  num_envs: 48
+  num_envs: 108
   use_subproc: true
   num_steps: 512
   total_steps: 20000000
   save_interval: 100
   minibatch_size: 1024
   update_epochs: 5
-  eval_interval: 10
+  eval_interval: 5
 
 actor:
   graph_path: graphs/Chain10nodes9edges.json

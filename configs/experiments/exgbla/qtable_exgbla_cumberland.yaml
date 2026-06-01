@@ -14,7 +14,7 @@ env:
   graph_path: graphs/cumberland.json
   enable_wait: false
   norm_reward: true
-  norm_obs: true
+  norm_obs: false
   num_agents: 6
   init_positions: [0, 8, 16, 24, 32, 39]
   episode_len: 500
