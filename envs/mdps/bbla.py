@@ -22,6 +22,9 @@ class BBLAEnv(FixedStepEnv):
     def __init__(self, config: Dict, **kwargs):
         super().__init__(config)
 
+        # 评估时 reset(seed=...) 启用；训练时不传 seed 则沿用全局 random
+        self._tie_break_rng: Optional[random.Random] = None
+
         # Episode 截止模式开关
         # truncate_by_time=True (默认): 使用总时间 all_timer >= episode_len 截止
         # truncate_by_time=False: 使用 step 数量 step_cnt >= episode_len 截止
@@ -45,6 +48,19 @@ class BBLAEnv(FixedStepEnv):
     def action_space(self, agent):
         return Discrete(self.world.max_neighbors + 1) # The last dimension means no-op
 
+    def reset(self, seed: Optional[int] = None):
+        """seed 非空时用独立 RNG 做平局打破，评估可复现；不传则训练时保持随机。"""
+        if seed is not None:
+            self._tie_break_rng = random.Random(seed)
+        else:
+            self._tie_break_rng = None
+        return super().reset(seed=seed)
+
+    def _tie_break_choice(self, candidates: List[int]) -> int:
+        """max/min 邻居平局时选取；评估走 episode RNG，训练走全局 random。"""
+        if self._tie_break_rng is not None:
+            return self._tie_break_rng.choice(candidates)
+        return random.choice(candidates)
 
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, Any]:
         obs = {}
@@ -78,9 +94,13 @@ class BBLAEnv(FixedStepEnv):
                 max_nodes = [n for n, idle in zip(neighbors, neighbor_idleness) if idle == max_idle]
                 min_nodes = [n for n, idle in zip(neighbors, neighbor_idleness) if idle == min_idle]
 
-                # 平局时随机选取
-                max_node = self.world.graph.neighbor_to_edge(current_pos, random.choice(max_nodes))
-                min_node = self.world.graph.neighbor_to_edge(current_pos, random.choice(min_nodes))
+                # 平局时随机选取（评估可经 reset(seed) 固定序列）
+                max_node = self.world.graph.neighbor_to_edge(
+                    current_pos, self._tie_break_choice(max_nodes)
+                )
+                min_node = self.world.graph.neighbor_to_edge(
+                    current_pos, self._tie_break_choice(min_nodes)
+                )
             else:
                 max_node = min_node = -1
             

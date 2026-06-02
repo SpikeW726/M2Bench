@@ -31,7 +31,7 @@ algo:
   epsilon_decay_steps: 10000000
 
 training:
-  num_envs: 48
+  num_envs: 60
   use_subproc: true
   total_steps: 50000000
   save_interval: 1000

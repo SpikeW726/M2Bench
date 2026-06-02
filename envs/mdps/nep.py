@@ -30,6 +30,8 @@ class NEPEnv(JointEventDrivenEnv):
         self.init_pos = config.get("init_positions", [])
         self._current_decision_agent: int = -1  # 当前决策的 agent id
         self._last_obs = None
+        # 评估时 reset(seed=...) 启用；训练不传 seed 则随机选决策智能体
+        self._decision_rng: Optional[random.Random] = None
 
         self.obs_size = 1 # 由 num_agent 维映射到 1 维
         edge_combinations_count = math.comb(self.world.num_edges, self.world.num_agents-1)
@@ -38,10 +40,19 @@ class NEPEnv(JointEventDrivenEnv):
         self.observation_space = Discrete(max_combination+2, start=-2) # -2: 有智能体未出发; -1: 多智能体在同一条边上
         self.action_space = Discrete(self.world.max_neighbors)
     
-    def reset(self, seed: Optional[int] = None):  
+    def reset(self, seed: Optional[int] = None):
+        if seed is not None:
+            self._decision_rng = random.Random(seed)
+        else:
+            self._decision_rng = None
         gymnasium.Env.reset(self, seed=seed)
         self.world.reset(initial_positions=self.init_pos if self.init_pos else None, seed=seed)
         return self._build_obs(None), self._build_info(None)
+
+    def _pick_decision_agent(self, ready_agents: list) -> int:
+        if self._decision_rng is not None:
+            return self._decision_rng.choice(ready_agents)
+        return random.choice(ready_agents)
 
     def _dispatch_actions(self, action: int):
         if not isinstance(action, (int, np.integer)):
@@ -59,7 +70,7 @@ class NEPEnv(JointEventDrivenEnv):
 
     def _build_obs(self, result: Optional[TickResult]) -> int:
         ready_agents = self.world.get_ready_agents()
-        self._current_decision_agent = random.choice(ready_agents)
+        self._current_decision_agent = self._pick_decision_agent(ready_agents)
         cur_position = self.world.agents[self._current_decision_agent].position
 
         edge_combinations_count = math.comb(self.world.num_edges, self.world.num_agents-1)

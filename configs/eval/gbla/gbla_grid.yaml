@@ -17,6 +17,7 @@ env:
     truncate_by_time: true
 
 eval:
+  seed: 42              # 评估固定随机性；训练仍随机
   num_episodes: 10
   save_plot: evaluators/results/grid/qtable-gbla/best_eval.png
   show_plot: false

@@ -37,7 +37,7 @@ algo:
   shared_policy: false
 
 training:
-  num_envs: 96
+  num_envs: 72
   use_subproc: true
   num_steps: 2048
   total_steps: 40000000
@@ -47,7 +47,7 @@ training:
   buffer_size: 100000
   collect_per_step: 96
   update_per_step: 1
-  eval_interval: 5
+  eval_interval: 20
 
 q_network:
   hidden: [256, 256]

@@ -299,6 +299,13 @@ def _create_env(env_type: str, env_config):
     return env_cls(cfg_dict, **custom_dict)
 
 
+def _eval_env_reset(env, eval_seed: int | None, episode: int = 0):
+    """评估用 reset：有 eval_seed 时所有 episode 共用同一 seed；否则不传 seed 保持随机。"""
+    if eval_seed is not None:
+        return env.reset(seed=int(eval_seed))
+    return env.reset()
+
+
 # =============================================================================
 #                          评估主函数
 # =============================================================================
@@ -319,6 +326,7 @@ def test_trained_policy(
     log_action_logits_max_lines: int = 500,
     action_logits_csv: str = None,
     action_logits_active_only: bool = True,
+    eval_seed: int | None = None,
 ):
     """
     评估训练好的策略，自动适配算法/网络/环境类型。
@@ -343,6 +351,7 @@ def test_trained_policy(
         log_action_logits_max_lines: 打印行数上限，避免刷屏；超出后仅提示截断。
         action_logits_csv: 若提供路径，将所有记录行写入 CSV（含各动作 logit/q 列）。
         action_logits_active_only: True 时仅记录 active_mask=1 的步（真正决策时刻）。
+        eval_seed: BBLA/GBLA/NEP 评估用随机种子；None 则与训练相同随机性。
         动画文件名：若提供 save_plot，在「算法名_animation_图名」后追加 _ 与 save_plot 的文件名 stem，
         例如 best_eval.png → mappo_animation_long_edge_best_eval.mp4
     """
@@ -439,8 +448,11 @@ def test_trained_policy(
     anim_positions_history = []
     anim_time_intervals = []
 
+    if eval_seed is not None:
+        print(f"[Eval] eval seed={eval_seed} (all episodes share the same seed)")
+
     for ep in range(num_episodes):
-        obs, infos = env.reset()
+        obs, infos = _eval_env_reset(env, eval_seed, ep)
         step_count = 0
         hidden_state = None  # episode 开始时重置 RNN hidden state
 
@@ -706,6 +718,7 @@ def test_qtable_policy(
     log_action_logits_max_lines: int = 500,
     action_logits_csv: str = None,
     action_logits_active_only: bool = True,
+    eval_seed: int | None = None,
 ):
     """评估训练好的 Q-table 策略。
 
@@ -722,6 +735,7 @@ def test_qtable_policy(
         event_driven: True=事件驱动动画，False=固定步长动画
         max_frames: 动画最大帧数限制
         save_animation_dir: 动画保存目录；None 时回退到 save_plot 的父目录
+        eval_seed: BBLA/GBLA/NEP 评估用随机种子；None 则保持训练时随机性。
         动画文件名：若提供 save_plot，在「算法名_animation_图名」后追加 _stem（同 test_trained_policy）
     """
     model_dir = resolve_models_path(model_dir)
@@ -797,6 +811,8 @@ def test_qtable_policy(
 
     # ---- 4. 评估循环 ----
     print(f"\n=== Running {num_episodes} episodes (greedy, epsilon=0) ===")
+    if eval_seed is not None:
+        print(f"[Eval] eval seed={eval_seed} (all episodes share the same seed)")
 
     do_logits_file = bool(action_logits_csv)
     do_logits_print = bool(log_action_logits)
@@ -820,7 +836,7 @@ def test_qtable_policy(
     anim_time_intervals = []
 
     for ep in range(num_episodes):
-        obs, infos = env.reset()
+        obs, infos = _eval_env_reset(env, eval_seed, ep)
         truncated = False
         terminated = False
         step_count = 0
@@ -1029,6 +1045,7 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
           log_action_logits_max_lines: 500
           action_logits_csv: null   # 例: evaluators/results/run_action_logits.csv
           action_logits_active_only: true
+          seed: 42                # 有则所有 episode 共用；无则评估保持随机（同训练）
 
     Args:
         model_dir: 模型目录。
@@ -1079,11 +1096,13 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
     print(f"\n[Eval] model_dir={model_dir}, config={eval_config_path}")
     if algo_name == "qtable":
         # 过滤掉 DRL 专属字段，仅保留 Q-table 评估支持的参数。
+        if "seed" in eval_params:
+            eval_params["eval_seed"] = eval_params.pop("seed")
         _QTABLE_SUPPORTED = {
             "num_episodes", "save_plot", "show_plot", "record_animation",
             "event_driven", "max_frames", "save_animation_dir",
             "log_action_logits", "log_action_logits_max_lines",
-            "action_logits_csv", "action_logits_active_only",
+            "action_logits_csv", "action_logits_active_only", "eval_seed",
         }
         qtable_params = {k: v for k, v in eval_params.items() if k in _QTABLE_SUPPORTED}
         episode_metrics = test_qtable_policy(
@@ -1093,6 +1112,8 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
             **qtable_params,
         )
     else:
+        if "seed" in eval_params:
+            eval_params["eval_seed"] = eval_params.pop("seed")
         episode_metrics = test_trained_policy(
             model_dir=model_dir,
             env_config_path=eval_config_path,
@@ -1404,6 +1425,8 @@ if __name__ == '__main__':
                         help='覆盖 yaml 中的打印行数上限')
     parser.add_argument('--action_logits_csv', type=str, default=None,
                         help='将每次决策的 logits/Q 写入该 CSV 路径')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='BBLA/GBLA/NEP 评估种子（未指定时从 eval yaml 的 seed 读取）')
 
     args = parser.parse_args()
 
@@ -1424,6 +1447,7 @@ if __name__ == '__main__':
     )
     _csv = args.action_logits_csv if args.action_logits_csv is not None else _eval.get("action_logits_csv")
     _active_only = _eval.get("action_logits_active_only", True)
+    _eval_seed = args.seed if args.seed is not None else _eval.get("seed")
 
     if _algo_name == "qtable":
         test_qtable_policy(
@@ -1435,6 +1459,7 @@ if __name__ == '__main__':
             record_animation=args.animation,
             event_driven=not args.no_event_driven,
             max_frames=args.max_frames,
+            eval_seed=_eval_seed,
         )
     else:
         test_trained_policy(
@@ -1451,4 +1476,5 @@ if __name__ == '__main__':
             log_action_logits_max_lines=_log_max,
             action_logits_csv=_csv,
             action_logits_active_only=_active_only,
+            eval_seed=_eval_seed,
         )

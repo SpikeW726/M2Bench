@@ -19,6 +19,7 @@ WandB Sweep 超参数搜索脚本。
 
 import argparse
 import shutil
+import os
 from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +29,12 @@ import wandb
 
 from configs.registry import load_config
 from configs.exp_configs import ExperimentConfig
-from train import train, _configure_wandb_env_step_axis
+from train import (
+    train,
+    _configure_wandb_env_step_axis,
+    _wandb_fix_broken_local_proxy,
+    _wandb_init_settings,
+)
 from utils.autodl_paths import AUTODL_RESULTS_ROOT, resolve_results_path
 from utils.model_io import trial_checkpoint_dir
 from trainers.sweep_early_stopper import SweepEarlyStop, SweepEarlyStopper
@@ -125,8 +131,10 @@ def sweep_train():
         early_stopper = SweepEarlyStopper(et_config, metric_name, metric_goal, state_file)
 
     config = None
+    saved_proxy_env: dict = {}
     try:
-        wandb.init()
+        saved_proxy_env = _wandb_fix_broken_local_proxy()
+        wandb.init(settings=_wandb_init_settings())
         # 在 train() 前注册 step 轴，避免 agent / init 侧先写历史导致默认 iter 横轴
         _configure_wandb_env_step_axis()
         sweep_cfg = dict(wandb.config)
@@ -200,6 +208,8 @@ def sweep_train():
         raise
 
     finally:
+        for k, v in saved_proxy_env.items():
+            os.environ[k] = v
         # 无论正常结束、早停还是崩溃，都将本 trial 结果写入共享状态
         if early_stopper is not None:
             early_stopper.finalize_trial()

@@ -7,6 +7,7 @@
 """
 
 import math
+import os
 import random
 import time
 from collections import defaultdict
@@ -48,6 +49,50 @@ from utils.autodl_paths import resolve_models_path
 
 # WandB：同一进程内多次 train 时按 run.id 重新注册 step 轴
 _WANDB_ENV_STEP_AXIS_RUN_ID: Optional[str] = None
+
+
+def _wandb_init_settings():
+    """WandB 初始化设置；AutoDL 等弱网环境可通过 WANDB_INIT_TIMEOUT 加大超时（秒）。"""
+    import wandb
+
+    timeout = int(os.environ.get("WANDB_INIT_TIMEOUT", "300"))
+    return wandb.Settings(init_timeout=timeout)
+
+
+def _wandb_fix_broken_local_proxy() -> dict[str, str]:
+    """AutoDL 学术加速未开启时 HTTPS_PROXY 指向死端口，会导致 wandb init 重试至超时。
+
+    探测本地代理不可达时临时移除代理环境变量（直连 api.wandb.ai 通常可用）。
+    返回被移除的变量，供调用方在 trial 结束后恢复。
+    """
+    from urllib.parse import urlparse
+    import socket
+
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if not proxy:
+        return {}
+
+    try:
+        parsed = urlparse(proxy)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 80
+        with socket.create_connection((host, port), timeout=2):
+            pass
+        return {}
+    except OSError:
+        keys = (
+            "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+            "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+        )
+        saved = {k: os.environ[k] for k in keys if k in os.environ}
+        for k in saved:
+            os.environ.pop(k, None)
+        print(
+            f"[WandB] Local proxy {proxy} unreachable (connection refused); "
+            "using direct connection for this process.",
+            flush=True,
+        )
+        return saved
 
 
 def _configure_wandb_env_step_axis() -> None:
@@ -639,6 +684,7 @@ def _train_qtable(
 
     if config.track_wandb:
         import wandb
+        _wandb_fix_broken_local_proxy()
         if wandb.run is None:
             wandb.init(
                 project=config.wandb_project,
@@ -646,6 +692,7 @@ def _train_qtable(
                 config=asdict(config),
                 # 与 sweep 一致：不同步 TB，避免重复曲线且横轴与 global_step 冲突
                 sync_tensorboard=False,
+                settings=_wandb_init_settings(),
             )
         _configure_wandb_env_step_axis()
 
@@ -830,12 +877,14 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
 
     if config.track_wandb:
         import wandb
+        _wandb_fix_broken_local_proxy()
         if wandb.run is None:
             wandb.init(
                 project=config.wandb_project,
                 name=config.run_name,
                 config=asdict(config),
                 sync_tensorboard=False,
+                settings=_wandb_init_settings(),
             )
         _configure_wandb_env_step_axis()
 

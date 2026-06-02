@@ -40,7 +40,7 @@ parameters:
   use_double_dqn:
     value: true
   batch_size:
-    values: [64, 128, 256]
+    values: [2048, 4096, 8192]
   buffer_size:
     values: [50000, 100000]
   warmup_steps:
@@ -48,8 +48,8 @@ parameters:
   update_per_step:
     values: [1, 5, 10]
   collect_per_step:
-    value: 96
+    value: 72
   num_steps:
-    values: [512, 2048]
+    values: [1024, 2048]
   save_interval:
     value: 500

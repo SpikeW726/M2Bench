@@ -11,3 +11,8 @@ env:
   episode_len: 300
   custom_configs:
     truncate_by_time: true
+
+eval:
+  seed: 42
+  num_episodes: 10
+  show_plot: false
