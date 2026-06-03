@@ -21,7 +21,19 @@ from scipy.stats import linregress
 
 
 class SweepEarlyStop(Exception):
-    """优雅早停异常。sweep_train() 单独 catch，不写 crash log，不 re-raise。"""
+    """优雅早停异常。sweep_train() 单独 catch，不写 crash log，不 re-raise。
+
+    reason:
+        cross_trial          — 跨 trial 分位淘汰；sweep 会删除本 trial 权重目录
+        within_trial_slope   — trial 内斜率平坦；保留 best/ 等 checkpoint
+    """
+
+    REASON_CROSS_TRIAL = "cross_trial"
+    REASON_WITHIN_TRIAL_SLOPE = "within_trial_slope"
+
+    def __init__(self, message: str, *, reason: str):
+        super().__init__(message)
+        self.reason = reason
 
 
 class SweepEarlyStopper:
@@ -100,7 +112,8 @@ class SweepEarlyStopper:
                     raise SweepEarlyStop(
                         f"cross-trial: {self.metric_name}={self._milestone_value:.4f} "
                         f"未进入前 {self.terminate_ratio:.0%}（threshold={q:.4f}）"
-                        f" at step={total_steps}"
+                        f" at step={total_steps}",
+                        reason=SweepEarlyStop.REASON_CROSS_TRIAL,
                     )
 
         # ---- Within-trial slope 检查 ----
@@ -130,7 +143,8 @@ class SweepEarlyStopper:
                 raise SweepEarlyStop(
                     f"within-trial slope: {self.metric_name} 连续 {n} iters 无改善"
                     f"（所有 horizons {self.slope_horizons} 均平坦）"
-                    f" at step={total_steps}"
+                    f" at step={total_steps}",
+                    reason=SweepEarlyStop.REASON_WITHIN_TRIAL_SLOPE,
                 )
 
     # ------------------------------------------------------------------

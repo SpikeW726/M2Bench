@@ -88,17 +88,25 @@ _EVAL_CONFIG_PATH: str = ""    # eval YAML 路径；非空时 inline eval 在每
 
 
 def _record_trial_save_dir(config: ExperimentConfig) -> None:
-    """将 trial checkpoint 目录写入 wandb summary，供 eval_best_runs 查询。"""
-    ckpt_dir = trial_checkpoint_dir(config.save_dir, config.algo_name)
-    if ckpt_dir.is_dir():
-        wandb.run.summary["save_dir"] = str(ckpt_dir)
-        print(f"[Sweep] Recorded save_dir={ckpt_dir}")
+    """将 trial checkpoint 目录写入 wandb summary，供 eval_best_runs 查询。
+
+    优先级：best/ > final/；两者均不存在时不写入 summary。
+    """
+    best_dir = config.save_dir / "best"
+    final_dir = config.save_dir / "final"
+    if best_dir.is_dir():
+        ckpt_dir = best_dir
+    elif final_dir.is_dir():
+        ckpt_dir = final_dir
     else:
-        print("[Sweep] No checkpoint saved for this trial (skip save_dir in summary)")
+        print("[Sweep] No checkpoint found for this trial (skip save_dir in summary)")
+        return
+    wandb.run.summary["save_dir"] = str(ckpt_dir)
+    print(f"[Sweep] Recorded save_dir={ckpt_dir}")
 
 
 def delete_trial_artifacts(save_dir: Path) -> None:
-    """删除被淘汰 trial 的权重与中间文件，释放磁盘。"""
+    """删除 cross-trial 淘汰 trial 的权重目录，释放磁盘。"""
     save_dir = Path(save_dir)
     if not save_dir.is_dir():
         return
@@ -166,10 +174,16 @@ def sweep_train():
         print(f"\n[Sweep] *** EARLY STOP *** (not a crash): {e}", flush=True)
         try:
             wandb.run.summary["early_stopped"] = True
-            if config is not None:
+            wandb.run.summary["early_stop_reason"] = e.reason
+            if config is None:
+                pass
+            elif e.reason == SweepEarlyStop.REASON_CROSS_TRIAL:
                 delete_trial_artifacts(config.save_dir)
+            else:
+                # within-trial 斜率早停：保留 best/，供事后 eval / sweep 排名
+                _record_trial_save_dir(config)
         except Exception as cleanup_err:
-            print(f"[Sweep] Failed to cleanup eliminated trial: {cleanup_err}", flush=True)
+            print(f"[Sweep] Failed to handle early stop cleanup: {cleanup_err}", flush=True)
 
     except Exception as e:
         # 真实崩溃：强制打印完整链式错误并写文件备查

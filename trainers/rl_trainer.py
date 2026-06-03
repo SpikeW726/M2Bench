@@ -66,6 +66,9 @@ class BaseTrainer(ABC):
         # eval 完成时的外部 hook：(metrics: dict, total_steps: int) -> None
         # 由 train.py 注入，用于将 eval 指标实时喂给 SweepEarlyStopper
         self.on_eval_complete: Optional[Callable] = None
+        # best checkpoint hook：(metrics: dict) -> None
+        # 由 train.py 注入；eval 指标创新高时写入 best/
+        self.save_best_fn: Optional[Callable[[Dict[str, float]], None]] = None
 
     @abstractmethod
     def train(self) -> Dict[str, float]:
@@ -128,6 +131,9 @@ class BaseTrainer(ABC):
         finally:
             self.algorithm.set_training_mode(True)
         if eval_metrics:
+            # eval 指标创新高时写入 best/（在 log 之前，确保 summary 与 wandb 顺序一致）
+            if self.save_best_fn is not None:
+                self.save_best_fn(eval_metrics)
             self._log(eval_metrics)
             # 将 eval 指标喂给 early stopper（供 cross-trial 和 slope 判断）
             if self.on_eval_complete is not None:

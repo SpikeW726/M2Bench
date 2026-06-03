@@ -1058,24 +1058,6 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
 
         return running_mean_std_to_yaml_dict(_obs_norm_wrapper.get_obs_rms())
 
-    def save_checkpoint_fn(iteration: int):
-        ckpt_dir = config.save_dir / f"iter_{iteration}"
-        save_model(
-            save_dir=ckpt_dir,
-            policy=policy,
-            critic=critic_net,
-            actor_config=actor_config_dict,
-            critic_config=critic_config_dict,
-            q_config=q_config_dict,
-            extra_info={
-                **_eval_meta,
-                "iteration": iteration,
-                "value_normalization": _get_value_norm_config(),
-                "obs_rms_state": _get_obs_rms_state(),
-            },
-        )
-        print(f"[Checkpoint] Saved iteration {iteration} to {ckpt_dir}")
-
     def log_extra_fn() -> Dict[str, float]:
         try:
             metrics_list = vec_env.call_env_method("get_episode_metrics")
@@ -1113,17 +1095,66 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
                 obs_rms=_obs_norm_wrapper.get_obs_rms() if _obs_norm_wrapper is not None else None,
             )
 
+    # ---- best checkpoint 跟踪 ----
+    best_dir = config.save_dir / "best"
+    _best_metric_name: str = (
+        early_stopper.metric_name if early_stopper is not None else "eval/wi"
+    )
+    _best_minimize: bool = (
+        early_stopper.minimize if early_stopper is not None else True
+    )
+    _best_metric_value: Optional[float] = None
+    _best_saved = False
+
+    def _save_best_model(extra: dict):
+        save_model(
+            save_dir=best_dir,
+            policy=policy,
+            critic=critic_net,
+            actor_config=actor_config_dict,
+            critic_config=critic_config_dict,
+            q_config=q_config_dict,
+            extra_info={
+                **_eval_meta,
+                "value_normalization": _get_value_norm_config(),
+                "obs_rms_state": _get_obs_rms_state(),
+                **extra,
+            },
+        )
+
+    def save_best_fn(eval_metrics: dict) -> None:
+        nonlocal _best_metric_value, _best_saved
+        val = eval_metrics.get(_best_metric_name)
+        if val is None:
+            return
+        val = float(val)
+        improved = (
+            _best_metric_value is None
+            or (val < _best_metric_value if _best_minimize else val > _best_metric_value)
+        )
+        if not improved:
+            return
+        _best_metric_value = val
+        _save_best_model({
+            "best_metric_name": _best_metric_name,
+            "best_metric_value": val,
+            "iteration": getattr(trainer, "iteration", 0),
+        })
+        _best_saved = True
+        print(f"[Best] New best {_best_metric_name}={val:.4f}, saved to {best_dir}")
+
     trainer = create_trainer(
         algo_name=config.algo_name,
         algorithm=algorithm,
         collector=collector,
         training_config=tc,
-        save_checkpoint_fn=save_checkpoint_fn,
+        save_checkpoint_fn=None,   # 不再存周期性 iter_* 存档
         log_extra_fn=log_extra_fn,
         logger=logger,
         eval_fn=inline_eval_fn,
         profiler=profiler,
     )
+    trainer.save_best_fn = save_best_fn
 
     # ---- 10.5. 若提供 early_stopper，patch trainer 的 log_extra_fn + on_eval_complete ----
     if early_stopper is not None:
@@ -1190,11 +1221,19 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
                 "early_stop_reason": str(e),
             },
         )
-        print(f"[Train] Sweep early stop — saved checkpoint to {final_dir}: {e}")
+        print(f"[Train] Sweep early stop — saved final to {final_dir}: {e}")
+        if _best_saved:
+            print(f"[Train]   best checkpoint retained: {best_dir} "
+                  f"({_best_metric_name}={_best_metric_value:.4f})")
         raise
     else:
         _save_final_checkpoint({"iteration": tc.effective_max_iterations})
         print(f"[Train] Saved final model to {final_dir}")
+        if _best_saved:
+            print(f"[Train]   best checkpoint: {best_dir} "
+                  f"({_best_metric_name}={_best_metric_value:.4f})")
+        else:
+            print(f"[Train]   No best checkpoint saved (inline eval never ran or improved).")
     finally:
         tb_writer.close()
         if config.track_wandb:
@@ -1206,8 +1245,13 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     # 训练结束后自动评估（早停 re-raise 不会执行到此）
     if eval_config_path:
         from evaluators.test import run_eval_from_config
-        print(f"\n[Train] Starting auto-eval from {eval_config_path}")
-        run_eval_from_config(str(final_dir), eval_config_path)
+        if _best_saved and best_dir.is_dir():
+            _eval_from = best_dir
+            print(f"\n[Train] Starting auto-eval from best checkpoint: {_eval_from}")
+        else:
+            _eval_from = final_dir
+            print(f"\n[Train] No best checkpoint; auto-eval from final: {_eval_from}")
+        run_eval_from_config(str(_eval_from), eval_config_path)
 
 
 # =============================================================================

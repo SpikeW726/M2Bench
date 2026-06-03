@@ -26,29 +26,29 @@ env:
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true
-    idi_scale: 0.05
-    contribution_scale: 0.05
+    idi_scale: 0.1
+    contribution_scale: 0.1
 
 algo:
   use_active_mask: true
-  actor_lr: 3.0e-4
-  critic_lr: 3.0e-4
+  actor_lr: 0.0002138941043133317
+  critic_lr: 0.0011021765437482303
   gamma: 0.999
-  gae_lambda: 0.95
-  clip_range: 0.2
-  vf_coef: 0.5
-  ent_coef: 0.01
+  gae_lambda: 0.999
+  clip_range: 0.11203363035624152
+  vf_coef: 0.653248006662287
+  ent_coef: 0.03701534276270355
   use_value_norm: true
 
 training:
   num_envs: 64
   use_subproc: true
-  num_steps: 1024
+  num_steps: 2048
   total_steps: 40000000
   save_interval: 200
-  minibatch_size: 2048
+  minibatch_size: 8192
   update_epochs: 5
-  eval_interval: 10
+  eval_interval: 20
 
 actor:
   graph_path: graphs/cumberland.json

@@ -20,36 +20,36 @@ parameters:
     value: 40000000
   actor_lr:
     min: 1.0e-6
-    max: 1.0e-3
+    max: 5.0e-4
     distribution: log_uniform_values
   critic_lr:
-    min: 1.0e-5
+    min: 1.0e-4
     max: 5.0e-3
     distribution: log_uniform_values
   clip_range:
-    min: 0.1
-    max: 0.4
+    min: 0.05
+    max: 0.25
   vf_coef:
-    min: 0.5
-    max: 1.0
+    min: 0.4
+    max: 0.8
   ent_coef:
     min: 0.0
-    max: 0.2
+    max: 0.08
   gae_lambda:
-    values: [0.99, 0.999]
+    value: 0.999
   gamma:
-    values: [0.99, 0.999]
+    value: 0.99
   use_value_norm:
     value: true
   num_steps:
-    values: [1024, 2048]
+    values: [2048, 4096]
   minibatch_size:
-    values: [2048, 4096, 8192]
+    values: [8192, 12288]
   update_epochs:
-    values: [3, 5, 10]
+    values: [5, 10]
   save_interval:
-    value: 200
+    value: 300
   custom_configs.idi_scale:
-    values: [0.0, 0.05, 0.1]
+    value: 0.1
   custom_configs.contribution_scale:
-    values: [0.0, 0.05, 0.1]
+    value: 0.1

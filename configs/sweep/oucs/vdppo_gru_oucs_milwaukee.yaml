@@ -48,7 +48,7 @@ parameters:
   data_chunk_length:
     value: 16
   minibatch_size:
-    values: [1024, 2048]
+    values: [2048, 4096]
   update_epochs:
     values: [3, 5, 10]
   num_steps:
