@@ -1,0 +1,60 @@
+method: bayes
+
+metric:
+  name: eval/wi_fromT
+  goal: minimize
+
+early_terminate:
+  min_trial: 4
+  min_steps: 15000000
+  terminate_ratio: 0.5
+  early_stop_iters: 100
+  slope_horizons: [16, 64, 128]
+  slope_threshold: 3.0e-5
+  state_file: .sweep_es_mappo_masup_marostica_imi.json
+
+parameters:
+  seed:
+    value: 42
+  total_steps:
+    value: 50000000
+  actor_lr:
+    min: 1.0e-6
+    max: 1.0e-4
+    distribution: log_uniform_values
+  critic_lr:
+    min: 5.0e-6
+    max: 5.0e-4
+    distribution: log_uniform_values
+  clip_range:
+    min: 0.1
+    max: 0.3
+  vf_coef:
+    min: 0.5
+    max: 1.0
+  ent_coef:
+    min: 0.0
+    max: 0.2
+  gae_lambda:
+    values: [0.99, 0.999]
+  gamma:
+    value: 0.999
+  use_value_norm:
+    value: true
+  num_steps:
+    values: [1024, 2048]
+  minibatch_size:
+    values: [2048, 4096, 8192]
+  update_epochs:
+    values: [3, 5, 10]
+  save_interval:
+    value: 200
+  custom_configs.idi_scale:
+    values: [0.0, 0.05, 0.1]
+  custom_configs.contribution_scale:
+    values: [0.0, 0.05, 0.1]
+
+  actor_path:
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica_final/policy.pt
+  critic_path:
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica_final/critic.pt

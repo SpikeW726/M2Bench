@@ -1,0 +1,39 @@
+# QTable + ExGBLAEnv @ marostica
+# 图统计: nodes=41, directed_edges=106, max_out_degree=4, avg_edge=2.49, max_edge=4.0
+# 物理时间截断: episode_len=500, total_steps=50000000
+
+algo_name: qtable
+env_type: ex_gbla
+exp_name: qtable-exgbla-marostica
+graph_name: marostica
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/marostica.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: false
+  num_agents: 6
+  init_positions: [0, 8, 16, 24, 32, 40]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+
+algo:
+  lr: 0.001
+  gamma: 0.999
+  epsilon_start: 0.2
+  epsilon_end: 0.05
+  sync_update: true
+  epsilon_decay_steps: 10000000
+
+training:
+  num_envs: 36
+  use_subproc: true
+  total_steps: 50000000
+  save_interval: 300
+  eval_interval: 10
+
+eval_config_path: configs/eval/exgbla/exgbla_marostica.yaml

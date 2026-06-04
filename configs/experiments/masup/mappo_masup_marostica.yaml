@@ -1,0 +1,76 @@
+# MAPPO + MASUPEnv @ marostica
+# 图统计: nodes=41, directed_edges=106, max_out_degree=4, avg_edge=2.49, max_edge=4.0
+# 物理时间截断: episode_len=500, total_steps=50000000
+
+algo_name: mappo
+env_type: masup
+actor_type: masup_mlp
+critic_type: masup_mlp
+
+exp_name: mappo-masup-marostica
+graph_name: marostica
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/marostica.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 1.0
+  num_agents: 6
+  init_positions: [0, 8, 16, 24, 32, 40]
+  episode_len: 500
+  custom_configs:
+    T: 50.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  use_value_norm: true
+
+training:
+  num_envs: 80
+  use_subproc: true
+  num_steps: 2048
+  total_steps: 50000000
+  save_interval: 200
+  minibatch_size: 8192
+  update_epochs: 5
+  eval_interval: 20
+
+actor:
+  graph_path: graphs/marostica.json
+  num_agents: 6
+  num_nodes: 41
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: true
+  T_time: 50.0
+  hidden: [256, 512]
+
+critic:
+  graph_path: graphs/marostica.json
+  num_agents: 6
+  num_nodes: 41
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: true
+  T_time: 50.0
+  input_mode: state
+  hidden: [256, 512]
+
+eval_config_path: configs/eval/masup/masup_marostica.yaml

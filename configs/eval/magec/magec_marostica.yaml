@@ -1,0 +1,27 @@
+# magec @ marostica 评估配置
+env_type: magec
+
+env:
+  graph_path: graphs/marostica.json
+  enable_wait: false
+  norm_reward: true
+  norm_obs: false
+  num_agents: 6
+  init_positions: [0, 8, 16, 24, 32, 40]
+  episode_len: 500
+  custom_configs:
+    truncate_by_time: true
+    alpha: 1
+    beta: 0.5
+
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/marostica/mappo_magec/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 1000
+  log_action_logits: true
+  log_action_logits_max_lines: 5
+  action_logits_csv: evaluators/results/marostica/mappo_magec/action_logits.csv
+  action_logits_active_only: true

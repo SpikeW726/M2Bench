@@ -1,24 +1,24 @@
-# HAPPO + BEAU @ mapA
-# 图统计: nodes=50, directed_edges=210, max_out_degree=7, avg_edge=7.808, max_edge=22.000
-# 物理时间截断: episode_len=500, total_steps=40000000
+# HAPPO + BEAU @ marostica
+# 图统计: nodes=41, directed_edges=106, max_out_degree=4, avg_edge=2.49, max_edge=4.0
+# 物理时间截断: episode_len=500, total_steps=50000000
 
 algo_name: happo
 env_type: beau
 
-exp_name: happo-beau-mapA
-graph_name: mapA
+exp_name: happo-beau-marostica
+graph_name: marostica
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
 env:
-  graph_path: graphs/mapA.json
+  graph_path: graphs/marostica.json
   enable_wait: true
   norm_reward: true
   norm_obs: true
   deltaT: 2.0
   num_agents: 6
-  init_positions: [0, 10, 20, 30, 40, 49]
+  init_positions: [0, 8, 16, 24, 32, 40]
   episode_len: 500
   custom_configs:
     reward_scale: 0.01
@@ -41,12 +41,12 @@ algo:
 training:
   num_envs: 1
   use_subproc: false
-  num_steps: 8092
-  total_steps: 40000000
+  num_steps: 800
+  total_steps: 50000000
   save_interval: 1000
-  minibatch_size: 8092
-  update_epochs: 2
+  minibatch_size: 256
+  update_epochs: 5
   eval_interval: 15
   eval_episodes: 4
 
-eval_config_path: configs/eval/beau/beau_mapA.yaml
+eval_config_path: configs/eval/beau/beau_marostica.yaml
