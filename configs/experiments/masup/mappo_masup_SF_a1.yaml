@@ -1,0 +1,76 @@
+# MAPPO + MASUPEnv @ SF (1 agent)
+# 图统计: nodes=12, star-like SF crime map
+# 物理时间截断: episode_len=3000, total_steps=50000000
+
+algo_name: mappo
+env_type: masup
+actor_type: masup_mlp
+critic_type: masup_mlp
+
+exp_name: mappo-masup-SF-a1
+graph_name: SF
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/SFcrimemap.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 20.0
+  num_agents: 1
+  init_positions: [0]
+  episode_len: 3000
+  custom_configs:
+    T: 200.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  use_value_norm: true
+
+training:
+  num_envs: 108
+  use_subproc: true
+  num_steps: 2048
+  total_steps: 50000000
+  save_interval: 200
+  minibatch_size: 4096
+  update_epochs: 5
+  eval_interval: 10
+
+actor:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 1
+  num_nodes: 12
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 200.0
+  hidden: [256, 256]
+
+critic:
+  graph_path: graphs/SFcrimemap.json
+  num_agents: 1
+  num_nodes: 12
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 200.0
+  input_mode: state
+  hidden: [256, 256]
+
+eval_config_path: configs/eval/masup/masup_SF_a1.yaml

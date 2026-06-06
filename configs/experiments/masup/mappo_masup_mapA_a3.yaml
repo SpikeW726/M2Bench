@@ -1,0 +1,72 @@
+algo_name: mappo
+env_type: masup
+actor_type: masup_mlp
+critic_type: masup_mlp
+exp_name: mappo-masup-mapA-a3
+graph_name: mapA
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+env:
+  graph_path: graphs/mapA.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 3.0
+  num_agents: 3
+  init_positions:
+  - 0
+  - 24
+  - 49
+  episode_len: 500
+  custom_configs:
+    T: 50.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+algo:
+  use_active_mask: true
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  use_value_norm: true
+training:
+  num_envs: 80
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 50000000
+  save_interval: 200
+  minibatch_size: 2048
+  update_epochs: 5
+  eval_interval: 10
+actor:
+  graph_path: graphs/mapA.json
+  num_agents: 3
+  num_nodes: 50
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: true
+  T_time: 50.0
+  hidden:
+  - 256
+  - 512
+critic:
+  graph_path: graphs/mapA.json
+  num_agents: 3
+  num_nodes: 50
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: true
+  T_time: 50.0
+  input_mode: state
+  hidden:
+  - 256
+  - 512
+eval_config_path: configs/eval/masup/masup_mapA_a3.yaml

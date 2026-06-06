@@ -1,0 +1,32 @@
+env_type: masup
+env:
+  graph_path: graphs/grid.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 0.5
+  num_agents: 9
+  init_positions:
+  - 1
+  - 7
+  - 13
+  - 19
+  - 26
+  - 32
+  - 38
+  - 44
+  - 50
+  episode_len: 500
+  custom_configs:
+    T: 50.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+eval:
+  num_episodes: 10
+  save_plot: evaluators/results/grid/mappo_masup_a9/best_eval.png
+  show_plot: false
+  animation: true
+  event_driven: true
+  max_frames: 300

@@ -50,7 +50,15 @@ _POLICY_REGISTRY: Dict[str, tuple] = {
     "cbls":         ("policies.heuritic.cbls",                  "CBLSPolicy"),
     "dta_greedy":   ("policies.heuritic.dta_greedy",            "DTAGreedyPolicy"),
     "dta_ssi":      ("policies.heuritic.dta_ssi",               "DTASSIPolicy"),
+    # 常见别名（与 configs/heuristic/DTASSI.yaml 等文件名对应）
+    "dtassi":       ("policies.heuritic.dta_ssi",               "DTASSIPolicy"),
+    "dtagreedy":    ("policies.heuritic.dta_greedy",            "DTAGreedyPolicy"),
 }
+
+
+def _default_policy_config_path(policy_type: str) -> str:
+    """按 policy_type 推断 configs/heuristic/<NAME>.yaml（去掉下划线，与 DTASSI 等文件名一致）。"""
+    return f"configs/heuristic/{policy_type.upper().replace('_', '')}.yaml"
 
 
 def _create_policy(policy_type: str, num_agents: int, policy_config: dict) -> HeuriticBasePolicy:
@@ -1039,7 +1047,7 @@ if __name__ == "__main__":
 
     # 自动匹配 policy_config 路径（未指定时按 policy_type 推断）
     if args.policy_config is None:
-        args.policy_config = f"configs/heuristic/{args.policy_type.upper()}.yaml"
+        args.policy_config = _default_policy_config_path(args.policy_type)
 
     # 加载策略配置
     with open(args.policy_config, 'r', encoding='utf-8') as f:

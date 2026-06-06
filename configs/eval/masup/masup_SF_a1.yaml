@@ -1,16 +1,16 @@
-# masup @ marostica 评估配置
+# masup @ SF (1 agent) 评估配置
 env_type: masup
 
 env:
-  graph_path: graphs/marostica.json
+  graph_path: graphs/SFcrimemap.json
   enable_wait: true
   norm_reward: true
-  deltaT: 1.0
-  num_agents: 6
-  init_positions: [0, 8, 16, 24, 32, 40]
-  episode_len: 500
+  deltaT: 20.0
+  num_agents: 1
+  init_positions: [0]
+  episode_len: 3000
   custom_configs:
-    T: 50.0
+    T: 200.0
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true
@@ -19,12 +19,12 @@ env:
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/marostica/mappo_masup_imi/best_eval.png
+  save_plot: evaluators/results/SF/mappo_masup_a1/best_eval.png
   show_plot: false
   animation: true
   event_driven: true
-  max_frames: 600
+  max_frames: 1500
   log_action_logits: true
   log_action_logits_max_lines: 5
-  action_logits_csv: evaluators/results/marostica/mappo_masup_imi/action_logits.csv
+  action_logits_csv: evaluators/results/SF/mappo_masup_a1/action_logits.csv
   action_logits_active_only: true
