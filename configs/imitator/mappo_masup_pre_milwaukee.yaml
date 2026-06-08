@@ -1,0 +1,65 @@
+# MAPPO + MASUPActorMLP/MASUPCriticMLP — island 图模仿学习预训练配置
+#
+# 用法:
+#   python trainers/imitator/imitation_trainer.py \
+#       --config configs/imitator/mappo_masup_mlp_island.yaml
+#   python trainers/imitator/imitation_trainer.py \
+#       --config configs/imitator/mappo_masup_mlp_island.yaml \
+#       --data_path dataset/island/samples.h5
+#
+# 预训练模式: actor_critic
+#   - Actor  (masup_mlp): BC cross-entropy loss on expert actions
+#   - Critic (masup_mlp): MSE(V, returns)，输入为 state() + agent_one_hot
+#
+# 预训练完成后，将生成的 policy.pt / critic.pt 路径填入 RL 实验 YAML 的
+# actor_path / critic_path 字段（如 mappo_masup_island_scratch.yaml → mappo_masup_island_imi.yaml）
+
+# ----- 算法（决定预训练模式：actor_critic）-----
+algo_name: mappo
+
+# ----- 环境（用于自动推断 obs_dim / action_dim / state_dim / num_agents）-----
+env_type: masup
+env_config: configs/eval/masup/masup_milwaukee.yaml
+
+# ----- 网络结构（须与目标 RL 实验 YAML 中的 actor/critic 段严格一致）-----
+actor_type: masup_mlp
+critic_type: masup_mlp
+
+actor:
+  graph_path: graphs/milwaukee.json
+  num_agents: 6
+  num_nodes: 40
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 80.0
+  hidden: [256, 512]
+
+critic:
+  graph_path: graphs/milwaukee.json
+  num_agents: 6 
+  num_nodes: 40
+  role_imformation: decision
+  gpe_dim: 8
+  proj_dim: 16
+  use_log_idleness: false
+  T_time: 80.0
+  input_mode: state       # MAPPO Critic：输入 state() + agent_one_hot
+  hidden: [256, 512]
+
+# ----- 训练超参 -----
+actor_lr: 1.0e-4
+critic_lr: 1.0e-4
+batch_size: 4096
+iteration: 40
+actor_patience: 5
+actor_min_delta: 1.0e-5
+use_value_norm: true
+
+# ----- 数据 & 日志 -----
+data_path: /root/autodl-tmp/dataset/milwaukee/baps_samples.h5
+save_dir: /root/autodl-tmp/models/imi-mappo-pre-masup-milwaukee
+exp_name: imi_pre_masup_mlp_mappo_milwaukee
+track: false
+wandb_project: MAP-imitation
