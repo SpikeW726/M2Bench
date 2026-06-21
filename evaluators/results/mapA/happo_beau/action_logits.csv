@@ -1,0 +1,1 @@
+episode,step,sim_time,agent_id,policy_head,chosen_action,active_mask,n_valid,max_logit,min_logit,logit_gap_top2,entropy,max_prob,logit_a0,logit_a1,logit_a2,logit_a3,logit_a4,logit_a5,logit_a6,logit_a7,logit_a8

@@ -11,7 +11,7 @@ early_terminate:
   early_stop_iters: 100
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
-  state_file: .sweep_es_mappo_masup_marostica_imi.json
+  state_file: .sweep_es_mappo_masup_marostica.json
 
 parameters:
   seed:
@@ -19,22 +19,22 @@ parameters:
   total_steps:
     value: 50000000
   actor_lr:
-    min: 1.0e-6
-    max: 1.0e-4
-    distribution: log_uniform_values
-  critic_lr:
-    min: 5.0e-6
+    min: 5.0e-5
     max: 1.0e-3
     distribution: log_uniform_values
+  critic_lr:
+    min: 1.0e-5
+    max: 5.0e-3
+    distribution: log_uniform_values
   clip_range:
-    min: 0.1
-    max: 0.3
+    min: 0.05
+    max: 0.2
   vf_coef:
-    min: 0.5
-    max: 1.0
+    min: 0.3
+    max: 0.7
   ent_coef:
     min: 0.0
-    max: 0.2
+    max: 0.1
   gae_lambda:
     values: [0.99, 0.999]
   gamma:
@@ -42,17 +42,17 @@ parameters:
   use_value_norm:
     value: true
   num_steps:
-    values: [1024, 2048]
+    values: [2048, 4096]
   minibatch_size:
-    values: [2048, 4096, 8192]
+    values: [1024, 2048, 4096]
   update_epochs:
-    values: [3, 5, 10]
+    values: [5, 10]
   save_interval:
     value: 200
   custom_configs.idi_scale:
-    values: [0.0, 0.05, 0.1]
+    value: 0.0
   custom_configs.contribution_scale:
-    values: [0.0, 0.05, 0.1]
+    values: [0.05, 0.1, 0.15]
 
   actor_path:
     value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/policy.pt
