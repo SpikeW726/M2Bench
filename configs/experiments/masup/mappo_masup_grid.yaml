@@ -34,7 +34,8 @@ env:
     contribution_scale: 0.05
 
 algo:
-  use_active_mask: true
+  # use_active_mask: true
+  use_active_mask: false
   actor_lr: 3.0e-4
   critic_lr: 3.0e-4
   gamma: 0.99
@@ -45,7 +46,7 @@ algo:
   use_value_norm: true
 
 training:
-  num_envs: 96
+  num_envs: 80
   use_subproc: true
   num_steps: 1024
   total_steps: 50000000

@@ -30,7 +30,8 @@ env:
     contribution_scale: 0.05
 
 algo:
-  use_active_mask: true
+  # use_active_mask: true
+  use_active_mask: false
   actor_lr: 3.0e-4
   critic_lr: 3.0e-4
   gamma: 0.999

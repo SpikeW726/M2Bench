@@ -26,7 +26,7 @@ parameters:
     min: 0.0
     max: 0.2
   gae_lambda:
-    values: [0.95, 0.99, 0.999]
+    values: [0.99, 0.999]
 
   # grid diameter=10, T=50 -- shorter horizon, gamma need not be as high as SF
   gamma:
@@ -39,7 +39,7 @@ parameters:
   num_steps:
     values: [1024, 2048]
   minibatch_size:
-    values: [512, 1024, 2048, 4096]
+    values: [2048, 4096]
   update_epochs:
     values: [3, 5, 10]
 
