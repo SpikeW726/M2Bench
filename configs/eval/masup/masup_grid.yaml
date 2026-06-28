@@ -8,8 +8,8 @@ env:
   num_agents: 6
   init_positions: [1, 9, 17, 25, 33, 41]
   episode_len: 500
-  # edge_time_jitter_mode: full
-  # edge_time_jitter_seed: 42
+  edge_time_jitter_mode: full
+  edge_time_jitter_seed: 42
   custom_configs:
     T: 50.0
     role_imformation: decision
