@@ -6,7 +6,7 @@ metric:
 
 early_terminate:
   min_trial: 4
-  min_steps: 15000000
+  min_steps: 10000000
   terminate_ratio: 0.5
   early_stop_iters: 100
   slope_horizons: [16, 64, 128]
@@ -19,11 +19,11 @@ parameters:
   total_steps:
     value: 50000000
   actor_lr:
-    min: 5.0e-5
-    max: 1.0e-3
+    min: 5.0e-6
+    max: 1.0e-4
     distribution: log_uniform_values
   critic_lr:
-    min: 1.0e-4
+    min: 1.0e-5
     max: 3.0e-3
     distribution: log_uniform_values
   clip_range:
@@ -33,19 +33,18 @@ parameters:
     min: 0.1
     max: 0.5
   ent_coef:
-    min: 0.001
-    max: 0.1
-    distribution: log_uniform_values
+    min: 0.0
+    max: 0.15
   gae_lambda:
-    values: [0.95, 0.99, 0.999]
+    values: [0.99, 0.999]
   gamma:
-    values: [0.99, 0.995, 0.999]
+    values: [0.99, 0.999]
   use_value_norm:
     value: true
   num_steps:
     values: [1024, 2048]
   minibatch_size:
-    values: [512, 1024, 2048]
+    values: [2048, 4096]
   update_epochs:
     values: [3, 5]
   save_interval:

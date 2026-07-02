@@ -41,12 +41,12 @@ algo:
 training:
   num_envs: 1
   use_subproc: false
-  num_steps: 800
-  total_steps: 40000000
-  save_interval: 1000
+  num_steps: 512
+  total_steps: 1000000
+  save_interval: 10000
   minibatch_size: 256
-  update_epochs: 5
-  eval_interval: 15
-  eval_episodes: 4
+  update_epochs: 2
+  eval_interval: 100
+  eval_episodes: 1
 
 eval_config_path: configs/eval/beau/beau_cumberland.yaml

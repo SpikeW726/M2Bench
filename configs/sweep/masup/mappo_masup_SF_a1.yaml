@@ -50,7 +50,7 @@ parameters:
   num_steps:
     values: [2048, 4096, 8192]
   minibatch_size:
-    values: [1024, 2048, 4096]
+    values: [2048, 4096, 8192]
   update_epochs:
     values: [3, 5]
   save_interval:

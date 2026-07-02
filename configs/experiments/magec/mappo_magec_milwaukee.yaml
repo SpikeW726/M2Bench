@@ -17,7 +17,7 @@ env:
   graph_path: graphs/milwaukee.json
   enable_wait: false
   norm_reward: true
-  norm_obs: true
+  norm_obs: false
   num_agents: 6
   init_positions: [0, 8, 16, 24, 32, 39]
   episode_len: 800
@@ -39,7 +39,7 @@ algo:
   use_value_norm: true
 
 training:
-  num_envs: 64
+  num_envs: 80
   use_subproc: true
   num_steps: 1024
   total_steps: 50000000
