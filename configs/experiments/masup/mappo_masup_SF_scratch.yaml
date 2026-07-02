@@ -23,23 +23,23 @@ env:
   init_positions: [0, 5, 11]
   episode_len: 3000
   custom_configs:
-    T: 200.0
+    T: 150.0
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true
-    idi_scale: 0.05
+    idi_scale: 0.1
     contribution_scale: 0.05
 
 # ---- 算法 ----
 algo:
   use_active_mask: True
-  actor_lr: 3.0e-4
-  critic_lr: 3.0e-4
+  actor_lr: 0.000020059505125622627
+  critic_lr: 0.00024855789011606153
   gamma: 0.999
-  gae_lambda: 0.95
-  clip_range: 0.2
-  vf_coef: 0.5
-  ent_coef: 0.01
+  gae_lambda: 0.9265879928588024
+  clip_range: 0.12228213247621536
+  vf_coef: 1.4906293022092203
+  ent_coef: 0.04946730194744175
   use_value_norm: true
 
 # ---- 训练 ----
@@ -49,7 +49,7 @@ training:
   num_steps: 2048
   total_steps: 50000000
   save_interval: 200
-  minibatch_size: 4096
+  minibatch_size: 1024
   update_epochs: 5
   eval_interval: 10
 
@@ -62,7 +62,7 @@ actor:
   gpe_dim: 8
   proj_dim: 16
   use_log_idleness: false
-  T_time: 200.0
+  T_time: 150.0
   hidden: [256, 256]
 
 critic:
@@ -73,6 +73,9 @@ critic:
   gpe_dim: 8
   proj_dim: 16
   use_log_idleness: false
-  T_time: 200.0
+  T_time: 150.0
   input_mode: state
   hidden: [256, 256]
+
+actor_path: models/imi-mappo-pre-masup-SF_075T/imi_pre_masup_mlp_mappo_SF_075T__1782925044_final/policy.pt
+critic_path: models/imi-mappo-pre-masup-SF_075T/imi_pre_masup_mlp_mappo_SF_075T__1782925044_final/critic.pt

@@ -33,7 +33,8 @@ actor:
   gpe_dim: 8
   proj_dim: 16
   use_log_idleness: false
-  T_time: 200.0
+  T_time: 150.0
+  # T_time: 200.0
   hidden: [256, 256]
 
 critic:
@@ -44,22 +45,23 @@ critic:
   gpe_dim: 8
   proj_dim: 16
   use_log_idleness: false
-  T_time: 200.0
+  T_time: 150.0
+  # T_time: 200.0
   input_mode: state       # MAPPO Critic：输入 state() + agent_one_hot
   hidden: [256, 256]
 
 # ----- 训练超参 -----
 actor_lr: 3.0e-4
 critic_lr: 3.0e-4
-batch_size: 1024
-iteration: 25
+batch_size: 4096
+iteration: 20
 actor_patience: 5
 actor_min_delta: 1.0e-5
 use_value_norm: true
 
 # ----- 数据 & 日志 -----
 data_path: ~/autodl-tmp/dataset/SF/mappo_masup.h5
-save_dir: ~/autodl-tmp/models/imi-mappo-pre-masup-SF
-exp_name: imi_pre_masup_mlp_mappo_SF
+save_dir: ~/autodl-tmp/models/imi-mappo-pre-masup-SF_075T
+exp_name: imi_pre_masup_mlp_mappo_SF_075T
 track: false
 wandb_project: MAP-imitation

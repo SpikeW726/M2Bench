@@ -75,3 +75,6 @@ critic:
   hidden: [256, 512]
 
 eval_config_path: configs/eval/masup/masup_marostica.yaml
+
+actor_path: models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/policy.pt
+critic_path: models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/critic.pt

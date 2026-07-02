@@ -15,6 +15,7 @@ env:
   # edge_time_jitter_mode: full
   # edge_time_jitter_seed: 42
   custom_configs:
+    # T: 150.0
     T: 200.0
     role_imformation: decision
     reward_scale: 0.01
