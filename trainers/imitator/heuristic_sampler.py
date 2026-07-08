@@ -45,7 +45,7 @@ _POLICY_REGISTRY: Dict[str, tuple] = {
     "cc":           ("policies.heuritic.conscientious_cognitive","ConscientiousCognitivePolicy"),
     "cr":           ("policies.heuritic.conscientious_reactive", "ConscientiousReactivePolicy"),
     "msp":          ("policies.heuritic.msp",                   "MSPPolicy"),
-    "cid":          ("policies.heuritic.cid",                   "CIDPolicy"),
+    "hcr":          ("policies.heuritic.hcr",                   "HCRPolicy"),
     "sebs":         ("policies.heuritic.sebs",                  "SEBSPolicy"),
     "cbls":         ("policies.heuritic.cbls",                  "CBLSPolicy"),
     "dta_greedy":   ("policies.heuritic.dta_greedy",            "DTAGreedyPolicy"),

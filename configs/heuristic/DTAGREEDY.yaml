@@ -1,12 +1,5 @@
-env:
-  graph_path: graphs/island.json
-  num_agents: 6
-  init_positions: [0, 10, 20, 30, 40, 49]
-  episode_len: 500
-
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/island/dta_greedy/DTAGREEDY_eval.png
   show_plot: false
   animation: false
   event_driven: true

@@ -1,226 +1,248 @@
 # -*- coding: utf-8 -*-
-# agent/hpcc_agent.py
-from typing import Dict, List, Optional, Any
-import numpy as np
+"""Heuristic Pathfinder Conscientious Cognitive (HPCC) policy.
+
+This implementation follows Algorithm 3 from:
+Portugal and Rocha, "Multi-robot patrolling algorithms: examining
+performance and scalability", Advanced Robotics, 2013.
+
+At a decision point the policy:
+  1. chooses a global target vertex by maximizing idleness-distance utility;
+  2. builds dynamic edge costs from destination idleness and original edge cost;
+  3. runs Dijkstra with those dynamic costs;
+  4. follows the planned path one hop at a time through the existing
+     neighbor-index heuristic interface.
+"""
+from __future__ import annotations
+
+import heapq
 import math
+from typing import Any, Dict, List, Optional, Tuple
+
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
 
+
 class HPCCPolicy(HeuriticBasePolicy):
-    """
-    HPCC 启发式策略（多智能体版本）
-    
-    设计：
-    - compute_actions: 遍历所有需要决策的智能体，调用 _compute_action
-    - _compute_action: 单个智能体的决策逻辑，使用全局信息进行冲突协调
-    """
+    """Heuristic Pathfinder Conscientious Cognitive policy."""
 
     def __init__(self, num_agents: int, config: Dict):
         super().__init__(num_agents, config)
-        
-        ap = config.get("algorithm_params", {}) if isinstance(config.get("algorithm_params", {}), dict) else {}
+        self._path_cache: Dict[int, List[int]] = {}
 
-        # 距离估计方式
-        self.distance_mode: str = str(config.get("distance_mode", ap.get("distance_mode", "sp"))).lower()
-
-        # 权重
-        self.w_idl: float = float(config.get("w_idl", ap.get("w_idl", 0.6)))
-        self.w_dist: float = float(config.get("w_dist", ap.get("w_dist", 0.25)))
-        self.w_conflict: float = float(config.get("w_conflict", ap.get("w_conflict", 0.5)))
-
-
-        # 认知协调参数（ETA冲突）
-        self.conflict_eta_margin: float = float(ap.get("conflict_eta_margin", 0.0))
-        self.eta_clip_min: float = float(ap.get("eta_clip_min", 1.0))
-        # softmax 温度（>0 时按 softmax(-score/tau) 采样；<=0 退化为 argmin）
-        self.softmax_tau: float = float(ap.get("softmax_tau", config.get("softmax_tau", 1.0)))
-        self._eps = 1e-9
-
+    def reset(self):
+        self._path_cache.clear()
 
     def compute_actions(
         self,
         obs_dict: Dict[str, Any],
-        global_state: Dict[str, Any]
+        global_state: Dict[str, Any],
     ) -> Dict[str, int]:
-        """
-        为所有需要决策的智能体计算动作
-        
-        Args:
-            obs_dict: {agent_str: obs} 每个智能体的局部观测
-                obs 应包含:
-                - 'current_node': int
-                - 'neighbors': List[int]
-                - 'neighbor_idleness': List[float] (可选，如果没有则从 global_state 获取)
-                - 'on_edge': bool (可选，用于判断是否需要决策)
-            
-            global_state: 全局状态
-                - 'graph': Graph 对象
-                - 'agent_positions': Dict[int, int]
-                - 'agents_target_node': Dict[int, int]
-                - 'node_idleness': Dict[int, float]
-                - 'agents_on_edge': Dict[int, bool]
-        
-        Returns:
-            actions: {agent_str: action_idx} 所有需要决策的智能体的动作
-        """
-        actions = {}
-        
+        actions: Dict[str, int] = {}
+
         for agent_str, obs in obs_dict.items():
-            # 提取智能体索引
             agent_id = int(agent_str.split("_")[1]) if isinstance(agent_str, str) else int(agent_str)
-            
-            # 检查是否需要决策（在边上移动中的智能体不需要决策）
-            on_edge = obs.get('on_edge', False)
-            if global_state.get('agents_on_edge'):
-                on_edge = global_state['agents_on_edge'].get(agent_id, on_edge)
-            
+
+            on_edge = obs.get("on_edge", False)
+            if global_state.get("agents_on_edge"):
+                on_edge = global_state["agents_on_edge"].get(agent_id, on_edge)
             if on_edge:
-                # 在边上移动中，不需要决策（返回 no-op 或跳过）
                 continue
-            
-            # 计算动作
+
             action = self._compute_action(agent_id, obs, global_state)
-            
             if action is not None:
                 actions[agent_str] = action
-        
+
         return actions
 
     def _compute_action(
         self,
         agent_id: int,
         obs: Dict[str, Any],
-        global_state: Dict[str, Any]
+        global_state: Dict[str, Any],
     ) -> Optional[int]:
-        """
-        为单个智能体计算动作
-        
-        Args:
-            agent_id: 智能体索引
-            obs: 局部观测，包含 current_node, neighbors, neighbor_idleness
-            global_state: 全局状态
-            evaluation_mode: 评估模式
-        
-        Returns:
-            action: 邻居索引0 ~ len(neighbors)-1 或 None
-        """
-        # 提取局部观测
-        current_node = obs.get('current_node')
-        neighbors = obs.get('neighbors', [])
-        
-        if not neighbors:
+        current_node = obs.get("current_node")
+        neighbors = obs.get("neighbors", [])
+        if current_node is None or not neighbors:
+            self._path_cache.pop(agent_id, None)
             return None
-        
-        # 获取邻居空闲度
-        neighbor_idleness = obs.get('neighbor_idleness')
-        if neighbor_idleness is None:
-            # 从 global_state 获取
-            node_idleness = global_state.get('node_idleness', {})
-            neighbor_idleness = [node_idleness.get(n, 0.0) for n in neighbors]
-        
-        neighbor_idleness = np.asarray(neighbor_idleness, dtype=np.float32)
-        
-        # 计算距离（调用基类工具方法，自动读取 self.distance_mode）
-        graph = global_state.get('graph')
-        distances = self._neighbor_distances(current_node, neighbors, graph)
-        
-        # 计算冲突分数
-        nconf = self._neighbor_conflicts(
-            agent_id, current_node, neighbors, distances, global_state
-        )
-        
-        # 归一化
-        nidle = self._norm_inverted(neighbor_idleness)  # 大空闲 → 小值（更好）
-        ndist = self._norm_minmax(distances)            # 短距离 → 小值（更好）
-        
-        # 线性组合得分
-        score = (self.w_idl * nidle +
-                 self.w_dist * ndist +
-                 self.w_conflict * nconf)
 
-        logits = -score / max(self.softmax_tau, 1e-6)
-        logits -= np.max(logits)  # 数值稳定
-        probs = np.exp(logits)
-        probs = probs / np.clip(np.sum(probs), 1e-8, None)
-        return int(np.random.choice(len(neighbors), p=probs))
+        cached_action = self._pop_cached_action(agent_id, neighbors)
+        if cached_action is not None:
+            return cached_action
 
-    
-    def _neighbor_conflicts(
-        self, 
-        agent_id: int, 
-        current: int, 
-        neighbors: List[int], 
-        distances: np.ndarray,
-        global_state: Dict[str, Any]
-    ) -> np.ndarray:
-        """
-        计算每个候选邻居的冲突/拥挤度分数
-        
-        冲突项包括：
-          - 即时冲突：有人已将 target 指向该邻居 → +1
-          - ETA 冲突：他人更快/近似时间到达该邻居 → +0.5
-        
-        Args:
-            agent_id: 当前智能体索引
-            current: 当前节点
-            neighbors: 邻居节点列表
-            distances: 到每个邻居的距离
-            global_state: 全局状态
-        
-        Returns:
-            conflicts: 每个邻居的冲突分数数组（越大越差）
-        """
-        graph = global_state.get('graph')
-        agents_target_node = global_state.get('agents_target_node', {})
-        agent_positions = global_state.get('agent_positions', {})
-        
-        # 其他机器人的"已选目标"
-        occupied = set()
-        for idx, tgt in agents_target_node.items():
-            if idx == agent_id:
+        graph = global_state.get("graph")
+        if graph is None:
+            return None
+
+        node_idleness = {
+            node: float(value)
+            for node, value in global_state.get("node_idleness", {}).items()
+        }
+
+        target = self._select_target(graph, current_node, node_idleness)
+        if target is None:
+            return None
+
+        edge_costs = self._build_dynamic_edge_costs(graph, node_idleness)
+        path = self._dijkstra_path(graph, current_node, target, edge_costs)
+        if path is None or len(path) < 2:
+            return None
+
+        remaining = path[1:]
+        next_node = remaining.pop(0)
+        if next_node not in neighbors:
+            return None
+
+        if remaining:
+            self._path_cache[agent_id] = remaining
+        else:
+            self._path_cache.pop(agent_id, None)
+
+        return int(neighbors.index(next_node))
+
+    def _pop_cached_action(
+        self,
+        agent_id: int,
+        neighbors: List[int],
+    ) -> Optional[int]:
+        path = self._path_cache.get(agent_id)
+        if not path:
+            return None
+
+        next_node = path[0]
+        if next_node not in neighbors:
+            self._path_cache.pop(agent_id, None)
+            return None
+
+        path.pop(0)
+        if not path:
+            self._path_cache.pop(agent_id, None)
+        return int(neighbors.index(next_node))
+
+    def _select_target(
+        self,
+        graph: Any,
+        current_node: int,
+        node_idleness: Dict[int, float],
+    ) -> Optional[int]:
+        nodes = list(getattr(graph, "nodes", []))
+        candidates = [node for node in nodes if node != current_node]
+        if not candidates:
+            return None
+
+        max_idleness = max((node_idleness.get(node, 0.0) for node in nodes), default=0.0)
+        distances = {
+            node: float(graph.shortest_path_length(current_node, node))
+            for node in candidates
+        }
+        finite_distances = [dist for dist in distances.values() if math.isfinite(dist)]
+        if not finite_distances:
+            return None
+
+        max_distance = max(finite_distances)
+        best_node: Optional[int] = None
+        best_decision = -math.inf
+
+        for node in candidates:
+            dist = distances[node]
+            if not math.isfinite(dist):
                 continue
-            if isinstance(tgt, (int, np.integer)) and tgt >= 0:
-                occupied.add(int(tgt))
 
-        # 其他机器人的当前位置
-        others_pos = []
-        for idx, pos in agent_positions.items():
-            if idx == agent_id:
+            norm_idleness = (
+                node_idleness.get(node, 0.0) / max_idleness
+                if max_idleness > 0.0
+                else 0.0
+            )
+            norm_distance = (
+                (max_distance - dist) / max_distance
+                if max_distance > 0.0
+                else 0.0
+            )
+            decision = norm_idleness + norm_distance
+
+            if decision > best_decision:
+                best_decision = decision
+                best_node = node
+
+        return best_node
+
+    def _build_dynamic_edge_costs(
+        self,
+        graph: Any,
+        node_idleness: Dict[int, float],
+    ) -> Dict[Tuple[int, int], float]:
+        nodes = list(getattr(graph, "nodes", []))
+        max_idleness = max((node_idleness.get(node, 0.0) for node in nodes), default=0.0)
+
+        edges: List[Tuple[int, int, float]] = []
+        for src in nodes:
+            for dst, cost in graph.adj_list.get(src, []):
+                edges.append((src, dst, float(cost)))
+
+        if not edges:
+            return {}
+
+        edge_values = [cost for _, _, cost in edges]
+        min_cost = min(edge_values)
+        max_cost = max(edge_values)
+        cost_range = max_cost - min_cost
+
+        dynamic: Dict[Tuple[int, int], float] = {}
+        for src, dst, cost in edges:
+            idle_cost = (
+                (max_idleness - node_idleness.get(dst, 0.0)) / max_idleness
+                if max_idleness > 0.0
+                else 0.0
+            )
+            dist_cost = (
+                (cost - min_cost) / cost_range
+                if cost_range > 0.0
+                else 0.0
+            )
+            dynamic[(src, dst)] = idle_cost + dist_cost
+
+        return dynamic
+
+    def _dijkstra_path(
+        self,
+        graph: Any,
+        source: int,
+        target: int,
+        edge_costs: Dict[Tuple[int, int], float],
+    ) -> Optional[List[int]]:
+        dist = {node: math.inf for node in graph.nodes}
+        prev: Dict[int, int] = {}
+        dist[source] = 0.0
+        queue: List[Tuple[float, int]] = [(0.0, source)]
+        visited = set()
+
+        while queue:
+            cur_dist, node = heapq.heappop(queue)
+            if node in visited:
                 continue
-            if isinstance(pos, (int, np.integer)) and pos >= 0:
-                others_pos.append(int(pos))
+            visited.add(node)
 
-        sp = getattr(graph, "shortest_path_length", None) if graph is not None else None
+            if node == target:
+                break
 
-        res = []
-        for j, nb in enumerate(neighbors):
-            score = 0.0
+            for nxt, _ in graph.adj_list.get(node, []):
+                weight = edge_costs.get((node, nxt), math.inf)
+                if not math.isfinite(weight):
+                    continue
+                new_dist = cur_dist + weight
+                if new_dist < dist[nxt]:
+                    dist[nxt] = new_dist
+                    prev[nxt] = node
+                    heapq.heappush(queue, (new_dist, nxt))
 
-            # 1) 即时冲突：别人已经把目标对准 nb
-            if nb in occupied:
-                score += 1.0
+        if not math.isfinite(dist.get(target, math.inf)):
+            return None
 
-            # 2) ETA 冲突：别人可能更快或差不多时间到达 nb
-            if others_pos and callable(sp):
-                eta_self = max(float(distances[j]), self.eta_clip_min)
-                
-                # 估计他人最小 ETA 到此 nb
-                eta_other_min = math.inf
-                for pos in others_pos:
-                    try:
-                        d = float(sp(pos, nb))
-                    except Exception:
-                        d = math.inf
-                    if d < eta_other_min:
-                        eta_other_min = d
+        path = [target]
+        node = target
+        while node != source:
+            node = prev.get(node)
+            if node is None:
+                return None
+            path.append(node)
 
-                if eta_other_min < math.inf:
-                    # 若他人 ETA <= 我方 ETA + 边际，则存在"拥挤/抢占风险"
-                    if eta_other_min <= eta_self + self.conflict_eta_margin:
-                        # 惩罚强度可与“领先程度”相关；这里给个平滑型
-                        # delta = max(0, (eta_self + margin) - eta_other_min)
-                        # score += 0.5 + sigmoid(delta)
-                        score += 0.5  # 简洁实现：固定额外惩罚
-            res.append(score)
-
-            # NOTE: 若没有 others_pos 或没有 sp，可只保留“即时冲突”
-        return np.asarray(res, dtype=np.float32)
+        return list(reversed(path))
