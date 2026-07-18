@@ -1,612 +1,397 @@
-# 多智能体巡逻平台用户指南
+# M2Bench User Guide
 
-本指南详细说明了如何使用多智能体巡逻平台进行实验，包括项目使用方法、环境扩展、算法添加和参数配置等内容。
+[English](USER_GUIDE.md) | [简体中文](USER_GUIDE_zh-CN.md) | [README](README.md) | [Paper](https://arxiv.org/abs/2605.09633v2)
 
-## 目录
+This guide describes the current codebase. Commands assume the repository root as the working directory and the `Patrolling` Conda environment is active.
 
-- [项目使用方法](#项目使用方法)
-- [如何添加新的自定义MDP](#如何添加新的自定义mdp)
-- [如何添加强制合作环境](#如何添加强制合作环境)
-- [如何添加新的算法](#如何添加新的算法)
-- [参数文件配置详解](#参数文件配置详解)
-- [MDP算法详解](#mdp算法详解)
-- [故障排除](#故障排除)
+> **TWLO and `masup`.** The paper names our formulation the Tail Worst-case Latency-Optimizing MDP (TWLO-MDP). The earlier code identifier `masup` remains in module names, registry keys, and YAML paths. They refer to the same MDP. This guide uses **TWLO** in prose and `masup` only when a literal code identifier is required.
 
-## 项目结构
+## Contents
 
+- [Configuration model](#configuration-model)
+- [Minimal workflows](#minimal-workflows)
+- [Implemented monitoring MDPs](#implemented-monitoring-mdps)
+- [Implemented RL and MARL algorithms](#implemented-rl-and-marl-algorithms)
+- [Implemented heuristic policies](#implemented-heuristic-policies)
+- [Networks and policy mapping](#networks-and-policy-mapping)
+- [Adding a map](#adding-a-map)
+- [Adding an MDP](#adding-an-mdp)
+- [Adding a network](#adding-a-network)
+- [Adding an algorithm](#adding-an-algorithm)
+
+## Configuration Model
+
+M2Bench uses three kinds of YAML files:
+
+| Configuration | Location | Purpose |
+|---|---|---|
+| Experiment | `configs/experiments/<mdp>/` | Environment, algorithm, networks, training budget, logging, and optional post-training evaluation |
+| Sweep | `configs/sweep/<mdp>/` | W&B search method, objective, parameter distributions, and optional early termination |
+| Evaluation | `configs/eval/<mdp>/` | Evaluation environment, episode count, plots, animation, and action-score logging |
+| Heuristic | `configs/heuristic/` | Parameters and default display settings for one heuristic; the runtime environment is supplied by CLI |
+
+An experiment YAML is loaded into `ExperimentConfig` and contains these principal sections:
+
+```yaml
+algo_name: mappo          # ALGO_REGISTRY key
+env_type: masup           # ENV_REGISTRY key; masup means TWLO
+actor_type: masup_mlp     # optional ACTOR_REGISTRY key
+critic_type: masup_mlp    # optional CRITIC_REGISTRY key
+q_type: null              # optional Q_NETWORK_REGISTRY key
+
+env:                      # EnvConfig
+  graph_path: graphs/grid.json
+  num_agents: 3
+  init_positions: [1, 26, 50]
+  episode_len: 500
+  custom_configs: {}
+
+algo: {}                  # algorithm-specific parameter dataclass
+training: {}              # TrainerConfig / OnPolicyTrainerConfig / OffPolicyTrainerConfig
+actor: {}                 # actor architecture parameters
+critic: {}                # critic architecture parameters
+q_network: {}             # Q-network architecture parameters
 ```
-MultiAgentPatrolling/
-├── main.py                      # 统一启动脚本
-├── config/                      # 配置文件目录
-│   ├── MARLlib_MAPPO_*.yaml    # MARLlib深度强化学习配置
-│   ├── MARLlib_VDPPO_*.yaml    # 价值分解算法配置
-│   ├── *_config.yaml           # 传统分布式算法配置
-│   └── ...
-├── envs/                        # 环境模块
-│   ├── base_env.py             # 环境基类（PettingZoo标准）
-│   ├── graph_utils.py          # 图结构工具
-│   ├── mdp/                    # MDP环境实现
-│   ├── fcoop/                  # 强制合作环境
-│   └── custom/                 # 自定义环境示例
-├── trainer/                     # 训练器模块
-│   ├── decentralized_trainer.py # 传统分布式训练器
-│   └── marllib_trainer.py       # MARLlib训练器
-├── evaluation/                  # 评估器模块
-│   ├── decentralized_evaluator.py # 传统分布式评估器
-│   └── marllib_evaluator.py     # MARLlib评估器
-├── log/                         # 统一实验输出目录
-└── ...
-```
 
----
+Unknown fields inside dataclass-backed sections are ignored, so spelling errors may silently leave a default value in effect. Compare new files with an existing configuration from the same MDP and algorithm family.
 
-## 项目使用方法
+Important training fields are:
 
-### 基本工作流程
+| Field | Meaning |
+|---|---|
+| `training.num_envs` | Number of parallel simulator instances |
+| `training.num_steps` | Transitions collected per environment and iteration |
+| `training.total_steps` | Global environment-step budget; overrides the effective iteration count |
+| `training.use_subproc` | Use subprocess rather than in-process vector environments |
+| `training.minibatch_size`, `update_epochs` | On-policy update schedule |
+| `training.batch_size`, `warmup_steps`, `buffer_size` | Off-policy replay schedule |
+| `algo.shared_policy` | Share one policy network when supported; otherwise create independent networks |
+| `env.custom_configs.truncate_by_time` | Interpret `episode_len` as physical simulation time instead of decision steps |
 
-本项目支持两种训练框架：
+By default, checkpoints, TensorBoard-compatible run data, and evaluation outputs are placed under `models/`, `runs/`, and `evaluators/results/`. `train.py --save-dir`, `train.py --results-dir`, `sweep.py --models-dir`, `sweep.py --results-dir`, and evaluator output options override these roots.
 
-1. **传统分布式框架**：使用Q-Learning、DQN等传统强化学习算法
-2. **MARLlib框架**：使用MAPPO、VDPPO等深度强化学习算法
+## Minimal Workflows
 
-### 命令行参数
+### Train one experiment
 
 ```bash
-python main.py [选项]
+python train.py configs/experiments/masup/mappo_masup_grid_a3.yaml
 ```
 
-**可用参数：**
-- `--config`: 配置文件路径（必需）
-- `--framework`: 强制指定训练框架（`decentralized` 或 `marllib`）
-- `--eval-only`: 仅运行评估，跳过训练
-- `--checkpoint`: MARLlib检查点路径（用于评估）
+The example is MAPPO on TWLO despite the historical `masup` path. The run writes periodic/best/final checkpoints below a timestamped model directory. If `eval_config_path` is present in the experiment YAML, the best available checkpoint is evaluated after training.
 
-### 使用示例
-
-#### 1. 传统分布式算法
+Useful overrides:
 
 ```bash
-# Q-Learning训练GBLA环境
-python main.py --config config/GBLA_config.yaml --framework decentralized
-
-# 仅评估已训练的模型
-python main.py --config config/GBLA_config.yaml --framework decentralized --eval-only
-
-# S4R1环境训练
-python main.py --config config/S4R1_config.yaml --framework decentralized
+python train.py configs/experiments/masup/mappo_masup_grid_a3.yaml \
+  --eval-config configs/eval/masup/masup_grid_a3.yaml \
+  --save-dir /data/checkpoints/grid-a3 \
+  --results-dir /data/evaluation
 ```
 
-#### 2. MARLlib深度强化学习
+Existing configurations are full research runs. Create a separate smoke-test YAML with a small `total_steps`, `num_envs`, and `num_steps`; do not infer runtime from the short command itself.
+
+### Run a W&B sweep
+
+Authenticate once:
 
 ```bash
-# MAPPO训练GBLA环境
-python main.py --config config/MARLlib_MAPPO_GBLA_config.yaml --framework marllib
-
-# VDPPO训练S4R1环境（价值分解）
-python main.py --config config/MARLlib_VDPPO_S4R1_config.yaml --framework marllib
-
-# 使用特定检查点评估
-python main.py --config config/MARLlib_MAPPO_GBLA_config.yaml --framework marllib --eval-only --checkpoint /path/to/checkpoint
+wandb login
 ```
 
-### 实验输出结构
+Create and execute a sweep in the current process:
 
-```
-log/
-├── GBLA_exp1/                   # 传统分布式实验输出
-│   ├── agents_final.pkl         # 训练好的智能体模型
-│   ├── training_curve.png       # 训练曲线
-│   ├── evaluation_report.txt    # 评估报告
-│   └── evaluation_animation.mp4 # 轨迹动画
-└── MAPPO_GBLA_test/            # MARLlib实验输出
-    ├── mappo_mlp_GBLA/         # 算法特定目录
-    │   └── checkpoint_*        # 检查点文件
-    ├── evaluation_report.txt   # 评估报告
-    └── evaluation_idleness_combined.png # 性能图表
+```bash
+python sweep.py \
+  --base-config configs/experiments/masup/mappo_masup_grid_a3.yaml \
+  --sweep-config configs/sweep/masup/mappo_masup_grid_a3.yaml \
+  --count 20 \
+  --eval-config configs/eval/masup/masup_grid_a3.yaml \
+  --top-n 5
 ```
 
----
+The base experiment supplies all fixed values. Sweep keys matching algorithm, trainer, or top-level experiment fields are applied automatically; environment-specific values use `custom_configs.<key>`.
 
-## 如何添加新的自定义MDP
+To distribute trials across terminals or machines, create the sweep first:
 
-### 步骤1：创建环境类
+```bash
+python sweep.py \
+  --base-config configs/experiments/masup/mappo_masup_grid_a3.yaml \
+  --sweep-config configs/sweep/masup/mappo_masup_grid_a3.yaml \
+  --create-only
+```
 
-在`envs/mdp/`目录下创建新的环境文件：
+Then start one or more agents with the printed ID and the same W&B project:
+
+```bash
+python sweep.py \
+  --base-config configs/experiments/masup/mappo_masup_grid_a3.yaml \
+  --sweep-config configs/sweep/masup/mappo_masup_grid_a3.yaml \
+  --sweep-id <SWEEP_ID> \
+  --project <WANDB_PROJECT> \
+  --count 10
+```
+
+### Evaluate a learned policy
+
+`evaluators/test.py` reconstructs the policy from checkpoint metadata. `--model` must be a directory containing `config.yaml` and `policy.pt`; neural actor-critic checkpoints may also contain `critic.pt`.
+
+```bash
+python evaluators/test.py \
+  --model models/mappo-masup-grid/<timestamp>/best \
+  --env_config configs/eval/masup/masup_grid_a3.yaml \
+  --num_episodes 10 \
+  --episode_time 500 \
+  --results-dir evaluators/results \
+  --no_show
+```
+
+Common optional outputs:
+
+```bash
+python evaluators/test.py \
+  --model <CHECKPOINT_DIR> \
+  --env_config <EVAL_YAML> \
+  --animation \
+  --max_frames 400 \
+  --log_action_logits \
+  --action_logits_csv evaluators/results/action_scores.csv \
+  --no_show
+```
+
+The evaluator reports IGI, AGI, IWI, and WI under the same simulator metric tracker used during training. TWLO configurations additionally expose `wi_fromT` when the transient cutoff `T` is enabled.
+
+### Evaluate heuristic policies
+
+The heuristic evaluator receives environment parameters directly from the terminal; heuristic YAML files contain only policy and display defaults.
+
+```bash
+python evaluators/heuristic_evaluator.py island 6 500 \
+  --policy HPCC \
+  --init-positions 0 10 20 30 40 49 \
+  --speeds 1 1 1 1 1 1 \
+  --num_episodes 10 \
+  --results-dir evaluators/results \
+  --no_show
+```
+
+The positional syntax is:
+
+```text
+heuristic_evaluator.py MAP NUM_AGENTS EPISODE_LEN [options]
+```
+
+`MAP` may be `island`, `island.json`, or an explicit graph path. The length of `--init-positions` and `--speeds` must equal `NUM_AGENTS`, and every initial node ID must occur in the graph's `nodes` array. Omit initial positions for random starts.
+
+Additional environment options include `--enable-wait`, `--deltaT`, `--truncate-by-steps`, edge-time jitter controls, and repeatable generic overrides such as `--env edge_time_jitter_frac=0.2`.
+
+Run every heuristic with one shared map/team/horizon setup:
+
+```bash
+python run_all_heuristics.py island 6 500 \
+  --init-positions 0 10 20 30 40 49
+```
+
+## Implemented Monitoring MDPs
+
+The table lists conceptual formulations rather than counting API adapters as separate MDPs. Links identify the source formulation; implementations adapt each method to the shared weighted-graph simulator and metric protocol.
+
+| MDP | Registry key(s) | Time/API | Main implementation | Reference |
+|---|---|---|---|---|
+| **TWLO** | `masup` | Event-driven, PettingZoo parallel | Tail-worst-latency state and duration-aware reward; historical code class `MASUPEnv` | [Wang et al., 2026](https://arxiv.org/abs/2605.09633v2) |
+| **TWLO graph observation** | `masup_gnn` | Event-driven, PettingZoo parallel | TWLO dynamics with static graph nodes, virtual robot nodes, and edge features | [Wang et al., 2026](https://arxiv.org/abs/2605.09633v2) |
+| BBLA | `bbla` | Fixed-step, PettingZoo parallel | Black-Box Learner Agent state and visited-node idleness reward | [Santana et al., 2004](https://ieeexplore.ieee.org/document/1373634) |
+| GBLA | `gbla` | Fixed-step, PettingZoo parallel | BBLA plus other robots' adjacent target intentions | [Santana et al., 2004](https://ieeexplore.ieee.org/document/1373634) |
+| Extended-GBLA | `ex_gbla` | Fixed-step, PettingZoo parallel | Ordered adjacent idleness and coordination-aware reward | [Lauri and Koukam, 2014](https://link.springer.com/chapter/10.1007/978-3-319-12970-9_18) |
+| NEP | `nep` | Event-driven, Gymnasium joint | Node-edge-position state with tabular Q-learning interface | [Hu and Zhao, 2010](https://ieeexplore.ieee.org/document/5599681) |
+| S4R1 | `s4r1` | Fixed-step, PettingZoo parallel | Source/target and neighborhood-idleness state used with deep Q-learning | [Jana et al., 2022](https://doi.org/10.1007/s41315-022-00235-1) |
+| BEAU | `beau` | Event-driven, PettingZoo parallel | Graph state for autoregressive MAT execution; adapted from the original grid/visibility setting | [Guo et al., 2023](https://doi.org/10.1109/ICRA48891.2023.10160923) |
+| MAGEC | `magec` | Event-driven, PettingZoo parallel | GraphSAGE-compatible patrol and virtual-agent graph features | [Goeckner et al., 2024](https://arxiv.org/abs/2403.13093) |
+| SUNS | `suns`, `suns_gym` | Event-driven; parallel or single-agent Gym adapter | Full-graph idleness/distance features with SUN actor/critic | [Ward et al., 2025](https://arxiv.org/abs/2412.11916) |
+| OUCS | `oucs` | Fixed-step, PettingZoo parallel | Agent locations, neighbor visit counts, priorities, and cooperative reward | [Palma-Borda et al., 2026](https://doi.org/10.1016/j.engappai.2025.113706) |
+
+`suns_gym` is restricted to one robot. `masup_gnn` changes the TWLO observation representation, not its monitoring objective. BEAU preserves the decision-step collection concept but is not step-for-step identical to the original implementation; see `envs/mdps/beau.py` for the documented adaptations.
+
+## Implemented RL and MARL Algorithms
+
+`configs/registry.py` is the source of truth for callable identifiers.
+
+| Registry key | Family | Policy organization | Reference / implementation note |
+|---|---|---|---|
+| `a2c` | On-policy actor-critic | Single or shared actor | Synchronous A2C based on [Mnih et al., 2016](https://arxiv.org/abs/1602.01783) |
+| `maa2c` | MARL actor-critic | Shared actor, centralized critic | Repository CTDE extension of A2C |
+| `ppo` | On-policy PPO | Actor and critic | [Schulman et al., 2017](https://arxiv.org/abs/1707.06347) |
+| `mappo` | MARL PPO | Shared actor, centralized critic | [Yu et al., 2022](https://arxiv.org/abs/2103.01955) |
+| `ippo` | Independent PPO | Independent by default; sharing configurable | [de Witt et al., 2020](https://arxiv.org/abs/2011.09533) |
+| `vdppo` | Value-decomposition PPO | PPO actor plus decomposed Q functions | VDPPO baseline described by [Palma-Borda et al., 2026](https://doi.org/10.1016/j.engappai.2025.113706); repository uses a QPLEX-style mixer |
+| `d3qn` | Off-policy value learning | Q-network | Double DQN with optional [dueling architecture](https://arxiv.org/abs/1511.06581) |
+| `iql` | Independent Q-learning | Independent Q-network per robot | [Tan, 1993](https://doi.org/10.1145/168871.168872) |
+| `vdn` | Value decomposition | Shared per-agent Q-network and sum mixer | [Sunehag et al., 2017](https://arxiv.org/abs/1706.05296) |
+| `qmix` | Monotonic value decomposition | Shared Q-network and state-conditioned mixer | [Rashid et al., 2020](https://jmlr.org/papers/v21/20-081.html) |
+| `qtable` | Tabular Q-learning | Independent Q-table per robot | Q-learning from [Watkins and Dayan, 1992](https://doi.org/10.1007/BF00992698) |
+| `mappo_mat` | Autoregressive multi-agent PPO | GAT encoder and MAT decoder | MAT architecture from [Wen et al., 2022](https://arxiv.org/abs/2205.14953) |
+| `happo` | BEAU compatibility key | Same `MAPPOMATAlgo` implementation as `mappo_mat` | Used by BEAU experiment YAMLs; it is not a separate canonical HAPPO implementation |
+
+On-policy training supports action masks, active-decision masks, recurrent chunks, value normalization, and transparent GAE for event-driven inactive steps. Off-policy training supports flat or sequential replay, target networks, recurrent burn-in, and decision-epoch synchronization options where configured.
+
+## Implemented Heuristic Policies
+
+These are the exact names accepted by `--policy`. Reference links indicate the conceptual source. Several controllers are simulator-adapted or lightweight repository variants, so consult the module docstring before claiming exact reproduction of an original algorithm.
+
+| CLI name | Policy | Reference / note |
+|---|---|---|
+| `RANDOM` | Uniform random neighbor | Reference-free baseline |
+| `CR` | Conscientious Reactive | [Portugal and Rocha, 2013](https://doi.org/10.1080/01691864.2013.763722) |
+| `HCR` | Heuristic Conscientious Reactive | Algorithm 2 in [Portugal and Rocha, 2013](https://doi.org/10.1080/01691864.2013.763722) |
+| `CC` | Conscientious Cognitive | Repository local idleness-distance variant; related comparison in [Portugal and Rocha, 2013](https://doi.org/10.1080/01691864.2013.763722) |
+| `HPCC` | Heuristic Pathfinder Conscientious Cognitive | Algorithm 3 in [Portugal and Rocha, 2013](https://doi.org/10.1080/01691864.2013.763722) |
+| `ER` | Expected Idleness / Expected Reactive | [Yan and Zhang, 2016](https://doi.org/10.1177/1729881416663666) |
+| `GBS` | Greedy Bayesian Strategy | [Portugal and Rocha, 2013](https://doi.org/10.1016/j.robot.2013.06.011) |
+| `SEBS` | State Exchange Bayesian Strategy | [Portugal and Rocha, 2013](https://doi.org/10.1016/j.robot.2013.06.011) |
+| `BAPS` | Bayesian Ant Patrolling Strategy | [Chen et al., 2015](https://doi.org/10.5194/isprsannals-II-4-W2-103-2015) |
+| `CBLS` | Cycle-Based strategy with tabu lists | Lightweight repository variant; related Bayesian patrolling background in [Portugal's thesis](https://ap.isr.uc.pt/archive/DPortugal_PhDThesis_2014.pdf) |
+| `MSP` | Configured cyclic-route policy | Related partitioning method: [Portugal and Rocha, 2010](https://ap.isr.uc.pt/archive/PR10_ACM_SAC2010.pdf); this implementation consumes precomputed routes |
+| `DTAGREEDY` | Distributed task-assignment greedy variant | [Farinelli et al., 2017](https://doi.org/10.1007/s10514-016-9579-8) |
+| `DTASSI` | Sequential-single-item-inspired DTA variant | Related DTA auction method in [Farinelli et al., 2017](https://doi.org/10.1007/s10514-016-9579-8); current code uses noisy local scores rather than a full auction protocol |
+| `AHPA` | Adaptive Heuristic Patrolling Agent | [Goeckner et al., 2024](https://arxiv.org/abs/2304.01386) |
+
+## Networks and Policy Mapping
+
+Actor, critic, and Q-network selection is independent. This is what allows one MDP and one optimization algorithm to be combined with MLP, recurrent, graph, or formulation-specific encoders without rewriting the trainer.
+
+| Registry | Available keys |
+|---|---|
+| Actor | `mlp`, `rnn`, `sun`, `mpnn`, `sage`, `masup_mlp`, `masup_rnn` |
+| Critic | `mlp`, `rnn`, `sun`, `masup_mlp`, `masup_rnn` |
+| Q-network | `mlp`, `rnn`, `masup_q_mlp`, `masup_q_rnn`, `masup_vdppo_mlp`, `masup_vdppo_rnn` |
+
+The historical `masup_*` network keys denote TWLO-specific observation encoders. MAT uses its own `GATEncoder` and `MATDecoder` construction path.
+
+`ActorPolicy` and `ValuePolicy` define reusable observation-to-action behavior. `MultiAgentPolicy` maps robot IDs either to separate policy instances or to one shared instance. In shared mode, robot batches are stacked for one network call and then mapped back to agent-keyed outputs. This separation lets an algorithm change how parameters are optimized without changing how a policy performs action masking, recurrence, or inference.
+
+## Adding a Map
+
+### 1. Create the graph JSON
+
+Maps use `G=(V,E,W,phi)`:
+
+```json
+{
+  "nodes": [0, 1, 2],
+  "edges": [
+    {"from": 0, "to": 1, "weight": 1.0},
+    {"from": 1, "to": 0, "weight": 1.0},
+    {"from": 1, "to": 2, "weight": 2.0},
+    {"from": 2, "to": 1, "weight": 2.0}
+  ],
+  "phi": {"0": 1.0, "1": 2.0, "2": 1.0}
+}
+```
+
+- `nodes` contains integer node IDs. Contiguous IDs are strongly recommended because some baseline state encodings assume them.
+- Each `weight` is a positive traversal distance. The simulator derives travel time from distance and robot speed.
+- `phi` assigns every node a positive monitoring-priority weight.
+- The parser stores directed adjacency entries. For an undirected monitoring graph, include both directions with equal weight as existing maps do.
+- The graph should be connected for shortest-path-based policies and MDPs.
+
+### 2. Generate display coordinates
+
+```bash
+python utils/graph_layout.py graphs/my_map.json
+```
+
+This creates `graphs/my_map_coords.json` with normalized coordinates. Coordinate files are used by visualization and graph-based BEAU/MAT components; those components can generate missing coordinates, but committing a fixed file makes plots reproducible.
+
+### 3. Add configurations
+
+Copy an experiment and evaluation YAML from the same MDP family. Update at least:
+
+- `graph_name` and every `graph_path` in environment/network sections.
+- `num_agents`, `init_positions`, and `episode_len`.
+- TWLO-specific `num_nodes`, `num_agents`, role information, and cutoff `T` in its network sections.
+- Any graph-size-dependent batch or model parameters.
+
+Validate every initial node against the literal `nodes` array. A node count of 50 does not imply that IDs `0` through `49` all exist.
+
+## Adding an MDP
+
+### 1. Select the environment API
+
+- Subclass `FixedStepEnv` or `EventDrivenEnv` for homogeneous PettingZoo parallel agents.
+- Subclass `JointFixedStepEnv` or `JointEventDrivenEnv` for a single Gymnasium action controlling the joint process.
+- Reuse `PatrolWorld` for graph dynamics, arrivals, waiting, idleness, priorities, and metric tracking.
+
+### 2. Implement the contract
+
+Parallel environments provide `observation_space`, `action_space`, `state`, `_build_obs`, `_build_info`, `_compute_rewards`, `_compute_truncations`, and `_action_to_target`. Joint environments provide Gymnasium spaces and the corresponding singular dispatch, observation, info, reward, and truncation methods.
+
+For asynchronous environments, expose an `active_mask` and give non-ready robots only a no-op action in `action_mask`. This prevents optimization on decisions a robot did not actually make.
+
+### 3. Register and configure it
+
+Add the module and class to `ENV_REGISTRY` in `configs/registry.py`, then create matching experiment and evaluation YAMLs. Environment constructor fields shared across MDPs belong in `EnvConfig`; formulation-specific values belong in `env.custom_configs` and arrive as keyword arguments.
+
+### 4. Validate behavior
+
+Check reset/step space conformance, action masks for ready and moving robots, physical-time truncation at `episode_len`, metric finalization, deterministic seeding, and learned-policy evaluation reconstruction.
+
+## Adding a Network
+
+### 1. Define its configuration
+
+Add a dataclass under `configs/network_configs.py` for architecture parameters. Keep actor, critic, and Q-network types separate even when they share a base configuration.
+
+### 2. Implement reconstruction
+
+A checkpointable network must expose stable `input_dim`/`output_dim` metadata and implement:
 
 ```python
-# envs/mdp/my_custom_env.py
-#!/usr/bin/env python3
+def get_config_dict(self, input_dim: int, output_dim: int) -> dict: ...
 
-from typing import Dict, List, Optional, Tuple
-import numpy as np
-from gym.spaces import Box, Discrete
-
-from agent.base_agent import BaseAgent
-from envs.base_env import PatrolEnvBase
-from envs.graph_utils import Graph
-
-
-class MyCustomEnv(PatrolEnvBase):
-    """自定义MDP环境实现"""
-    
-    def __init__(self, config: Dict, agents: List[BaseAgent]):
-        # 计算环境特定参数
-        graph = Graph(config['env_config']['graph_path'])
-        self.max_neighbors = graph.get_max_degree()
-        
-        # 调用父类初始化
-        super().__init__(config, agents)
-        
-        # 初始化环境特定状态
-        self.custom_state = {}
-        
-        # 初始化空间
-        self._init_spaces()
-    
-    def observation_space(self, agent):
-        """定义观测空间"""
-        max_node_id = max(self.graph.nodes)
-        self.obs_size = 4  # 根据你的观测向量大小调整
-        
-        low = np.array([-1] * self.obs_size, dtype=np.int32)
-        high = np.array([max_node_id] * self.obs_size, dtype=np.int32)
-        
-        return Box(low=low, high=high, dtype=np.int32)
-
-    def action_space(self, agent):
-        """定义动作空间"""
-        return Discrete(self.max_neighbors + 1)
-
-    def _get_max_action_space_size(self) -> int:
-        return self.max_neighbors + 1
-    
-    def _build_observation(self, agent_id: int) -> np.ndarray:
-        """构建观测向量"""
-        if self.agents_on_edge[agent_id]:
-            return np.full(self.obs_size, -1, dtype=np.int32)
-        
-        current_pos = self.agent_positions[agent_id]
-        obs = np.full(self.obs_size, -1, dtype=np.int32)
-        obs[0] = current_pos
-        # 添加其他观测特征...
-        
-        return obs
-    
-    def _extract_state_key(self, observation: np.ndarray) -> Optional[tuple]:
-        """从观测中提取状态键（用于Q-Learning）"""
-        if np.all(observation == -1):
-            return None
-        
-        state_components = []
-        for i in range(len(observation)):
-            state_components.append(int(observation[i]) if observation[i] != -1 else -1)
-        
-        return tuple(state_components)
-    
-    # 算法特定方法
-    def _reset_algorithm_state(self):
-        self.custom_state = {}
-    
-    def _handle_action_set(self, agent_id: int, target_node: int):
-        pass
-    
-    def _handle_arrival_events(self, arrived_this_step: Dict[int, int]):
-        pass
-    
-    def _get_algorithm_global_state(self) -> List[float]:
-        return []
+@classmethod
+def from_config_dict(cls, cfg: dict): ...
 ```
 
-### 步骤2：在main.py中注册环境
+The saved dictionary must include a unique `type` name and every parameter needed to reconstruct the module before loading its state dict. Recurrent networks should also provide the hidden-state and sequence-forward interfaces used by the policy wrappers.
+
+### 3. Register both construction paths
+
+Add the YAML key to `ACTOR_REGISTRY`, `CRITIC_REGISTRY`, or `Q_NETWORK_REGISTRY` in `configs/registry.py`. If the constructor is not covered by an existing factory branch, extend `create_actor`, `create_critic`, or `create_q_network` narrowly.
+
+Also add the class name to `utils/model_io._get_class_registry`; otherwise training can save the model but evaluation cannot rebuild it.
+
+### 4. Exercise save and load
+
+Train or instantiate once, save a checkpoint, load it through `load_policy_for_eval`, and compare deterministic outputs on the same observation and action mask.
+
+## Adding an Algorithm
+
+### 1. Add parameters and implementation
+
+Create an algorithm parameter dataclass in `configs/algo_configs.py`. Implement the algorithm under `algorithms/rl/`, `algorithms/marl/`, or `algorithms/tabular/`, normally by extending `BaseAlgorithm`, `ActorCriticOnPolicyAlgo`, `PPOBase`, or `QLearningOffPolicyAlgo`.
+
+The trainer-facing implementation must prepare the collector's batch format, perform an update, expose training statistics, and preserve target/recurrent state where applicable.
+
+### 2. Register the algorithm
+
+Add an `ALGO_REGISTRY` entry containing:
 
 ```python
-def create_env(config: Dict, agents: List[BaseAgent]) -> PatrolEnvBase:
-    mdp_type = config['env_config']['mdp_type']
-    
-    if mdp_type == 'MyCustom':  # 添加你的环境
-        from envs.mdp.my_custom_env import MyCustomEnv
-        return MyCustomEnv(config, agents)
-    # ... 其他环境
+"my_algo": {
+    "module": "algorithms.marl.my_algo",
+    "class_name": "MyAlgo",
+    "params_class": MyAlgoParams,
+    "trainer_type": "on_policy",  # or off_policy / tabular path
+    "policy_type": "actor",       # actor, value, or mat
+}
 ```
 
-### 步骤3：创建配置文件
+`create_algorithm` inspects the constructor and forwards matching values from the context assembled in `train.py`. Add a new context value there only if the algorithm requires information not already available.
 
-#### 传统分布式配置
-```yaml
-# config/MyCustom_config.yaml
-env_config:
-  graph_path: "graphs/essay_MapB.json"
-  num_agents: 4
-  mdp_type: "MyCustom"
+### 3. Connect policy and collector semantics
 
-train_config:
-  algorithm: "Q-Learning"
-  paradigm: "decentralized"
-  reward_method: "Node-Idleness"
-  num_episodes: 1000
+Choose whether the algorithm needs actor or value policies, independent or shared parameters, centralized state, synchronized replay indices, recurrent sequences, and active masks. If these requirements differ from existing families, extend `_build_policy` or `_build_collector` explicitly rather than hiding the behavior in a YAML field that no component consumes.
 
-log_config:
-  log_dir: "log/MyCustom_exp1"
-```
+### 4. Add runnable configurations and verify
 
-#### MARLlib配置
-```yaml
-# config/MARLlib_MAPPO_MyCustom_config.yaml
-experiment:
-  name: "MyCustom_MAPPO"
-  suffix: "test"
-
-environment:
-  type: "MyCustom"
-  graph_path: "graphs/essay_MapB.json"
-  num_agents: 4
-
-algorithm:
-  name: "MAPPO"
-  framework: "marllib"
-
-training:
-  episodes: 10
-```
-
-### 步骤4：测试环境
-
-```bash
-# 传统分布式测试
-python main.py --config config/MyCustom_config.yaml --framework decentralized
-
-# MARLlib测试
-python main.py --config config/MARLlib_MAPPO_MyCustom_config.yaml --framework marllib
-```
-
-### 环境开发要点
-
-- **继承PatrolEnvBase**：确保兼容项目框架
-- **实现必需方法**：`observation_space()`, `action_space()`, `_build_observation()`, `_extract_state_key()`
-- **算法特定方法**：根据需要实现`_reset_algorithm_state()`, `_handle_action_set()`, `_handle_arrival_events()`
-- **观测空间设计**：考虑动作掩码支持，使用gym.spaces定义
-
-## 命令行参数
-
-- `--config`: 配置文件路径
-- `--framework`: 强制指定训练框架 (`decentralized` 或 `marllib`)
-- `--eval-only`: 仅运行评估，跳过训练
-- `--checkpoint`: MARLlib检查点路径（用于评估）
-
-## MDP详解
-*除特殊说明的mdp以外，其余mdp动作空间均为邻接节点索引*
-### BBLA/GBLA/Extended-GBLA
-**原文链接:**
-1. [Multi-agent patrolling with reinforcement learning](https://jmvidal.cse.sc.edu/library/santana04a.pdf) 
-2. [Robust Multi-agent Patrolling Strategies Using Reinforcement Learning](https://link.springer.com/chapter/10.1007/978-3-319-12970-9_17)
-
-**观测空间:**
- - BBLA: 智能体所处的节点、智能体从哪条边到达该节点、邻接节点中Idleness最大+最小的节点
- - GBLA: 在BBLA的基础上增加邻居节点的“意图”，即有没有其他智能体的目标为该节点，有的话该节点“意图”记录为1，没有的话记录为0
- - Extended-GBLA: 同GBLA
-
-**奖励函数:**
- - BBLA/GBLA: 在时刻t，如果智能体恰好到达一节点，则奖励函数为该节点该时刻的 Instantaneous node idleness；如果在边上运动，则奖励为0
- - Extended-GBLA: 在GBLA的基础上增加一个惩罚机制，如果智能体A到达一节点时，智能体B正在朝该节点运动，则智能体A奖励为0
-
-**原文采用算法:** Q-table
-**算法对应文件:** `agent/q_learning_agent.py`, `trainer/decentralized_trainer.py`
-
-**特殊说明:**
-1. 以上三种MDP均未考虑节点权重
-2. 以上三种MDP当智能体在边上运动时都会构建特殊观测，即所有维度全部用 -1 填满
-3. 可以通过修改参数在以上三种MDP中使用 Penalised Idleness 作为奖励函数
-4. 可以在以上三种MDP中使用 marllib 框架并调用其提供的各种算法进行实验
-
-### S4R1
-**原文链接**：
-[A deep reinforcement learning approach for multi‐agent mobile robot patrolling](https://link.springer.com/article/10.1007/s41315-022-00235-1)
-
-**观测空间**：所有智能体的出发节点和目标节点、自己目标节点的邻接节点的空闲度
-
-**奖励函数**：Penalised Idleness $r=\frac{INI(t,\nu)^p}{IGI(t)}$
-
-**原文采用算法:** DQN
-**算法对应文件:** `agent/DQN_agent.py`, `trainer/decentralized_trainer.py`
-
-**原文采用神经网络:** MLP
-**神经网络对应文件:** `networks/DQN_S4R1.py`
-
-**特殊说明:**
-1. 此MDP未考虑节点权重
-2. 在此MDP中可以使用 marllib 框架并调用其提供的各种算法进行实验
-
-### OUCS
-**原文链接**：
-[Cooperative Patrol Routing:  Optimizing Urban Crime Surveillance through Multi-Agent  Reinforcement Learning](https://arxiv.org/abs/2501.08020)
-
-**观测空间**：Position of each agent, Number of visits agents have made to neighbor nodes, Weight of neighbor nodes
-         
-**奖励函数:** 同GBLA 或 $r=\frac{INI(t,\nu)^p}{IGI(t)}$ 二者任选
-
-**原文采用算法:** MAPPO/VDPPO/IPPO/MATRPO/VDA2C
-**算法对应文件:** `MARLlib/marllib/marl/algos`
-
-**原文采用神经网络:** RNN(GRU)
-**神经网络对应文件:** `MARLlib/marllib/marl/models/zoo`
-
-**特殊说明:**
-1. 原文的源码中 line of sight 被定义为一个以智能体当前位置为中心、边长为 2 * line_of_sight + 1 的正方形观测区域，但是由于本项目中并不采取原文的网格化环境，因此简化为智能体只能观察到当前位置邻接节点的信息
-2. 原文的 metric 不是 idleness，因此奖励函数直接选用前面几个MDP中所使用的
-
-### GAT-PPO
-**原文链接**:
-[Balancing Efficiency and Unpredictability in Multi-robot Patrolling: A MARL-Based Approach](https://ieeexplore.ieee.org/document/10160923)
-
-**观测空间**：观测为多维尺度变换后的节点坐标以及节点空闲度
-
-**奖励函数**： $r=\frac{INI(t,\nu)^p}{IGI(t)}$ 
-
-**原文采用算法**：PPO
-**算法对应文件:**：`agent/gat_ppo_agent.py`, `trainer/marl_ppo_trainer.py`
-
-**原文采用神经网络:** GAT
-**神经网络对应文件:** `networks/gat_ppo_network.py`
-
-**特殊说明:**
-1. 原文使用欧式图，因此对仿真器中的拓扑图做多维尺度变换赋予节点坐标
-2. 此MDP未考虑节点权重
-
-
-### GBS
-**原文链接**：[Distributed multi-robot patrol: A scalable and fault-tolerant framework - ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/S0921889013001206)
-
-**观测空间**：智能体当前所在节点，邻接节点空闲度(按当前顶点的邻居集合排序依次填入，不足 max_neighbors 的位置保留为 0),全局平均空闲度。
-
-**奖励函数**：奖励定义为对基类奖励的线性增益修正： $r = base_{reward} + G_1 I_v + G_2 (I_v - \overline{I})$ 
-
-
-**原文采用算法**：GBS
-**算法对应文件:**：`agent/gbs_agent.py`
-
-
-### SEBS
-**原文链接**：[Scalable, fault-tolerant and distributed multi-robot patrol in real world environments | IEEE Conference Publication | IEEE Xplore](https://ieeexplore.ieee.org/document/6697042)
-
-**观测空间**：与SEBS一样
-
-**动作空间**：设定动作时环境会将各智能体的目标节点广播给所有智能体，用于智能体内部避让达到协调的目的
-
-**奖励函数**：与SEBS一样
-
-**原文采用算法**：SEBS
-**算法对应文件:**：`agent/sebs_agent.py`
-
-### CBLS
-**原文链接**：[Cooperative multi-robot patrol with Bayesian learning | Autonomous Robots](https://link.springer.com/article/10.1007/s10514-015-9503-7)
-
-**观测空间**：与GBS一样
-
-**奖励函数**：在基类奖励 base_reward 的基础上加入“本地空闲度增益”与“行进距离惩罚”
-
-**原文采用算法**：CBLS
-**算法对应文件:**：`agent/cbls_agent.py`
-
-### DTAP/DTAG
-**原文链接**：[Distributed on-line dynamic task assignment for multi-robot patrolling | Autonomous Robots](https://link.springer.com/article/10.1007/s10514-016-9579-8)
-
-**观测空间**：观测为长度为max_neighbors+3+agent_number的向量，包括所有邻居的空闲度,当前位置编号，邻居tabu标记（0/1），全局平均空闲度，其他智能体的位置
-
-**奖励函数**：$ r = base_{reward} + G_1 I_v - G_2 [\,v \in tabu\,] + G_3 (I_v - \overline{I})$
-
-
-**原文采用算法**：DTAP/DTAG
-**算法对应文件:**：`agent/dtap_agent.py`, `agent/dtag_agent.py`
-
-
-## 参数文件配置详解
-
-### MARLlib配置文件结构
-
-```yaml
-# 实验基本信息
-experiment:
-  name: "GBLA_MAPPO"        # 实验名称，用于日志目录命名
-  suffix: "test_exp"        # 实验后缀，区分同一算法的不同实验
-
-# 环境配置
-environment:
-  type: "GBLA"              # 环境类型：GBLA/BBLA/S4R1/OUCS
-  graph_path: "graphs/essay_MapB.json"  # 相对于项目根目录的图文件路径
-  num_agents: 4             # 智能体数量
-  reward_method: "Node-Idleness"  # 奖励方法：Node-Idleness/Extended-Node-Idleness
-  time_discrete: true       # 时间步类型：true=离散，false=连续
-  agent_speeds: null        # 智能体速度：null=默认1.0，或{agent_id: speed}字典
-  episode_length: 100       # 每个episode的最大步数
-
-# MARLlib环境接口标志
-marllib_env_flags:
-  mask_flag: true           # 启用动作掩码（推荐true）
-  global_state_flag: false  # 全局状态标志：true=调用env.state()，false=拼接obs
-  opp_action_in_cc: false   # 是否在centralized critic中包含对手动作
-  agent_level_batch_update: true  # 智能体级别批量更新
-  force_coop: false         # 强制合作：VDPPO等价值分解算法需要设为true
-
-# 算法配置
-algorithm:
-  name: "MAPPO"             # 算法名称：MAPPO/VDPPO/QMIX/VDN/MAA2C/MADDPG等
-  framework: "marllib"      # 固定为marllib
-  paradigm: "centralized_training_decentralized_execution"  # 训练范式
-  architecture:
-    core_arch: "mlp"        # 网络架构：mlp/gru/lstm
-    encode_layer: "128-256" # 编码层结构
-    hyperparam_source: "common"  # 超参数来源
-
-# 训练配置
-training:
-  episodes: 10              # 训练episode数（用于早停）
-  max_timesteps: 40000000   # 最大时间步数
-  batch_size: 1000          # 批次大小
-  rollout_fragment_length: 100  # rollout片段长度
-  checkpoint_freq: 100      # 检查点保存频率
-  share_policy: "all"       # 策略共享：all/group/individual
-
-# 系统配置
-system:
-  local_mode: false         # 本地模式：true=单进程调试，false=分布式
-  num_workers: 1            # 工作进程数
-  num_gpus: 1              # GPU数量
-  num_cpus_per_worker: 1   # 每个worker的CPU数
-  object_store_memory_gb: 1 # 对象存储内存限制
-  log_level: "INFO"         # 日志级别：DEBUG/INFO/WARNING/ERROR
-  metrics_smoothing_episodes: 10  # 指标平滑窗口
-
-# 评估配置
-evaluation:
-  episodes: 1               # 评估episode数
-  steps: 100               # 每个episode的步数
-  save_batch_freq: 1       # 批次保存频率
-  animation_max_frames: 1000  # 动画最大帧数
-  quick_preview: false     # 快速预览模式
-  curve_title: "MARLlib MAPPO Training Progress on GBLA"  # 训练曲线图标题
-```
-
-### 传统分布式配置文件结构
-
-```yaml
-# 环境配置
-env_config:
-  graph_path: "graphs/essay_MapB.json"  # 图结构文件路径
-  num_agents: 10           # 智能体数量
-  mdp_type: "GBLA"         # 环境类型：GBLA/BBLA/S4R1等
-  time_discrete: true      # 时间步类型：true=离散，false=连续
-  agent_speeds: null       # 智能体速度配置：null=使用默认速度1.0，或指定{agent_id: speed}
-
-# 智能体配置
-agent_config:
-  gamma: 0.9               # 折扣因子
-  epsilon: 0.1             # 探索率（epsilon-greedy）
-  
-  # --- Learning Rate (Alpha) Configuration ---
-  # 学习率策略选择
-  # 可用策略:
-  # - 'fixed': 使用固定学习率，由'fixed_alpha'指定
-  # - 'visit_decay_v1': 基于访问次数衰减，公式: 1 / (c1 + visits / c2)
-  # - 'visit_decay_v2': 简单访问衰减，公式: 1 / (1 + visits)
-  alpha_strategy: 'visit_decay_v1'
-  
-  # --- 策略特定参数 ---
-  # 仅在alpha_strategy为'fixed'时使用
-  fixed_alpha: 0.1
-  
-  # 仅在alpha_strategy为'visit_decay_v1'时使用
-  alpha_decay_c1: 2.0
-  alpha_decay_c2: 15.0
-
-  time_discrete: true      # 与env_config保持一致
-
-# 训练配置
-train_config:
-  algorithm: "Q-Learning"   # 算法类型：Q-Learning/DQN
-  paradigm: "decentralized" # 训练范式：decentralized
-  reward_method: "Node-Idleness"  # 奖励方法：Node-Idleness, Extended-Node-Idleness, Penalised-Idleness
-  num_episodes: 1000       # 训练episode数
-  episode_len: 10000       # 每个episode最大步数
-
-# 日志配置
-log_config:
-  log_dir: "log/GBLA_exp1" # 实验输出目录
-  save_model_interval: 200 # 每200轮保存一次模型
-
-# 评估配置
-eval_config:
-  evaluation_steps: 50000   # 评估总步数
-  quick_preview: true       # 快速预览模式
-```
-
-### 参数详解
-
-#### 奖励方法说明
-
-- **Node-Idleness**: 标准节点空闲度奖励，智能体到达节点时获得该节点的即时空闲度作为奖励
-- **Extended-Node-Idleness**: 扩展GBLA奖励，如果智能体到达节点时有其他智能体正在前往该节点，则奖励为0
-- **Penalised-Idleness**: 惩罚空闲度，使用公式 r = INI(t,v)^p / IGI(t)
-
-#### 时间步类型
-
-- **time_discrete=true**: 离散时间步，智能体每步移动一个单位距离
-- **time_discrete=false**: 连续时间步，考虑边权重和智能体速度
-
-#### 策略共享模式
-
-- **share_policy="all"**: 所有智能体共享同一个策略
-- **share_policy="group"**: 按组共享策略
-- **share_policy="individual"**: 每个智能体独立策略
-
-#### 热启动功能
-
-对于使用深度强化学习算法（如APO）的训练，可以通过指定预训练权重文件来实现热启动：
-
-```yaml
-train_config:
-  pretrained_path: "path/to/pretrained/model.pt"  # 预训练权重文件路径
-```
-
-**功能特点：**
-- **智能加载**：使用`strict=False`模式，支持部分权重加载
-- **兼容性**：网络结构可以不完全一致，自动匹配可用的参数
-- **详细日志**：显示加载成功的参数数量、缺失参数和多余参数
-- **容错性**：加载失败不会中断训练，会打印错误信息
-- **自动检测**：如果路径为空或文件不存在，从头开始训练
-
-**支持的文件格式：**
-- PyTorch .pt文件（通过`torch.save(agent.state_dict(), path)`保存）
-- 权重字典格式（state_dict）
-
-**使用场景：**
-- **完全匹配**：网络结构相同，加载所有权重
-- **部分迁移**：只加载部分层权重（如backbone层）
-- **网络扩展**：在新网络中加载旧网络的权重，多余层随机初始化
-- **网络缩减**：加载可用权重，缺失层随机初始化
-
----
-
-## 故障排除
-
-### 常见问题
-
-#### 1. 导入错误
-**问题**: `ImportError: No module named 'marllib'`
-
-**解决方案**:
-```bash
-# 安装MARLlib
-git clone https://github.com/Replicable-MARL/MARLlib.git
-cd MARLlib
-pip install -e .
-```
-
-#### 2. 环境创建失败
-**问题**: `KeyError: 'mdp_type'`
-
-**解决方案**:
-- 检查配置文件中的环境类型字段
-- 确保环境类已正确注册
-- 检查图文件路径
-
-#### 3. 动作掩码错误
-**问题**: `KeyError: 'action_mask'`
-
-**解决方案**:
-- 确保设置了`mask_flag: true`
-- 检查环境观测格式是否正确
-
-### 调试技巧
-
-#### 启用详细日志
-```yaml
-system:
-  log_level: "DEBUG"
-```
-
-#### 使用本地模式
-```yaml
-system:
-  local_mode: true
-  num_workers: 0
-```
+Provide at least one experiment/evaluation pair, run a short collection/update smoke test, verify checkpoint reconstruction, then test the full evaluator. For a MARL method, test both action-mask handling and agent ordering; for an event-driven method, also test inactive-step treatment.
