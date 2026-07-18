@@ -7,6 +7,9 @@ import shutil
 import sys
 from datetime import datetime
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+
 # trial 文件夹命名: YYYYMMDD_HHMMSS
 TRIAL_RE = re.compile(r"^(\d{8})_(\d{6})$")
 # 从 config.yaml 中提取 best_metric_value
@@ -178,7 +181,7 @@ def process_experiment(exp_dir, keep, gap_hours, dry_run):
 
 def main():
     parser = argparse.ArgumentParser(description="按 sweep 分组保留指标最好的若干 trial")
-    parser.add_argument("--root", default="/root/autodl-tmp/models", help="models 根目录")
+    parser.add_argument("--root", default=DEFAULT_MODELS_DIR, help="models 根目录")
     parser.add_argument("--keep", type=int, default=2, help="每个 sweep 保留的 trial 数")
     parser.add_argument("--gap-hours", type=float, default=24.0,
                         help="相邻 trial 间隔超过该小时数则视为不同 sweep")

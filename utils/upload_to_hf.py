@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 将 autodl-tmp/{models,results} 增量上传到 HuggingFace dataset repo
+# 将项目的 models 和 evaluators/results 增量上传到 HuggingFace dataset repo
 #
 # 核心策略 (避免 HF commit 限流 128/h):
 #   - models: 每个 best/final/*_final/*_actor_best 目录打包成 1 个 .zip 上传 (1 commit)
@@ -27,6 +27,9 @@ from huggingface_hub import HfApi, create_repo
 # ---- 配置区 ----
 DEFAULT_REPO_ID = "SpikeW726/M2Bench"
 DEFAULT_TOKEN_ENV = "HF_TOKEN"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_MODELS_DIR = PROJECT_ROOT / "models"
+DEFAULT_RESULTS_DIR = PROJECT_ROOT / "evaluators" / "results"
 
 # 跳过的视频/动画扩展名
 SKIP_EXTS = {".mp4", ".gif", ".avi", ".mov", ".mkv", ".webm"}
@@ -237,8 +240,10 @@ def main():
                    help=f"HF dataset repo id (默认 {DEFAULT_REPO_ID})")
     p.add_argument("--token", default=os.environ.get(DEFAULT_TOKEN_ENV),
                    help=f"HF token (默认从 ${DEFAULT_TOKEN_ENV} 读)")
-    p.add_argument("--root", default="/root/autodl-tmp",
-                   help="本地根目录")
+    p.add_argument("--models-dir", default=str(DEFAULT_MODELS_DIR),
+                   help="本地模型根目录")
+    p.add_argument("--results-dir", default=str(DEFAULT_RESULTS_DIR),
+                   help="本地评估结果根目录")
     p.add_argument("--only", choices=["models", "results", "both"], default="both",
                    help="只上传哪部分")
     p.add_argument("--create", action="store_true",
@@ -267,7 +272,7 @@ def main():
 
     total = 0
     if args.only in ("models", "both"):
-        models_root = Path(args.root) / "models"
+        models_root = Path(args.models_dir).expanduser()
         if models_root.is_dir():
             print(f"=== 上传 models/ (按 best/final 目录打包) ===")
             total += upload_models_section(models_root, args.repo_id, args.token, args.dry_run)
@@ -276,7 +281,7 @@ def main():
             print(f"[warn] {models_root} 不存在, 跳过\n")
 
     if args.only in ("results", "both"):
-        results_root = Path(args.root) / "results"
+        results_root = Path(args.results_dir).expanduser()
         if results_root.is_dir():
             print(f"=== 上传 results/ (按 algo 目录打包, 只保留 best_eval*) ===")
             total += upload_results_section(results_root, args.repo_id, args.token, args.dry_run)

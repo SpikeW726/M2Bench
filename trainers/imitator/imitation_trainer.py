@@ -19,7 +19,7 @@ import h5py
 
 from networks.mlp import ActorMLP, CriticMLP
 from utils.model_io import _convert_to_native_types as _ensure_native_types
-from utils.autodl_paths import resolve_models_path, resolve_runs_path
+from utils.project_paths import DEFAULT_MODELS_DIR, user_path
 from configs.registry import (
     create_actor, create_critic, create_q_network,
     ENV_REGISTRY, _import_class, _env_config_to_dicts, load_eval_config,
@@ -299,9 +299,7 @@ class imi_trainer:
         self.exp_name = kwargs.get("exp_name", "imi_train")
         self.run_name = f"{self.exp_name}__{int(time.time())}"
 
-        # 模型保存配置（须先 expanduser：`~/...` 交 resolve_models_path 会破坏路径）
-        _sd = os.path.expanduser(str(kwargs.get("save_dir", "models")))
-        self.save_dir = resolve_models_path(_sd)
+        self.save_dir = user_path(kwargs.get("save_dir", DEFAULT_MODELS_DIR))
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.save_model = kwargs.get("save_model", True)
 
@@ -812,12 +810,16 @@ if __name__ == "__main__":
                         help="YAML 配置文件路径")
     parser.add_argument("--data_path", type=str, default=None,
                         help="覆盖 config 中的 data_path")
+    parser.add_argument("--save-dir", type=str, default=None,
+                        help="模型保存目录（默认从配置读取，配置未指定时为项目 models 目录）")
     args = parser.parse_args()
 
     cfg = load_imitator_config(args.config)
     train_kwargs = cfg["train_kwargs"]
     if args.data_path is not None:
         train_kwargs["data_path"] = args.data_path
+    if args.save_dir is not None:
+        train_kwargs["save_dir"] = args.save_dir
 
     trainer = imi_trainer(
         mode=cfg["mode"],

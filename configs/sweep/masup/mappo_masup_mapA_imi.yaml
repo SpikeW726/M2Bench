@@ -55,6 +55,6 @@ parameters:
     values: [0.0, 0.05, 0.1]
 
   actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-mapA/imi_pre_masup_mlp_mappo_mapA__1779644117_final/policy.pt
+    value: models/imi-mappo-pre-masup-mapA/imi_pre_masup_mlp_mappo_mapA__1779644117_final/policy.pt
   critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-mapA/imi_pre_masup_mlp_mappo_mapA__1779644117_final/critic.pt
+    value: models/imi-mappo-pre-masup-mapA/imi_pre_masup_mlp_mappo_mapA__1779644117_final/critic.pt

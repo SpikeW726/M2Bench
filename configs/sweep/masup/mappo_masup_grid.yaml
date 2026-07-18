@@ -53,9 +53,9 @@ parameters:
     values: [0.0, 0.05, 0.1]
 
   actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-masup-grid-6a/imi_mappo_masup_grid_6a__1781010835_final/policy.pt
+    value: models/imi-mappo-masup-grid-6a/imi_mappo_masup_grid_6a__1781010835_final/policy.pt
   critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-masup-grid-6a/imi_mappo_masup_grid_6a__1781010835_final/critic.pt
+    value: models/imi-mappo-masup-grid-6a/imi_mappo_masup_grid_6a__1781010835_final/critic.pt
 
 # ---- 自定义早停 ----
 early_terminate:

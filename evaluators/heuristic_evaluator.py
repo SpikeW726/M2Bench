@@ -22,6 +22,7 @@ sys.path.insert(0, str(project_root))
 os.chdir(project_root)
 
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
+from utils.project_paths import DEFAULT_RESULTS_DIR, user_path
 
 matplotlib_config_dir = Path(
     os.environ.get(
@@ -141,9 +142,13 @@ def parse_key_value_overrides(values: Optional[List[str]]) -> Dict[str, Any]:
     return overrides
 
 
-def default_save_plot(policy_name: str, graph_path: str) -> str:
+def default_save_plot(
+    policy_name: str,
+    graph_path: str,
+    results_dir: str | Path = DEFAULT_RESULTS_DIR,
+) -> str:
     map_name = Path(graph_path).stem
-    return f"evaluators/results/{map_name}/{policy_name.lower()}/{policy_name}_eval.png"
+    return str(user_path(results_dir) / map_name / policy_name.lower() / f"{policy_name}_eval.png")
 
 
 def build_runtime_env_config(
@@ -401,6 +406,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--num_episodes", type=int, default=None, help="Override eval.num_episodes.")
     parser.add_argument("--save_plot", type=str, default=None, help="Output plot path.")
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=None,
+        help="Evaluation output root (default: project evaluators/results).",
+    )
     parser.add_argument("--no_show", action="store_true", help="Do not show plots.")
     parser.add_argument("--animation", action="store_true", help="Record animation for the last episode.")
     parser.add_argument("--no_event_driven", action="store_true", help="Use fixed-frame animation.")
@@ -434,7 +445,11 @@ def main() -> None:
         args.num_episodes if args.num_episodes is not None else eval_cfg.get("num_episodes", 10)
     )
 
-    save_plot = args.save_plot or default_save_plot(args.policy, graph_path)
+    save_plot = args.save_plot or default_save_plot(
+        args.policy,
+        graph_path,
+        args.results_dir or DEFAULT_RESULTS_DIR,
+    )
 
     show_plot = eval_cfg.get("show_plot", False) and not args.no_show
     animation = args.animation or eval_cfg.get("animation", False)

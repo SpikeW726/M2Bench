@@ -54,6 +54,6 @@ parameters:
   custom_configs.contribution_scale:
     values: [0.05, 0.1, 0.15]
   actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/policy.pt
+    value: models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/policy.pt
   critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/critic.pt
+    value: models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/critic.pt

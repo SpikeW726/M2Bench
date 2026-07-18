@@ -35,7 +35,7 @@ from train import (
     _wandb_fix_broken_local_proxy,
     _wandb_init_settings,
 )
-from utils.autodl_paths import AUTODL_RESULTS_ROOT, resolve_results_path
+from utils.project_paths import DEFAULT_RESULTS_DIR, result_path
 from utils.model_io import trial_checkpoint_dir
 from trainers.sweep_early_stopper import SweepEarlyStop, SweepEarlyStopper
 
@@ -85,6 +85,8 @@ _BASE_CONFIG_PATH: str = ""
 _SWEEP_ID: str = ""
 _SWEEP_RAW_CONFIG: dict = {}   # 完整 sweep YAML（含 early_terminate 块）
 _EVAL_CONFIG_PATH: str = ""    # eval YAML 路径；非空时 inline eval 在每个 trial 中生效
+_MODELS_DIR: str = ""
+_RESULTS_DIR: str = ""
 
 
 def _record_trial_save_dir(config: ExperimentConfig) -> None:
@@ -149,6 +151,8 @@ def sweep_train():
 
         config = load_config(_BASE_CONFIG_PATH)
         apply_sweep_overrides(config, sweep_cfg)
+        if _MODELS_DIR:
+            config.models_dir = _MODELS_DIR
 
         now = datetime.now().strftime("%Y%m%d_%H%M%S")
         config._timestamp = now
@@ -165,7 +169,12 @@ def sweep_train():
                 print(f"  {key}: {value}")
 
         _ecp = _EVAL_CONFIG_PATH or getattr(config, "eval_config_path", None) or None
-        train(config, eval_config_path=_ecp, early_stopper=early_stopper)
+        train(
+            config,
+            eval_config_path=_ecp,
+            early_stopper=early_stopper,
+            results_dir=_RESULTS_DIR or None,
+        )
 
         _record_trial_save_dir(config)
 
@@ -268,7 +277,13 @@ def cleanup_sweep_early_stop_files(
 #                          Sweep 批量评估
 # =============================================================================
 
-def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: int = 5):
+def eval_best_runs(
+    sweep_id: str,
+    project: str,
+    eval_config_path: str,
+    top_n: int = 5,
+    results_dir: str | None = None,
+):
     """用 wandb API 找出最优 N 个 trial，批量评估。
 
     每个 trial 的图像和视频保存到各自独立的路径，在 eval yaml 指定的路径基础上加序号后缀，
@@ -329,18 +344,18 @@ def eval_best_runs(sweep_id: str, project: str, eval_config_path: str, top_n: in
         # 为当前 trial 生成独立的保存路径
         extra = {}
         if base_save_plot:
-            p = _Path(base_save_plot)
+            p = result_path(base_save_plot, results_dir)
             # e.g. auto_eval.png → auto_eval_1.png
             extra["save_plot"] = str(p.with_stem(f"{p.stem}_{rank}"))
         if base_action_logits_csv:
-            lp = _Path(base_action_logits_csv)
+            lp = result_path(base_action_logits_csv, results_dir)
             extra["action_logits_csv"] = str(lp.with_stem(f"{lp.stem}_{rank}"))
         if record_animation:
             # 动画目录独立到与图像同目录下的 run_{rank}/ 子目录
             base_dir = (
-                str(_Path(resolve_results_path(base_save_plot)).parent)
+                str(result_path(base_save_plot, results_dir).parent)
                 if base_save_plot
-                else str(AUTODL_RESULTS_ROOT)
+                else str(_Path(results_dir) if results_dir else DEFAULT_RESULTS_DIR)
             )
             extra["save_animation_dir"] = str(_Path(base_dir) / f"run_{rank}")
 
@@ -426,6 +441,7 @@ def main():
                       --sweep-id abc12345 --count 10
     """
     global _BASE_CONFIG_PATH, _SWEEP_ID, _SWEEP_RAW_CONFIG, _EVAL_CONFIG_PATH
+    global _MODELS_DIR, _RESULTS_DIR
 
     parser = argparse.ArgumentParser(description="WandB Sweep 超参数搜索")
 
@@ -454,6 +470,18 @@ def main():
     parser.add_argument("--top-n", type=int, default=5,
                         help="sweep 结束后评估最优的 N 个 trial（默认 5）")
     parser.add_argument(
+        "--models-dir",
+        type=str,
+        default=None,
+        help="Root directory for trial checkpoints (default: project models directory).",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=None,
+        help="Root directory for evaluation outputs (default: project evaluators/results).",
+    )
+    parser.add_argument(
         "--keep-sweep-state",
         action="store_true",
         help="不删除 early_terminate 产生的 .json/.lock；并行多终端时先结束的 worker 请加此参数",
@@ -462,6 +490,8 @@ def main():
     args = parser.parse_args()
     _BASE_CONFIG_PATH = args.base_config
     _EVAL_CONFIG_PATH = args.eval_config or ""
+    _MODELS_DIR = args.models_dir or ""
+    _RESULTS_DIR = args.results_dir or ""
     project = _resolve_project(args)
 
     # 加载 sweep YAML 供 early_terminate 使用（create_sweep 内过滤后再传给 wandb）
@@ -484,7 +514,13 @@ def main():
         try:
             wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
             if args.eval_config:
-                eval_best_runs(sweep_id, project, args.eval_config, top_n=args.top_n)
+                eval_best_runs(
+                    sweep_id,
+                    project,
+                    args.eval_config,
+                    top_n=args.top_n,
+                    results_dir=args.results_dir,
+                )
         finally:
             cleanup_sweep_early_stop_files(
                 sweep_id, _SWEEP_RAW_CONFIG, keep=args.keep_sweep_state
@@ -513,7 +549,13 @@ def main():
         try:
             wandb.agent(sweep_id, sweep_train, project=project, count=args.count)
             if args.eval_config:
-                eval_best_runs(sweep_id, project, args.eval_config, top_n=args.top_n)
+                eval_best_runs(
+                    sweep_id,
+                    project,
+                    args.eval_config,
+                    top_n=args.top_n,
+                    results_dir=args.results_dir,
+                )
         finally:
             cleanup_sweep_early_stop_files(
                 sweep_id, _SWEEP_RAW_CONFIG, keep=args.keep_sweep_state

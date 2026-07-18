@@ -58,9 +58,9 @@ parameters:
     values: [0.0, 0.05, 0.1]
 
   actor_path:
-    value: ~/autodl-tmp/models/imi-mappo-pre-masup-SF/imi_pre_masup_mlp_mappo_SF__1776830456_final/policy.pt
+    value: models/imi-mappo-pre-masup-SF/imi_pre_masup_mlp_mappo_SF__1776830456_final/policy.pt
   critic_path:
-    value: ~/autodl-tmp/models/imi-mappo-pre-masup-SF/imi_pre_masup_mlp_mappo_SF__1776830456_final/critic.pt
+    value: models/imi-mappo-pre-masup-SF/imi_pre_masup_mlp_mappo_SF__1776830456_final/critic.pt
 
 # ---- 自定义早停 ----
 early_terminate:

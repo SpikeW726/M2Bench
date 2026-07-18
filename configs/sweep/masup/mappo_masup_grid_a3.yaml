@@ -59,9 +59,9 @@ parameters:
     - 0.05
     - 0.1
   actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid-3a/imi_pre_masup_mlp_mappo_grid_3a__1780739956_final/policy.pt
+    value: models/imi-mappo-pre-masup-grid-3a/imi_pre_masup_mlp_mappo_grid_3a__1780739956_final/policy.pt
   critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid-3a/imi_pre_masup_mlp_mappo_grid_3a__1780739956_final/critic.pt
+    value: models/imi-mappo-pre-masup-grid-3a/imi_pre_masup_mlp_mappo_grid_3a__1780739956_final/critic.pt
 early_terminate:
   min_trial: 4
   min_steps: 15000000

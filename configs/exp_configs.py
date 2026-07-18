@@ -8,7 +8,7 @@ from typing import Optional
 from sensai.util.string import ToStringMixin
 
 from configs.env_configs import EnvConfig
-from utils.autodl_paths import AUTODL_MODELS_ROOT, AUTODL_RUNS_ROOT
+from utils.project_paths import DEFAULT_MODELS_DIR, DEFAULT_RUNS_DIR, user_path
 from configs.algo_configs import AlgoParams, MAPPOParams
 from configs.training_configs import TrainerConfig, OnPolicyTrainerConfig
 from configs.network_configs import NetworkConfig
@@ -52,6 +52,9 @@ class ExperimentConfig(ToStringMixin):
     critic_path: Optional[str] = None
     # 若设置， train.py 主入口在未传 --eval-config 时回退到该路径（与 sweep --eval-config 一致）
     eval_config_path: Optional[str] = None
+    models_dir: str = str(DEFAULT_MODELS_DIR)
+    runs_dir: str = str(DEFAULT_RUNS_DIR)
+    save_dir_override: Optional[str] = field(default=None, repr=False)
 
     def __post_init__(self):
         """初始化时锁定时间戳，保证 run_name 在整个生命周期内不变。"""
@@ -63,8 +66,10 @@ class ExperimentConfig(ToStringMixin):
 
     @property
     def save_dir(self) -> Path:
-        return AUTODL_MODELS_ROOT / f"{self.algo_name}-{self.env_type}-{self.graph_name}" / self._timestamp
+        if self.save_dir_override is not None:
+            return user_path(self.save_dir_override)
+        return user_path(self.models_dir) / f"{self.algo_name}-{self.env_type}-{self.graph_name}" / self._timestamp
 
     @property
     def log_dir(self) -> Path:
-        return AUTODL_RUNS_ROOT / self.run_name
+        return user_path(self.runs_dir) / self.run_name

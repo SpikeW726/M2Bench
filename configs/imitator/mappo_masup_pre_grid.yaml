@@ -59,7 +59,7 @@ use_value_norm: true
 
 # ----- 数据 & 日志 -----
 data_path: ~/autodl-tmp/dataset/grid/mappo_masup.h5
-save_dir: ~/autodl-tmp/models/imi-mappo-pre-masup-grid
+save_dir: models/imi-mappo-pre-masup-grid
 exp_name: imi_pre_masup_mlp_mappo_grid
 track: false
 wandb_project: MAP-imitation

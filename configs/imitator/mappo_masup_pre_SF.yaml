@@ -61,7 +61,7 @@ use_value_norm: true
 
 # ----- 数据 & 日志 -----
 data_path: ~/autodl-tmp/dataset/SF/mappo_masup.h5
-save_dir: ~/autodl-tmp/models/imi-mappo-pre-masup-SF_075T
+save_dir: models/imi-mappo-pre-masup-SF_075T
 exp_name: imi_pre_masup_mlp_mappo_SF_075T
 track: false
 wandb_project: MAP-imitation

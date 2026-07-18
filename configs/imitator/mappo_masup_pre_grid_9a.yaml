@@ -59,7 +59,7 @@ use_value_norm: true
 
 # ----- 数据 & 日志 -----
 data_path: /root/autodl-tmp/dataset/grid/dtassi_9a_samples.h5
-save_dir: /root/autodl-tmp/models/imi-mappo-pre-masup-grid-9a
+save_dir: models/imi-mappo-pre-masup-grid-9a
 exp_name: imi_pre_masup_mlp_mappo_grid_9a
 track: false
 wandb_project: MAP-imitation

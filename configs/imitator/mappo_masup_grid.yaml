@@ -30,7 +30,7 @@ actor_min_delta: 1.0e-5
 use_value_norm: true
 
 data_path: /root/autodl-tmp/dataset/grid/dtassi_6a_samples.h5
-save_dir: /root/autodl-tmp/models/imi-mappo-masup-grid-6a
+save_dir: models/imi-mappo-masup-grid-6a
 exp_name: imi_mappo_masup_grid_6a
 track: false
 wandb_project: MAP-imitation

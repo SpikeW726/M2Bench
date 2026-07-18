@@ -69,6 +69,6 @@ parameters:
     - 0.1
     - 0.2
   actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica-9a/imi_pre_masup_mlp_mappo_marostica_9a__1780902073_final/policy.pt
+    value: models/imi-mappo-pre-masup-marostica-9a/imi_pre_masup_mlp_mappo_marostica_9a__1780902073_final/policy.pt
   critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica-9a/imi_pre_masup_mlp_mappo_marostica_9a__1780902073_final/critic.pt
+    value: models/imi-mappo-pre-masup-marostica-9a/imi_pre_masup_mlp_mappo_marostica_9a__1780902073_final/critic.pt

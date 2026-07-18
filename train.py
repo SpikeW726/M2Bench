@@ -45,7 +45,7 @@ from policies.marl.marl_base import MultiAgentPolicy
 from policies.rl.rl_base import ActorPolicy, ValuePolicy
 from trainers.sweep_early_stopper import SweepEarlyStop
 from utils.model_io import save_model
-from utils.autodl_paths import resolve_models_path
+from utils.project_paths import user_path
 
 # WandB：同一进程内多次 train 时按 run.id 重新注册 step 轴
 _WANDB_ENV_STEP_AXIS_RUN_ID: Optional[str] = None
@@ -372,7 +372,7 @@ def _load_pretrained(
 
     loaded_from = None
     if has_actor_path:
-        actor_p = resolve_models_path(actor_path)
+        actor_p = user_path(actor_path)
         if actor_p.exists():
             actor_ckpt = torch.load(actor_p, map_location=device, weights_only=True)
             actor_net.load_state_dict(actor_ckpt.get("actor_state_dict", actor_ckpt))
@@ -380,7 +380,7 @@ def _load_pretrained(
             print(f"[Train] Loaded pretrained actor from {actor_path}")
 
     if has_critic_path:
-        critic_p = resolve_models_path(critic_path)
+        critic_p = user_path(critic_path)
         if critic_p.exists():
             critic_ckpt = torch.load(critic_p, map_location=device, weights_only=True)
             critic_net.load_state_dict(critic_ckpt.get("critic_state_dict", critic_ckpt))
@@ -663,6 +663,7 @@ def _train_qtable(
     config: ExperimentConfig,
     eval_config_path: str = None,
     early_stopper=None,
+    results_dir: str = None,
 ):
     """Q-table 独立训练路径：复用日志/环境，绕过 nn.Module 流水线。
 
@@ -822,7 +823,9 @@ def _train_qtable(
 
         qtable_dir = trial_checkpoint_dir(config.save_dir, config.algo_name)
         print(f"\n[Train] Starting auto-eval from {eval_config_path}")
-        final_eval_metrics = run_eval_from_config(str(qtable_dir), eval_config_path)
+        final_eval_metrics = run_eval_from_config(
+            str(qtable_dir), eval_config_path, results_dir=results_dir
+        )
         if final_eval_metrics:
             logger.log(final_eval_metrics, step=trainer.total_steps)
             if early_stopper is not None:
@@ -848,7 +851,7 @@ def _train_qtable(
 # =============================================================================
 
 def train(config: ExperimentConfig, eval_config_path: str = None,
-          early_stopper=None):
+          early_stopper=None, results_dir: str = None):
     """
     根据 ExperimentConfig 执行完整训练流程。
 
@@ -859,7 +862,12 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         eval_config_path: 评估 YAML 路径；提供则训练结束后自动评估最终模型。
     """
     if config.algo_name == "qtable":
-        _train_qtable(config, eval_config_path=eval_config_path, early_stopper=early_stopper)
+        _train_qtable(
+            config,
+            eval_config_path=eval_config_path,
+            early_stopper=early_stopper,
+            results_dir=results_dir,
+        )
         return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1251,7 +1259,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         else:
             _eval_from = final_dir
             print(f"\n[Train] No best checkpoint; auto-eval from final: {_eval_from}")
-        run_eval_from_config(str(_eval_from), eval_config_path)
+        run_eval_from_config(str(_eval_from), eval_config_path, results_dir=results_dir)
 
 
 # =============================================================================
@@ -1273,9 +1281,23 @@ if __name__ == "__main__":
         default=None,
         help="评估配置 YAML 路径；提供则训练结束后自动评估最终模型",
     )
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default=None,
+        help="Checkpoint directory for this run (default: models/<experiment>/<timestamp>).",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=None,
+        help="Root directory for auto-evaluation outputs (default: evaluators/results).",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    if args.save_dir is not None:
+        cfg.save_dir_override = args.save_dir
     print(f"[Train] Loaded config from {args.config}")
     eval_path = args.eval_config or getattr(cfg, "eval_config_path", None)
-    train(cfg, eval_config_path=eval_path)
+    train(cfg, eval_config_path=eval_path, results_dir=args.results_dir)
