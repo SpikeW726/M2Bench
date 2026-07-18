@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Jitter 扰动扫描评估脚本。
+Jitter 扰动扫描评估脚本（mappo + masup 专用）。
 
 以用户指定的 eval YAML 为模板，遍历不同 edge_time_jitter_frac（边上运动时间扰动幅度 ε），
-对每个 frac 运行多次评估，汇总 WI 和 AGI 指标的均值/方差，
-最终写入 CSV 文件，便于后续绘制「扰动程度 — 指标」曲线。
+对每个 frac 跑指定数量的 episode，记录【每个 episode】的 WI_fromT（worst_idleness_fromT，
+即考虑 T_time 的累积最大加权 IWI），写入 CSV，便于后续绘制「扰动程度 — WI_fromT 分布」曲线。
 
 机制说明：
 - 扰动幅度由 env.edge_time_jitter_frac 控制，实际运动时间 ∈ [T*(1-ε), T*(1+ε)]。
   具体见 envs/mdps/patrol_core.py 中 PatrolWorld._jitter_frac 的用法。
 - 本脚本不修改用户的原始 yaml，而是基于其内容在内存中改写 frac 后写临时文件，
   交给 evaluators/test.py::test_trained_policy 完成单次评估。
+- test_trained_policy 现在返回 (episode_metrics, wi_fromT_finals) 元组，
+  其中 wi_fromT_finals 为每个 episode 的 worst_idleness_fromT 列表。
 
 输出文件：MAP-imitation-framework/evaluators/jitter/<原yaml文件名>.csv
-列：jitter_frac, WI_mean, WI_std, AGI_mean, AGI_std
+列：jitter_frac, episode_idx, WI_fromT
 """
 import os
 import sys
 import csv
-import copy
 import tempfile
 from pathlib import Path
 
@@ -73,38 +74,18 @@ def _build_temp_yaml(src_yaml_path: Path, frac: float) -> Path:
     return tmp_path
 
 
-def _summarize_episode_metrics(episode_metrics) -> dict:
-    """从 test_trained_policy 返回的 episode_metrics 列表中提取 WI / AGI 均值方差。
-
-    episode_metrics 元素含 .wi / .agi 属性（IdlenessMetrics dataclass）。
-    std 采用总体标准差（ddof=0），与 evaluators/test.py 中 np.std 一致。
-    """
-    wi_vals = np.array([float(m.wi) for m in episode_metrics])
-    agi_vals = np.array([float(m.agi) for m in episode_metrics])
-    return {
-        "WI_mean": float(np.mean(wi_vals)),
-        "WI_std": float(np.std(wi_vals)),
-        "AGI_mean": float(np.mean(agi_vals)),
-        "AGI_std": float(np.std(agi_vals)),
-        "n_episodes": len(episode_metrics),
-    }
-
-
 def _write_csv(rows: list, csv_path: Path) -> None:
-    """将扫描结果写入 CSV。"""
+    """将 per-episode WI_fromT 结果写入 CSV。每行 = 一个 (frac, episode)。"""
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["jitter_frac", "WI_mean", "WI_std", "AGI_mean", "AGI_std", "n_episodes"]
+    fieldnames = ["jitter_frac", "episode_idx", "WI_fromT"]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
             writer.writerow({
                 "jitter_frac": f"{r['jitter_frac']:.4f}",
-                "WI_mean": f"{r['WI_mean']:.6f}",
-                "WI_std": f"{r['WI_std']:.6f}",
-                "AGI_mean": f"{r['AGI_mean']:.6f}",
-                "AGI_std": f"{r['AGI_std']:.6f}",
-                "n_episodes": r["n_episodes"],
+                "episode_idx": r["episode_idx"],
+                "WI_fromT": f"{r['WI_fromT']:.6f}",
             })
     print(f"\n[JitterSweep] 结果已保存至: {csv_path}")
 
@@ -117,13 +98,13 @@ def run_jitter_sweep(
     episode_time: float = None,
     eval_seed: int = None,
 ) -> Path:
-    """执行 jitter 扰动扫描。
+    """执行 jitter 扰动扫描（mappo + masup 专用）。
 
     Args:
-        config_path: 基础 eval YAML 路径（如 configs/eval/masup/masup_grid.yaml）。
+        config_path: 基础 eval YAML 路径（如 configs/eval/masup/masup_mapB.yaml）。
         model_dir:   模型目录（含 config.yaml + policy.pt）。
         fracs:       扫描的扰动幅度列表，None 时使用 DEFAULT_FRACS。
-        num_episodes: 单次评估的 episode 数；None 时从 yaml 的 eval 段读取。
+        num_episodes: 每个 frac 跑的 episode 数；None 时从 yaml 的 eval 段读取。
         episode_time: 每个 episode 仿真时间上限；None 时从 yaml env.episode_len 读取。
         eval_seed:    评估种子；None 时保持 yaml 行为。
 
@@ -150,13 +131,13 @@ def run_jitter_sweep(
     base_eval = base_raw.get("eval", {}) or {}
     eff_num_episodes = num_episodes if num_episodes is not None else base_eval.get("num_episodes", 5)
 
-    results = []
+    rows = []
     for frac in fracs:
         tmp_yaml = _build_temp_yaml(src_yaml, float(frac))
         print(f"\n[JitterSweep] ===== frac={frac:.4f} | yaml={tmp_yaml.name} =====")
 
-        # 关闭所有可视化产物，仅返回 episode_metrics 用于统计
-        episode_metrics = test_trained_policy(
+        # 关闭所有可视化产物，仅返回 (episode_metrics, wi_fromT_finals)
+        _episode_metrics, wi_fromT_finals = test_trained_policy(
             model_dir=model_dir,
             env_config_path=str(tmp_yaml),
             num_episodes=eff_num_episodes,
@@ -169,32 +150,44 @@ def run_jitter_sweep(
             eval_seed=eval_seed,
         )
 
-        summary = _summarize_episode_metrics(episode_metrics)
-        summary["jitter_frac"] = float(frac)
-        results.append(summary)
+        if not wi_fromT_finals:
+            # masup 环境必须返回非空 wi_fromT_finals；空说明环境类型不对
+            raise RuntimeError(
+                f"frac={frac:.4f} got empty wi_fromT_finals; "
+                "this script is for mappo+masup only, check env_type in yaml."
+            )
+
+        for ep_idx, wi_fromT in enumerate(wi_fromT_finals):
+            rows.append({
+                "jitter_frac": float(frac),
+                "episode_idx": ep_idx,
+                "WI_fromT": float(wi_fromT),
+            })
+
+        arr = np.asarray(wi_fromT_finals, dtype=float)
         print(f"[JitterSweep] frac={frac:.4f} -> "
-              f"WI={summary['WI_mean']:.4f}±{summary['WI_std']:.4f}, "
-              f"AGI={summary['AGI_mean']:.4f}±{summary['AGI_std']:.4f} "
-              f"(n={summary['n_episodes']})")
+              f"WI_fromT mean={arr.mean():.4f} ± {arr.std():.4f} "
+              f"(n={len(wi_fromT_finals)})")
 
     csv_path = OUTPUT_DIR / f"{src_yaml.stem}.csv"
-    _write_csv(results, csv_path)
+    _write_csv(rows, csv_path)
     return csv_path
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Jitter 扰动扫描评估：遍历不同 edge_time_jitter_frac，汇总 WI/AGI 均值方差",
+        description="Jitter 扰动扫描评估（mappo+masup 专用）："
+                    "遍历不同 edge_time_jitter_frac，记录每个 episode 的 WI_fromT",
     )
     parser.add_argument("--config", type=str, required=True,
-                        help="基础评估 YAML 路径，如 configs/eval/masup/masup_grid.yaml")
+                        help="基础评估 YAML 路径，如 configs/eval/masup/masup_mapB.yaml")
     parser.add_argument("--model", type=str, required=True,
                         help="模型目录 (含 config.yaml + policy.pt)")
     parser.add_argument("--fracs", type=str, default=None,
                         help="逗号分隔的扰动幅度列表，如 0,0.05,0.1,0.15,0.2,0.25；"
                              "默认为 DEFAULT_FRACS")
-    parser.add_argument("--num_episodes", type=int, default=None,
-                        help="单次评估 episode 数（覆盖 yaml eval.num_episodes）")
+    parser.add_argument("--num_episodes", type=int, required=True,
+                        help="每个 frac 跑的 episode 数（必填，控制 WI_fromT 样本量）")
     parser.add_argument("--episode_time", type=float, default=None,
                         help="每个 episode 仿真时间上限（覆盖 yaml env.episode_len）")
     parser.add_argument("--seed", type=int, default=None,

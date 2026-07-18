@@ -1,0 +1,62 @@
+# MAPPO + MASUPEnv (grid) — 纯 MLP，无 masup 预处理网络
+# 用法: python train.py configs/experiments/masup/mappo_masup_grid_nopre.yaml
+#
+# 预训练: 先用 configs/imitator/mappo_masup_grid.yaml 做模仿学习，
+#         再将下方 actor_path / critic_path 中的 <timestamp> 替换为实际 run 目录。
+# grid: 50 节点，6 agents，与 graphs/grid.json / masup_grid.yaml 一致
+
+algo_name: mappo
+env_type: masup
+actor_type: mlp
+critic_type: mlp
+
+exp_name: mappo-grid-nopre-imi
+graph_name: grid
+track_wandb: true
+wandb_project: MAP-RL
+seed: 42
+
+env:
+  graph_path: graphs/grid.json
+  enable_wait: true
+  norm_reward: true
+  deltaT: 0.5
+  num_agents: 6
+  init_positions: [1, 9, 17, 25, 33, 41]
+  episode_len: 500
+  custom_configs:
+    T: 50.0
+    role_imformation: decision
+    reward_scale: 0.01
+    truncate_by_time: true
+    idi_scale: 0.05
+    contribution_scale: 0.05
+
+algo:
+  use_active_mask: true
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  vf_coef: 0.5
+  ent_coef: 0.01
+  use_value_norm: true
+
+training:
+  num_envs: 96
+  use_subproc: true
+  num_steps: 1024
+  total_steps: 50000000
+  save_interval: 200
+  minibatch_size: 2048
+  update_epochs: 5
+  eval_interval: 10
+
+actor:
+  hidden: [256, 512]
+
+critic:
+  hidden: [256, 512]
+
+eval_config_path: configs/eval/masup/masup_grid.yaml

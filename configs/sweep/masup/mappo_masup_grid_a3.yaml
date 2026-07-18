@@ -18,13 +18,12 @@ parameters:
     max: 0.4
   vf_coef:
     min: 0.5
-    max: 2.0
+    max: 1.0
   ent_coef:
     min: 0.0
     max: 0.2
   gae_lambda:
     values:
-    - 0.95
     - 0.99
     - 0.999
   gamma:
@@ -37,7 +36,6 @@ parameters:
     - 2048
   minibatch_size:
     values:
-    - 512
     - 1024
     - 2048
     - 4096
@@ -61,12 +59,12 @@ parameters:
     - 0.05
     - 0.1
   actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid/imi_pre_masup_mlp_mappo_grid__1777742933_final/policy.pt
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid-3a/imi_pre_masup_mlp_mappo_grid_3a__1780739956_final/policy.pt
   critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid/imi_pre_masup_mlp_mappo_grid__1777742933_final/critic.pt
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid-3a/imi_pre_masup_mlp_mappo_grid_3a__1780739956_final/critic.pt
 early_terminate:
-  min_trial: 6
-  min_steps: 5000000
+  min_trial: 4
+  min_steps: 15000000
   terminate_ratio: 0.4
   early_stop_iters: 100
   slope_horizons:

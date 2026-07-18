@@ -44,7 +44,11 @@ parameters:
   num_steps:
     values: [2048, 4096]
   minibatch_size:
+<<<<<<< Updated upstream
     values: [1024, 2048, 4096]
+=======
+    values: [2048, 4096]
+>>>>>>> Stashed changes
   update_epochs:
     values: [5, 10]
   save_interval:
@@ -55,6 +59,6 @@ parameters:
     values: [0.05, 0.1, 0.15]
 
   actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/policy.pt
+    value: /root/autodl-tmp/models/imi-mappo-mlp-masup-marostica/imi_mlp_mappo_masup_marostica__1781012736_final/policy.pt
   critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica/imi_pre_masup_mlp_mappo_marostica__1780734792_final/critic.pt
+    value: /root/autodl-tmp/models/imi-mappo-mlp-masup-marostica/imi_mlp_mappo_masup_marostica__1781012736_final/critic.pt

@@ -43,7 +43,7 @@ training:
   use_subproc: false
   num_steps: 800
   total_steps: 20000000
-  save_interval: 1000
+  save_interval: 10000
   minibatch_size: 256
   update_epochs: 5
   eval_interval: 15

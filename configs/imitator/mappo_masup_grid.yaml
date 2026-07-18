@@ -16,21 +16,21 @@ actor_type: mlp
 
 # ActorMLP 配置
 actor:
-  hidden: [512, 256, 128]
+  hidden: [256, 512]
 
 # CriticMLP 配置
-critic_hidden_sizes: [512, 256, 128]
+critic_hidden_sizes: [256, 512]
 
 actor_lr: 3.0e-4
 critic_lr: 3.0e-4
-batch_size: 1024
-iteration: 100
+batch_size: 8192
+iteration: 30
 actor_patience: 5
 actor_min_delta: 1.0e-5
 use_value_norm: true
 
-data_path: dataset/grid/samples_pure_0.01reward_random.h5
-save_dir: models/masup-mlp-imitation
-exp_name: imi_masup_mlp_grid
+data_path: /root/autodl-tmp/dataset/grid/dtassi_6a_samples.h5
+save_dir: /root/autodl-tmp/models/imi-mappo-masup-grid-6a
+exp_name: imi_mappo_masup_grid_6a
 track: false
 wandb_project: MAP-imitation

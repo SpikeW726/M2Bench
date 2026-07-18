@@ -29,28 +29,29 @@ env:
 # ---- 算法 ----
 algo:
   sync_replay: true    # 启用经验回放同步
-  lr: 0.00075
-  gamma: 0.95
-  tau: 0.001
-  target_update_freq: 1
-  epsilon_start: 0.95
-  epsilon_end: 0.005
-  epsilon_decay_steps: 26233
+  lr: 0.00006639393643168706
+  gamma: 0.995
+  tau: 0.008900599806500872
+  target_update_freq: 5
+  epsilon_start: 1
+  epsilon_end: 0.05
+  epsilon_decay_steps: 5000000
   use_double_dqn: true
   shared_policy: false
+  max_grad_norm: 10
 
 # ---- 训练 ----
 training:
-  num_envs: 96
+  num_envs: 48
   use_subproc: true
-  num_steps: 2048
+  num_steps: 512
   total_steps: 50000000
   save_interval: 500
-  batch_size: 32
-  warmup_steps: 10000
-  buffer_size: 100000
-  collect_per_step: 96
-  update_per_step: 1
+  batch_size: 256
+  warmup_steps: 5000
+  buffer_size: 50000
+  collect_per_step: 48
+  update_per_step: 5
   eval_interval: 5
 
 # ---- Q-network ----

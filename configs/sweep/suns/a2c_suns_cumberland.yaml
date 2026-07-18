@@ -23,7 +23,7 @@ parameters:
     max: 5.0e-3
     distribution: log_uniform_values
   gamma:
-    values: [0.995, 0.999]
+    values: [0.99, 0.999]
   gae_lambda:
     values: [0.99, 0.999]
   max_grad_norm:

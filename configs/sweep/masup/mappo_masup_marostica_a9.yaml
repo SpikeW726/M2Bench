@@ -17,13 +17,13 @@ parameters:
   seed:
     value: 42
   total_steps:
-    value: 50000000
+    value: 60000000
   actor_lr:
-    min: 1.0e-06
-    max: 0.0001
+    min: 5.0e-06
+    max: 0.0003
     distribution: log_uniform_values
   critic_lr:
-    min: 5.0e-06
+    min: 1.0e-05
     max: 0.001
     distribution: log_uniform_values
   clip_range:
@@ -34,9 +34,10 @@ parameters:
     max: 1.0
   ent_coef:
     min: 0.0
-    max: 0.2
+    max: 0.005
   gae_lambda:
     values:
+    - 0.95
     - 0.99
     - 0.999
   gamma:
@@ -45,16 +46,14 @@ parameters:
     value: true
   num_steps:
     values:
-    - 1024
     - 2048
+    - 4096
   minibatch_size:
     values:
     - 2048
     - 4096
-    - 8192
   update_epochs:
     values:
-    - 3
     - 5
     - 10
   save_interval:
@@ -66,6 +65,10 @@ parameters:
     - 0.1
   custom_configs.contribution_scale:
     values:
-    - 0.0
     - 0.05
     - 0.1
+    - 0.2
+  actor_path:
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica-9a/imi_pre_masup_mlp_mappo_marostica_9a__1780902073_final/policy.pt
+  critic_path:
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-marostica-9a/imi_pre_masup_mlp_mappo_marostica_9a__1780902073_final/critic.pt

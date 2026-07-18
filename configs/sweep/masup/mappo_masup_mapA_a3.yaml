@@ -3,9 +3,9 @@ metric:
   name: eval/wi_fromT
   goal: minimize
 early_terminate:
-  min_trial: 6
-  min_steps: 10000000
-  terminate_ratio: 0.5
+  min_trial: 4
+  min_steps: 15000000
+  terminate_ratio: 0.4
   early_stop_iters: 100
   slope_horizons:
   - 16
@@ -40,9 +40,7 @@ parameters:
     - 0.99
     - 0.999
   gamma:
-    values:
-    - 0.99
-    - 0.999
+    value: 0.999
   use_value_norm:
     value: true
   num_steps:
@@ -51,8 +49,8 @@ parameters:
     - 2048
   minibatch_size:
     values:
-    - 8192
-    - 16384
+    - 2048
+    - 4096
   update_epochs:
     values:
     - 3
@@ -70,3 +68,7 @@ parameters:
     - 0.0
     - 0.05
     - 0.1
+  actor_path:
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-mapA-3a/imi_pre_masup_mlp_mappo_mapA_3a__1780889894_final/policy.pt
+  critic_path:
+    value: /root/autodl-tmp/models/imi-mappo-pre-masup-mapA-3a/imi_pre_masup_mlp_mappo_mapA_3a__1780889894_final/critic.pt

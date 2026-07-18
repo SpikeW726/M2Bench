@@ -10,7 +10,7 @@ env:
   init_positions: [0, 10, 20, 30, 40, 49]
   episode_len: 500
   custom_configs:
-    T: 37.5
+    T: 50.0
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true

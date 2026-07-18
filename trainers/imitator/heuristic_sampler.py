@@ -1099,3 +1099,4 @@ if __name__ == "__main__":
     # 用法示例:
     #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 1
     #   python trainers/imitator/heuristic_sampler.py --num_episodes 50000 --num_workers 4 --policy_type ahpa --env_config configs/eval/masup/masup_island.yaml
+    #   python trainers/imitator/heuristic_sampler.py --num_episodes 5000 --num_workers 4 --policy_type ahpa --env_config configs/eval/masup/masup_cumberland.yaml --gamma 0.999 --save_path /root/autodl-tmp/dataset/cumberland/ahpa_sample.h5

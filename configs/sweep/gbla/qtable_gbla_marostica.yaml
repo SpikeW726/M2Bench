@@ -8,7 +8,7 @@ early_terminate:
   min_trial: 4
   min_steps: 15000000
   terminate_ratio: 0.5
-  early_stop_iters: 100
+  early_stop_iters: 200
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
   state_file: .sweep_es_qtable_gbla_marostica.json
@@ -29,6 +29,6 @@ parameters:
   epsilon_end:
     value: 0.05
   save_interval:
-    value: 300
+    value: 1000
   epsilon_decay_steps:
     values: [10000000, 15000000]

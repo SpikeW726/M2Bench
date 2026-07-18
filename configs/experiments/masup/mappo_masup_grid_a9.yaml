@@ -42,7 +42,7 @@ algo:
   ent_coef: 0.01
   use_value_norm: true
 training:
-  num_envs: 96
+  num_envs: 80
   use_subproc: true
   num_steps: 1024
   total_steps: 50000000
@@ -61,7 +61,7 @@ actor:
   T_time: 50.0
   hidden:
   - 256
-  - 256
+  - 512
 critic:
   graph_path: graphs/grid.json
   num_agents: 9
@@ -74,5 +74,5 @@ critic:
   input_mode: state
   hidden:
   - 256
-  - 256
+  - 512
 eval_config_path: configs/eval/masup/masup_grid_a9.yaml

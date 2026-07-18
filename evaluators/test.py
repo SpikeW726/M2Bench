@@ -39,6 +39,7 @@ sys.path.insert(0, str(project_root))
 os.chdir(project_root)
 
 import csv
+import sqlite3  # 须在 torch 之前导入，避免系统 libstdc++ 抢占导致 CXXABI 冲突
 import yaml
 import torch
 import torch.nn.functional as F
@@ -687,7 +688,11 @@ def test_trained_policy(
 
     if hasattr(env, "close"):
         env.close()
-    return episode_metrics
+    # 返回 (episode_metrics, wi_fromT_finals)：
+    # - episode_metrics: IdlenessMetrics 列表（含 igi/agi/iwi/wi）
+    # - wi_fromT_finals: 仅 MASUP-like 环境有值，per-episode 的 worst_idleness_fromT；
+    #   非 MASUP 环境为空列表 []。
+    return episode_metrics, wi_fromT_finals
 
 
 # =============================================================================
@@ -1114,13 +1119,13 @@ def run_eval_from_config(model_dir: str, eval_config_path: str, extra_params: di
     else:
         if "seed" in eval_params:
             eval_params["eval_seed"] = eval_params.pop("seed")
-        episode_metrics = test_trained_policy(
+        episode_metrics, wi_fromT_finals = test_trained_policy(
             model_dir=model_dir,
             env_config_path=eval_config_path,
             env_custom_config_overrides=train_custom_configs,
             **eval_params,
         )
-    return _summary_from_episode_metrics(episode_metrics)
+    return _summary_from_episode_metrics(episode_metrics, wi_fromT_finals)
 
 
 def eval_qtable_inline(

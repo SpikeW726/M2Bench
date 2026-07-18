@@ -43,7 +43,7 @@ algo:
   reward_global: false
 
 training:
-  num_envs: 64
+  num_envs: 80
   use_subproc: true
   num_steps: 512
   total_steps: 50000000
@@ -56,7 +56,7 @@ actor:
   rnn_type: gru
   hidden_size: 256
   num_layers: 1
-  fc_hidden: [256, 256]
+  fc_hidden: [256, 512]
 
 q_network:
   rnn_type: gru

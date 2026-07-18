@@ -28,12 +28,12 @@ env:
     truncate_by_time: true
 
 algo:
-  lr: 0.001
+  lr: 0.00008139615210618713
   gamma: 0.99
-  epsilon_start: 0.2
+  epsilon_start: 1
   epsilon_end: 0.05
   sync_update: true
-  epsilon_decay_steps: 10000000
+  epsilon_decay_steps: 10852172.235671202
 
 training:
   num_envs: 64

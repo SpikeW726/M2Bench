@@ -15,8 +15,13 @@ env:
   # edge_time_jitter_mode: full
   # edge_time_jitter_seed: 42
   custom_configs:
+<<<<<<< Updated upstream
     # T: 150.0
     T: 200.0
+=======
+    # T: 200.0
+    T: 150.0
+>>>>>>> Stashed changes
     role_imformation: decision
     reward_scale: 0.01
     truncate_by_time: true

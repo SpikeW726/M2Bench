@@ -17,7 +17,7 @@ parameters:
   seed:
     value: 42
   total_steps:
-    value: 40000000
+    value: 60000000
   lr:
     min: 1.0e-5
     max: 5.0e-4
@@ -34,13 +34,13 @@ parameters:
   epsilon_end:
     value: 0.05
   epsilon_decay_steps:
-    values: [6000000, 8000000, 12000000]
+    values: [10000000, 15000000, 20000000]
   max_grad_norm:
     values: [5.0, 10.0]
   use_double_dqn:
     value: true
   batch_size:
-    values: [64, 128, 256]
+    values: [8192, 10240]
   buffer_size:
     values: [50000, 100000]
   warmup_steps:
@@ -48,8 +48,8 @@ parameters:
   update_per_step:
     values: [1, 5, 10]
   collect_per_step:
-    value: 96
+    value: 48
   num_steps:
-    values: [512, 2048]
+    values: [512, 1024]
   save_interval:
     value: 500

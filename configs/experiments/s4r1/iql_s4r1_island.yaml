@@ -37,7 +37,7 @@ algo:
   shared_policy: false
 
 training:
-  num_envs: 96
+  num_envs: 48
   use_subproc: true
   num_steps: 2048
   total_steps: 40000000

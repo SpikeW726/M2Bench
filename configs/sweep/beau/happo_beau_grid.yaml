@@ -4,7 +4,7 @@
 method: bayes
 
 metric:
-  name: eval/igi
+  name: eval/wi
   goal: minimize
 
 parameters:
@@ -23,27 +23,27 @@ parameters:
     min: 0.0
     max: 0.04
   policy_update_steps:
-    values: [4, 6, 8]
+    values: [4, 6]
   hidden_dim:
-    values: [64, 128]
+    value: 128
   num_heads:
-    values: [4, 8]
+    value: 4
   encoder_layers:
-    values: [2, 3]
+    value: 3
   custom_configs.reward_scale:
     values: [0.005, 0.01, 0.015]
   num_steps:
-    values: [600, 800, 1024]
+    value: 512
   num_envs:
     value: 1
   total_steps:
     value: 20000000
   save_interval:
-    value: 1000
+    value: 10000
   eval_interval:
-    value: 12
+    value: 1000
   eval_episodes:
-    value: 3
+    value: 1
 
 early_terminate:
   min_trial: 4

@@ -51,7 +51,7 @@ training:
   save_interval: 200
   minibatch_size: 1024
   update_epochs: 5
-  eval_interval: 10
+  eval_interval: 50
 
 # ---- 网络（须与 env.custom_configs 中 T / role_imformation 一致）----
 actor:
@@ -77,5 +77,10 @@ critic:
   input_mode: state
   hidden: [256, 256]
 
+<<<<<<< Updated upstream
 actor_path: models/imi-mappo-pre-masup-SF_075T/imi_pre_masup_mlp_mappo_SF_075T__1782925044_final/policy.pt
 critic_path: models/imi-mappo-pre-masup-SF_075T/imi_pre_masup_mlp_mappo_SF_075T__1782925044_final/critic.pt
+=======
+actor_path: models/imi-mappo-pre-masup-SF/imi_pre_masup_mlp_mappo_SF__1776830456_final/policy.pt
+critic_path: models/imi-mappo-pre-masup-SF/imi_pre_masup_mlp_mappo_SF__1776830456_final/critic.pt
+>>>>>>> Stashed changes

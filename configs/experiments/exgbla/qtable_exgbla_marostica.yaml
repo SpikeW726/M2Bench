@@ -30,10 +30,10 @@ algo:
   epsilon_decay_steps: 10000000
 
 training:
-  num_envs: 36
+  num_envs: 48
   use_subproc: true
   total_steps: 50000000
-  save_interval: 300
+  save_interval: 1000
   eval_interval: 10
 
 eval_config_path: configs/eval/exgbla/exgbla_marostica.yaml

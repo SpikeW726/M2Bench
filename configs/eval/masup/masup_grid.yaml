@@ -20,7 +20,7 @@ env:
 
 eval:
   num_episodes: 10
-  save_plot: evaluators/results/grid/mappo_masup_preproc_imi/eval.png
+  save_plot: evaluators/results/grid/mappo_masup_nopre_imi/eval.png
   show_plot: false
   animation: true
   event_driven: true

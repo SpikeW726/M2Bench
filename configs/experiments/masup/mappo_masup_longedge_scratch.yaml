@@ -34,24 +34,24 @@ env:
 # ---- 算法 ----
 algo:
   use_active_mask: True
-  actor_lr: 3.0e-4
-  critic_lr: 3.0e-4
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  vf_coef: 0.5
-  ent_coef: 0.01
+  actor_lr: 0.000042275431686468945
+  critic_lr: 0.0018140384295011584
+  gamma: 0.999
+  gae_lambda: 0.9185866781728964
+  clip_range: 0.3188303982937587
+  vf_coef: 1.1085035143266433
+  ent_coef: 0.08350742025925834
 
 # ---- 训练 ----
 training:
   num_envs: 12
   use_subproc: true
-  num_steps: 2048
-  total_steps: 10000000
+  num_steps: 4096
+  total_steps: 20000000
   save_interval: 1000
-  minibatch_size: 4096
-  update_epochs: 5
-  eval_interval: 10
+  minibatch_size: 256
+  update_epochs: 10
+  eval_interval: 50
 
 # ---- 网络 ----
 actor:

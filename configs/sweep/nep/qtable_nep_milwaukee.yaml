@@ -8,7 +8,7 @@ early_terminate:
   min_trial: 4
   min_steps: 15000000
   terminate_ratio: 0.5
-  early_stop_iters: 100
+  early_stop_iters: 200
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
   state_file: .sweep_es_qtable_nep_milwaukee.json
@@ -23,14 +23,12 @@ parameters:
     max: 1.0e-2
     distribution: log_uniform_values
   gamma:
-    values: [0.99, 0.995, 0.999]
+    values: [0.995, 0.999]
   epsilon_start:
     values: [0.2, 0.5, 1.0]
   epsilon_end:
     value: 0.05
   save_interval:
-    value: 300
+    value: 1000
   epsilon_decay_steps:
-    min: 8000000
-    max: 12000000
-    distribution: uniform
+    values: [10000000, 15000000]

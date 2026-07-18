@@ -21,21 +21,19 @@ parameters:
     max: 0.4
   vf_coef:
     min: 0.5
-    max: 2.0
+    max: 1.0
   ent_coef:
     min: 0.0
     max: 0.2
   gae_lambda:
     values: [0.99, 0.999]
 
-  # grid diameter=10, T=50 -- shorter horizon, gamma need not be as high as SF
   gamma:
     value: 0.999
 
   use_value_norm:
     value: true
 
-  # grid episode_len=500, episodes complete frequently -- smaller rollout sufficient
   num_steps:
     values: [1024, 2048]
   minibatch_size:
@@ -55,15 +53,15 @@ parameters:
     values: [0.0, 0.05, 0.1]
 
   actor_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid/imi_pre_masup_mlp_mappo_grid__1777742933_final/policy.pt
+    value: /root/autodl-tmp/models/imi-mappo-masup-grid-6a/imi_mappo_masup_grid_6a__1781010835_final/policy.pt
   critic_path:
-    value: /root/autodl-tmp/models/imi-mappo-pre-masup-grid/imi_pre_masup_mlp_mappo_grid__1777742933_final/critic.pt
+    value: /root/autodl-tmp/models/imi-mappo-masup-grid-6a/imi_mappo_masup_grid_6a__1781010835_final/critic.pt
 
 # ---- 自定义早停 ----
 early_terminate:
-  min_trial: 6             # 前 N 个 trial 仅建立 milestone 基准
-  min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
-  terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
+  min_trial: 4             # 前 N 个 trial 仅建立 milestone 基准
+  min_steps: 15000000       # 达到该 env steps 后做 cross-trial 比较
+  terminate_ratio: 0.5     # 指标不在前 40% 则早停（可根据地图特性调整）
   early_stop_iters: 100  # trial 内至少运行 N iters 后启用 slope 检查
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5

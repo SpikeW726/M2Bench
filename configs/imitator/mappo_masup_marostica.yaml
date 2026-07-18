@@ -1,0 +1,46 @@
+# MAPPO + ActorMLP/CriticMLP — marostica 图模仿学习预训练配置（6 agents，标准 MLP）
+#
+# 用法:
+#   python trainers/imitator/imitation_trainer.py \
+#       --config configs/imitator/mappo_masup_marostica.yaml
+#   python trainers/imitator/imitation_trainer.py \
+#       --config configs/imitator/mappo_masup_marostica.yaml \
+#       --data_path /root/autodl-tmp/dataset/marostica/dtassi_samples.h5
+#
+# 预训练模式: actor_critic
+#   - Actor  (mlp): BC cross-entropy loss on expert actions
+#   - Critic (mlp): MSE(V, returns)，输入为 state() + agent_one_hot
+#
+# 预训练完成后，将生成的 policy.pt / critic.pt 路径填入 RL 实验 YAML 的
+# actor_path / critic_path 字段
+
+# ----- 算法（决定预训练模式：actor_critic）-----
+algo_name: mappo
+
+# ----- 环境（用于自动推断 obs_dim / action_dim / state_dim / num_agents）-----
+env_type: masup
+env_config: configs/eval/masup/masup_marostica.yaml
+
+# ----- 网络结构（标准 MLP，维度由 env_config 自动推断）-----
+actor_type: mlp
+
+actor:
+  hidden: [256, 512]
+
+critic_hidden_sizes: [256, 512]
+
+# ----- 训练超参 -----
+actor_lr: 1.0e-4
+critic_lr: 1.0e-4
+batch_size: 8192
+iteration: 35
+actor_patience: 5
+actor_min_delta: 1.0e-5
+use_value_norm: true
+
+# ----- 数据 & 日志 -----
+data_path: /root/autodl-tmp/dataset/marostica/baps_6a_samples.h5
+save_dir: /root/autodl-tmp/models/imi-mappo-mlp-masup-marostica
+exp_name: imi_pre_mlp_mappo_masup_marostica
+track: false
+wandb_project: MAP-imitation
