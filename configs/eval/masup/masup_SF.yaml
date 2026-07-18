@@ -1,7 +1,4 @@
-# MASUP SF 评估（与 experiments/masup/*_masup_SF.yaml 环境对齐）
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/masup/masup_SF.yaml --model models/xxx/final
-
 env_type: masup
 
 env:

@@ -1,12 +1,6 @@
-# IQL + MLP + S4R1Env (grid) 超参数搜索
-# 用法:
 #   python sweep.py --base-config configs/experiments/s4r1/iql_s4r1_grid.yaml \
 #                   --sweep-config configs/sweep/s4r1/iql_mlp_s4r1_grid.yaml \
 #                   --eval-config configs/eval/s4r1/s4r1_grid.yaml --count 40
-#
-# grid 图: 50 节点，8 agents，FixedStepEnv，episode_len=500 步
-# epsilon_decay_steps: grid episode 短、agent 决策频繁，衰减步数较 SF 小
-
 method: bayes
 
 metric:
@@ -24,13 +18,11 @@ early_terminate:
 parameters:
   seed:
     value: 42
-  # ---- algo params (映射到 IQLParams) ----
   lr:
     min: 0.00001
     max: 0.0005
     distribution: log_uniform_values
 
-  # grid 短 horizon，gamma 适中
   gamma:
     values: [0.995, 0.999]
 
@@ -75,7 +67,6 @@ parameters:
   num_steps:
     values: [128, 512]
 
-  # total_steps 由 experiment base 决定
 
   save_interval:
     value: 500

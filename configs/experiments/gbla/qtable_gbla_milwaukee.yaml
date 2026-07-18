@@ -1,7 +1,4 @@
 # QTable + GBLAEnv @ milwaukee
-# 图统计: nodes=40, directed_edges=112, max_out_degree=5, avg_edge=10.961, max_edge=14.14
-# 物理时间截断: episode_len=800, total_steps=50000000
-
 algo_name: qtable
 env_type: gbla
 exp_name: qtable-gbla-milwaukee

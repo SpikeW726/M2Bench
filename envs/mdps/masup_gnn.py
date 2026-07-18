@@ -18,18 +18,16 @@ class MASUPGraphEnv(MASUPEnv):
         self.static_edges = []
         for u in sorted(self.world.graph.nodes):
             for v, weight in self.world.graph.adj_list[u]:
-                self.static_edges.append((u, v, weight))        
+                self.static_edges.append((u, v, weight))
 
-        # 节点总数 = 物理节点 + 虚拟智能体节点
         self.total_node_num = self.static_node_num + self.agent_num
 
-        # 最大边数 = 静态边 + 每个智能体的动态边上限
         self.max_dynamic_edges = self.agent_num * 2
-        self.total_max_edges = self.static_edge_num + self.max_dynamic_edges    
+        self.total_max_edges = self.static_edge_num + self.max_dynamic_edges
 
-        self.node_feat_dim = kwargs.get("node_feat_dim", 2)     # [Type, Weighted_Idleness]
-        self.edge_feat_dim = kwargs.get("edge_feat_dim", 1)     # [Edge Weight]
-        self.global_feat_dim = kwargs.get("global_feat_dim", 2)  # [WI@T (worst_idleness_fromT), obs_timer]
+        self.node_feat_dim = kwargs.get("node_feat_dim", 2)     # [Type, Weighted_Idleness].
+        self.edge_feat_dim = kwargs.get("edge_feat_dim", 1)     # [Edge Weight].
+        self.global_feat_dim = kwargs.get("global_feat_dim", 2)  # [WI@T (worst_idleness_fromT), obs_timer].
 
         if self.role_ifm == "agent-index":
             identity_len = self.world.num_agents
@@ -40,14 +38,13 @@ class MASUPGraphEnv(MASUPEnv):
 
         self.obs_size = (
             self.total_node_num * self.node_feat_dim +
-            self.total_max_edges * 2 +  # Edge Index (Src + Dst)
+            self.total_max_edges * 2 +  # Edge Index (Src + Dst).
             self.total_max_edges * self.edge_feat_dim +
-            self.total_max_edges +      # Mask
+            self.total_max_edges +      # Mask.
             self.global_feat_dim +
             identity_len
         )
 
-        # ---- _build_obs 加速: 预计算静态结构 + 复用 buffer ----
         self._sorted_nodes_gnn = sorted(self.world.graph.nodes)
         self._node_to_idx_gnn = {n: i for i, n in enumerate(self._sorted_nodes_gnn)}
         self._default_node_gnn = self._sorted_nodes_gnn[0] if self._sorted_nodes_gnn else 0
@@ -76,28 +73,23 @@ class MASUPGraphEnv(MASUPEnv):
             self._identity_rows_gnn = np.eye(self.agent_num, dtype=np.float32)
 
     def observation_space(self, agent):
-        # node_num = self.total_node_num
-        # --- 1. 节点特征空间 ---
+        # node_num = self.total_node_num.
         node_low = [0.0] * (self.total_node_num * self.node_feat_dim)
         node_high = [float('inf')] * (self.total_node_num * self.node_feat_dim)
 
-        # --- 2. 边索引空间 (Src + Dst) ---
         edge_idx_low = [0.0] * (2 * self.total_max_edges)
         edge_idx_high = [float(self.total_node_num)] * (2 * self.total_max_edges)
 
-        # --- 3. 边属性空间 ---
         edge_attr_low = [0.0] * self.total_max_edges
         edge_attr_high = [float('inf')] * self.total_max_edges
 
-        # --- 4. 边掩码空间 ---
         mask_low = [0.0] * self.total_max_edges
         mask_high = [1.0] * self.total_max_edges
 
-        # --- 5. 全局状态空间 ---
         global_low = [0.0] * self.global_feat_dim
         global_high = [float('inf')] * self.global_feat_dim
 
-        # --- 6. Agent Identity
+        # 6. Agent Identity.
         if self.role_ifm == "agent-index":
             identity_low = [0.0] * self.agent_num
             identity_high = [1.0] * self.agent_num
@@ -114,24 +106,20 @@ class MASUPGraphEnv(MASUPEnv):
         return Box(low=low, high=high, dtype=np.float32)
 
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, np.ndarray]:
-        """构建当前时刻的动态图观测（公共前缀只算一次，仅 identity 按 agent 不同）。"""
         node_to_idx = self._node_to_idx_gnn
         default_node = self._default_node_gnn
 
-        # ======== 1. 节点特征 ========
-        # 静态节点: [Type=1, phi*idle]  虚拟节点: [Type=0, 0]
         idle_vals = np.array(
             [float(self.world.node_idleness.get(n, 0.0)) for n in self._sorted_nodes_gnn],
             dtype=np.float32,
         )
-        weighted = self._phi_vec_gnn * idle_vals             # (static_node_num,)
+        weighted = self._phi_vec_gnn * idle_vals             # (static_node_num,).
         nf = np.empty(self.total_node_num * self.node_feat_dim, dtype=np.float32)
         sn = self.static_node_num
-        nf[0 : sn * 2 : 2] = 1.0                            # type = 1
-        nf[1 : sn * 2 : 2] = weighted                       # phi * idle
-        nf[sn * 2 :] = 0.0                                  # 虚拟节点全 0
+        nf[0 : sn * 2 : 2] = 1.0                            # type = 1.
+        nf[1 : sn * 2 : 2] = weighted                       # phi * idle.
+        nf[sn * 2 :] = 0.0
 
-        # ======== 2. 边 ========
         es = self._e_src_buf
         ed = self._e_dst_buf
         ew = self._e_w_buf
@@ -154,7 +142,7 @@ class MASUPGraphEnv(MASUPEnv):
             if target_node not in node_to_idx:
                 target_node = ag.position
 
-            time_left = float(ag.nominal_action_remaining)  # 名义剩余时间
+            time_left = float(ag.nominal_action_remaining)
 
             if ag.state == AgentState.ON_EDGE:
                 u_idx = float(node_to_idx[last_node])
@@ -182,26 +170,21 @@ class MASUPGraphEnv(MASUPEnv):
                 es[pos] = virtual_node_idx;  ed[pos] = u_idx;          ew[pos] = 0.0
                 pos += 1
 
-        # ======== 3. 掩码 ========
         current_edge_count = pos
         mask = self._e_mask_buf
         mask[:current_edge_count] = 1.0
         mask[current_edge_count:] = 0.0
 
-        # 填充边（pad_size > 0 时才需要）
         if pos < self.total_max_edges:
             es[pos:] = 0.0;  ed[pos:] = 0.0;  ew[pos:] = 0.0
 
-        # ======== 4. 全局特征 ========
         global_arr = np.array(
             [float(self.worst_idleness_fromT), float(self.obs_timer)],
             dtype=np.float32,
         )
 
-        # ======== 5. 公共前缀（一次拼接）========
         prefix = np.concatenate((nf, es, ed, ew, mask, global_arr))
 
-        # ======== 6. 每 agent 仅拼接 identity ========
         obs: Dict[str, np.ndarray] = {}
         for i in range(self.agent_num):
             if self.role_ifm == "agent-index":

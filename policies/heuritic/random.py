@@ -1,18 +1,12 @@
 # -*- coding: utf-8 -*-
-"""
-Random 启发式策略 - 多智能体版本
+"""Uniformly sample an available neighbor for every READY agent."""
 
-每个 READY agent 从可用邻居中均匀随机选择一个目标节点，无任何协调或学习。
-"""
 import random
 from typing import Dict, Optional, Any
 
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
 
-
 class RandomPolicy(HeuriticBasePolicy):
-    """随机巡逻策略，并发处理所有 READY agents。"""
-
     def compute_actions(
         self,
         obs_dict: Dict[str, Any],

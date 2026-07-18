@@ -1,7 +1,4 @@
 # IQL + S4R1Env @ mapB
-# 图统计: nodes=50, directed_edges=138, max_out_degree=5, avg_edge=7.722, max_edge=22.000
-# 物理时间截断: episode_len=500, total_steps=40000000
-
 algo_name: iql
 env_type: s4r1
 q_type: mlp

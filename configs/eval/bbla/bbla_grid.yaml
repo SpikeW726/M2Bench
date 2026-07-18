@@ -1,7 +1,4 @@
-# BBLAEnv grid 评估配置（3 agents，FixedStepEnv）
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/bbla/bbla_grid.yaml --model models/xxx/final
-
 algo_name: qtable
 env_type: bbla
 
@@ -17,7 +14,7 @@ env:
     truncate_by_time: true
 
 eval:
-  seed: 42              # 评估固定随机性；训练仍随机
+  seed: 42
   num_episodes: 10
   save_plot: evaluators/results/grid/qtable-bbla/best_eval.png
   show_plot: false

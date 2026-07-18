@@ -1,7 +1,3 @@
-# HAPPO 语境（happo = MAT PPO，实现同 mappo_mat）+ BEAU，规则网格图
-# 训练: python train.py configs/experiments/beau/happo_beau_grid.yaml
-# 评估: python evaluators/test.py --model <save_dir>/final --env_config configs/eval/beau/beau_grid.yaml
-
 algo_name: happo
 env_type: beau
 
@@ -38,7 +34,6 @@ algo:
   encoder_layers: 2
 
 training:
-  # MATOnPolicyCollector 当前仅支持 num_envs=1
   num_envs: 1
   use_subproc: false
   num_steps: 800

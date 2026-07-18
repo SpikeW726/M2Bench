@@ -1,16 +1,8 @@
-# VDPPO + GRU + OUCSEnv 超参数搜索
-# 用法（base 对应 experiments/oucs/）:
 #   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_tsp12.yaml \
 #                   --sweep-config configs/sweep/oucs/vdppo_gru_oucs.yaml --count 40
-#
-# 并行:
 #   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_tsp12.yaml \
 #                   --sweep-config configs/sweep/oucs/vdppo_gru_oucs.yaml --create-only
 #   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_tsp12.yaml \
-#                   --sweep-id <ID> --count 15   # 各 tmux 窗口
-#
-# 其它图: 替换 --base-config；total_steps 由各 experiment 的 training.total_steps 决定（本 sweep 不再覆盖）
-
 method: bayes
 
 metric:
@@ -20,13 +12,11 @@ metric:
 parameters:
   seed:
     value: 42
-  # ---- VDPPOParams: actor 优化器 ----
   actor_lr:
     min: 0.00005
     max: 0.002
     distribution: log_uniform_values
 
-  # ---- VDPPOParams: Q 优化器 ----
   q_lr:
     min: 0.0001
     max: 0.003
@@ -54,7 +44,6 @@ parameters:
     min: 0.9
     max: 1.0
 
-  # ---- VDPPOParams: target 网络 ----
   tau:
     min: 0.01
     max: 0.5
@@ -66,7 +55,6 @@ parameters:
   mixer_embed_dim:
     values: [32, 64, 128]
 
-  # ---- RNN chunk 长度 ----
   data_chunk_length:
     values: [8, 10, 16]
 

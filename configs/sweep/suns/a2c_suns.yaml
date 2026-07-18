@@ -1,19 +1,11 @@
-# A2C + SUNSGymEnv 超参数搜索（通用，覆盖 TSP12 / longedge / SF 图）
-# 用法（TSP12）:
 #   python sweep.py --base-config configs/experiments/suns/a2c_suns_tsp12.yaml \
 #                   --sweep-config configs/sweep/suns/a2c_suns.yaml --count 40
-# 用法（SF）:
 #   python sweep.py --base-config configs/experiments/suns/a2c_suns_SF.yaml \
 #                   --sweep-config configs/sweep/suns/a2c_suns.yaml --count 40
-#
-# 并行示例:
 #   python sweep.py --base-config configs/experiments/suns/a2c_suns_SF.yaml \
 #                   --sweep-config configs/sweep/suns/a2c_suns.yaml --create-only
 #   python sweep.py --base-config configs/experiments/suns/a2c_suns_SF.yaml \
 #                   --sweep-id <ID> --count 15
-#
-# total_steps 由各 base_config 的 training.total_steps 决定（避免覆盖不同图预算）
-
 method: bayes
 
 metric:
@@ -23,7 +15,6 @@ metric:
 parameters:
   seed:
     value: 42
-  # ---- A2CParams (单优化器) ----
   lr:
     min: 0.00001
     max: 0.0003
@@ -57,11 +48,10 @@ parameters:
   save_interval:
     value: 1000
 
-# ---- 自定义早停 ----
 early_terminate:
   min_trial: 4
   min_steps: 15000000
   terminate_ratio: 0.5
-  early_stop_iters: 60  
+  early_stop_iters: 60
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5

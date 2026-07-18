@@ -1,11 +1,8 @@
-"""D3QN: Double Dueling DQN for discrete action spaces.
+"""Double Dueling DQN for discrete action spaces.
 
-继承 QLearningOffPolicyAlgo，使用 ValuePolicy（内含 Q-network + epsilon-greedy）。
-epsilon 当前值存储在 ValuePolicy 中，衰减调度由本算法控制。
-
-支持 MLP (QMLP) 和 RNN (QRNN) 两种 Q-network：
-- MLP: 标准 flat TransitionBatch 训练
-- RNN: SequenceBatch 序列训练（DRQN 风格，h0=zeros）
+The algorithm schedules epsilon stored by ``ValuePolicy``. MLP Q-networks train
+on flat transitions, while recurrent Q-networks use DRQN-style sequence batches
+with zero initial hidden state.
 """
 
 from typing import Optional
@@ -18,18 +15,7 @@ from configs.algo_configs import D3QNParams
 from policies.rl.rl_base import ValuePolicy
 from data.batch import BaseBatch, TransitionBatch, SequenceBatch
 
-
 class D3QNAlgo(QLearningOffPolicyAlgo):
-    """
-    Double Dueling DQN。
-
-    - Double DQN: main net 选动作, target net 评估
-    - Dueling: V/A 分离在网络架构层实现（不影响本类逻辑）
-    - Epsilon-greedy: 委托给 ValuePolicy.forward()
-    - Target network: 继承自基类的 soft/hard update
-    - RNN: forward_sequence + zero hidden init (DRQN 风格)
-    """
-
     def __init__(
         self,
         policy: ValuePolicy,
@@ -47,16 +33,13 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
         self.seq_len = params.seq_len
         self._create_target_network()
 
-        # epsilon 衰减参数（调度逻辑在算法中，当前值同步到 policy）
         self.epsilon_start = params.epsilon_start
         self.epsilon_end = params.epsilon_end
         self.epsilon_decay_steps = max(1, int(params.epsilon_decay_steps))
         self._current_epsilon = params.epsilon_start
         self.policy.set_epsilon(self._current_epsilon)
 
-    # ====================================================================
-    #                           compute_loss
-    # ====================================================================
+    # compute_loss.
 
     def compute_loss(
         self, batch: BaseBatch,
@@ -68,7 +51,6 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
     def _compute_loss_flat(
         self, batch: TransitionBatch,
     ) -> tuple[torch.Tensor, TrainingStats]:
-        """MLP 路径：标准 DQN TD loss。"""
         obs = batch.obs
         actions = batch.act.long()
         rewards = batch.rew
@@ -110,28 +92,23 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
     def _compute_loss_sequence(
         self, batch: SequenceBatch,
     ) -> tuple[torch.Tensor, TrainingStats]:
-        """RNN 路径：DRQN 序列 TD loss，h0=zeros，支持 R2D2 burn-in。
-
-        forward 全序列预热 hidden state，loss 仅在 [burn_in_len:] 训练区间计算。
-        burn_in_len=0 时行为与无 burn-in 完全一致。
-        """
         B, T_total = batch.obs.shape[:2]
         device = batch.obs.device
         bi = getattr(batch, 'burn_in_len', 0)
 
-        obs_seq = batch.obs.transpose(0, 1)            # (T, B, D)
-        next_obs_seq = batch.next_obs.transpose(0, 1)  # (T, B, D)
-        actions = batch.act.long()                      # (B, T)
-        rewards = batch.rew                             # (B, T)
-        dones = batch.done                              # (B, T)
-        mask = batch.mask                               # (B, T)
+        obs_seq = batch.obs.transpose(0, 1)            # (T, B, D).
+        next_obs_seq = batch.next_obs.transpose(0, 1)  # (T, B, D).
+        actions = batch.act.long()                      # (B, T).
+        rewards = batch.rew                             # (B, T).
+        dones = batch.done                              # (B, T).
+        mask = batch.mask                               # (B, T).
 
         h0 = self.policy.q_network.get_initial_hidden(B, device)
 
-        q_full, _ = self.policy.q_network.forward_sequence(obs_seq, h0)  # (T, B, act_dim)
-        q_train = q_full[bi:]  # (S, B, act_dim)
-        act_train = actions[:, bi:].T.unsqueeze(-1)  # (S, B, 1)
-        q_current = q_train.gather(2, act_train).squeeze(-1)  # (S, B)
+        q_full, _ = self.policy.q_network.forward_sequence(obs_seq, h0)  # (T, B, act_dim).
+        q_train = q_full[bi:]  # (S, B, act_dim).
+        act_train = actions[:, bi:].T.unsqueeze(-1)  # (S, B, 1).
+        q_current = q_train.gather(2, act_train).squeeze(-1)  # (S, B).
 
         with torch.no_grad():
             h0_target = self.target_policy.q_network.get_initial_hidden(B, device)
@@ -178,12 +155,7 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
             )
         return loss, stats
 
-    # ====================================================================
-    #                       update (扩展基类)
-    # ====================================================================
-
     def update(self, batch: BaseBatch, **kwargs) -> TrainingStats:
-        """基类 update + 按 global-step 线性 epsilon 衰减。"""
         stats = super().update(batch, **kwargs)
         global_step = int(kwargs.get("global_step", 0))
         warmup_steps = int(kwargs.get("warmup_steps", 0))
@@ -191,16 +163,7 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
 
         return stats
 
-    # ====================================================================
-    #                       Epsilon 衰减调度
-    # ====================================================================
-
     def _update_epsilon_linear(self, global_step: int, warmup_steps: int = 0):
-        """线性衰减：由 [epsilon_start, epsilon_end, epsilon_decay_steps] 控制。
-        
-        warmup_steps 期间（global_step < warmup_steps）epsilon 保持 epsilon_start，
-        之后再按 epsilon_decay_steps 线性衰减到 epsilon_end。
-        """
         effective_step = max(0, global_step - warmup_steps)
         progress = min(1.0, effective_step / self.epsilon_decay_steps)
         self._current_epsilon = self.epsilon_start + (
@@ -214,6 +177,5 @@ class D3QNAlgo(QLearningOffPolicyAlgo):
 
     def get_epsilon(self) -> float:
         return self._current_epsilon
-
 
 DQNAlgo = D3QNAlgo

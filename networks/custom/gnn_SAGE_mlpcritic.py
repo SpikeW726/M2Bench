@@ -34,31 +34,28 @@ except ImportError:
             include_self=True,
         )
 
-
 class ResidualFC(nn.Module):
     def __init__(self, in_size, out_size, activation_fn="silu"):
         super().__init__()
-        
-        # 💡 这里的处理可以兼容字符串或直接的激活函数类
+
         if activation_fn == "silu":
             act = nn.SiLU
         elif activation_fn == "relu":
             act = nn.ReLU
         else:
-            act = activation_fn # 保持原样
+            act = activation_fn
 
         self.layer = SlimFC(
             in_size=in_size,
             out_size=out_size,
             initializer=normc_initializer(1.0),
-            activation_fn=act, # 传入解析后的激活函数
+            activation_fn=act,
         )
         self.use_residual = (in_size == out_size)
 
     def forward(self, x):
         out = self.layer(x)
         return out + x if self.use_residual else out
-
 
 class SAGELayer(nn.Module):
     def __init__(self, h_dim, mlp_layers=2, activation_fn="silu"):
@@ -68,24 +65,18 @@ class SAGELayer(nn.Module):
         self.node_mlp = self._build_gnn_mlp(h_dim * 3, h_dim, mlp_layers, activation_fn)
         self.global_mlp = self._build_gnn_mlp(h_dim * 3, h_dim, mlp_layers, activation_fn)
 
-    # --- 修改前 (这里的循环会导致残差全部失效) ---
-    # for _ in range(num_layers):
-    #     layers.append(ResidualFC(in_size=prev_dim, out_size=hidden_dim, ...))
+    # for _ in range(num_layers).
+    # layers.append(ResidualFC(in_size=prev_dim, out_size=hidden_dim,.)).
 
-    # --- 修改后 (瓶颈式：对齐 -> 纯残差) ---
     def _build_gnn_mlp(self, input_dim, hidden_dim, num_layers, activation_fn):
         num_layers = max(1, num_layers)
         layers = []
-        
-        # 1. 第一层：维度转换 (从拼接后的高维降到 h_dim)
-        # 这一层 in != out，不触发残差，但完成了“对齐”
+
         layers.append(ResidualFC(input_dim, hidden_dim, activation_fn=activation_fn))
-        
-        # 2. 后续层：纯残差空间
-        # 因为 in_size == out_size == hidden_dim，ResidualFC 内部的残差会完美开启
+
         for _ in range(num_layers - 1):
             layers.append(ResidualFC(hidden_dim, hidden_dim, activation_fn=activation_fn))
-            
+
         return nn.Sequential(*layers)
 
     def forward(self, x, edge_index, edge_attr, g, batch_idx, edge_batch):
@@ -103,7 +94,6 @@ class SAGELayer(nn.Module):
         g = g + self.global_mlp(g_in)
 
         return x, edge_attr, g
-
 
 class SAGEDynamicGraph(TorchModelV2, nn.Module):
     def __init__(self, obs_space, action_space, num_outputs, model_config, name):
@@ -137,10 +127,10 @@ class SAGEDynamicGraph(TorchModelV2, nn.Module):
         ])
 
         self.actor_head = self._build_mlp(self.h_dim * 3, num_outputs, self.h_dim, self.actor_mlp_layers)
-        # 💡 针对最后一层 Linear 进行极小初始化
-        nn.init.orthogonal_(self.actor_head[-1].weight, gain=0.01) 
+        # Initialization.
+        nn.init.orthogonal_(self.actor_head[-1].weight, gain=0.01)
         nn.init.constant_(self.actor_head[-1].bias, 0)
-        
+
         self.critic_mlp = self._build_mlp(
             self.critic_expected_dim, 1, self.h_dim, self.critic_mlp_layers
         )
@@ -357,7 +347,6 @@ class SAGEDynamicGraph(TorchModelV2, nn.Module):
 
         actor_input = torch.cat([self_emb, g_emb, id_emb], dim=-1)
         logits = self.actor_head(actor_input)
-        
 
         critic_tensor = self._get_critic_tensor(obs_mapping, obs)
         self._value_out = self.critic_mlp(critic_tensor).squeeze(1)

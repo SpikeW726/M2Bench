@@ -1,31 +1,14 @@
-# MAPPO + MAGECEnv (grid) — GraphSageActor (Neighbor Scoring) + MLP Critic
-# 用法: python train.py configs/experiments/magec/mappo_magec_grid.yaml
-#
-# grid 图特性:
-#   50 节点，max_degree=7，边权 2~6（均值≈2.2），phi 全 1（均匀优先级）
-#   EventDrivenEnv: 每步推进到下一智能体到达事件
-#   steps_per_episode ≈ 500/2.2 ≈ 227 步
-#   → num_steps=512 可覆盖 ~2.2 个 episode
-#
-# state_dim = num_nodes + num_nodes² = 50 + 2500 = 2550
-# critic_input_dim = 2550 + 6 (agent_one_hot) = 2556 (train.py 自动计算)
-#
-# 注意: grid uniform phi=1，MAGECEnv 的 WI 计算退化为普通均匀优先级，与 MASUP grid 等价
-
-# ---- 分发字段 ----
 algo_name: mappo
 env_type: magec
 actor_type: sage
 critic_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: mappo-magec-grid
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/grid.json
   norm_reward: true
@@ -37,7 +20,6 @@ env:
     alpha: 1.0
     beta: 0.5
 
-# ---- 算法 ----
 algo:
   use_active_mask: true
   actor_lr: 3.0e-4
@@ -49,8 +31,6 @@ algo:
   ent_coef: 0.01
   shared_policy: true
 
-# ---- 训练 ----
-# step_per_iteration = 8 × 512 = 4096
 # max_iterations = ceil(20M / 4096) = 4883
 training:
   num_envs: 64
@@ -62,13 +42,10 @@ training:
   update_epochs: 5
   eval_interval: 10
 
-# ---- 网络 ----
-# GraphSageActor (Neighbor Scoring 模式):
 #   grid: max_degree=7, action_dim=8 (7+1 no-op)
 #   node_feat_dim=3: [nodeType, phi_idleness_norm, degree]
 #   edge_feat_dim=2: [weight_norm, neighborIndex]
 #   global_feat_dim=2: [avg_phi_idle_norm, worst_phi_idle_norm]
-#   grid 直径≈10，gnn_layers=2 即可覆盖足够邻域
 actor:
   graph_path: graphs/grid.json
   agent_num: 6

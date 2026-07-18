@@ -1,8 +1,4 @@
 # MAPPO + MAGECEnv @ marostica
-# 图统计: nodes=41, directed_edges=106, max_out_degree=4, avg_edge=2.49, max_edge=4.0
-# 物理时间截断: episode_len=500, total_steps=50000000
-# MAGEC 图观测含 edge_src/edge_dst 索引，使用环境内部特征归一化，不叠加 VectorEnvNormObs。
-
 algo_name: mappo
 env_type: magec
 actor_type: sage

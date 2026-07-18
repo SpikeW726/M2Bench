@@ -1,33 +1,26 @@
-# QMIX + MASUPEnv 超参数搜索
-# 用法:
 #   python sweep.py --base-config configs/experiments/masup/qmix_masup_longedge.yaml \
 #                   --sweep-config configs/sweep/masup/qmix_masup.yaml --count 40
-#
-# 并行:
 #   python sweep.py --base-config configs/experiments/masup/qmix_masup_longedge.yaml \
 #                   --sweep-config configs/sweep/masup/qmix_masup.yaml --create-only
 #   python sweep.py --base-config configs/experiments/masup/qmix_masup_longedge.yaml \
 #                   --sweep-id <ID> --count 15
-
 method: bayes
 
 metric:
   name: eval/wi_fromT
   goal: minimize
 
-# ---- 自定义早停 ----
 early_terminate:
-  min_trial: 6             # 前 N 个 trial 仅建立 milestone 基准
-  min_steps: 5000000       # 达到该 env steps 后做 cross-trial 比较
-  terminate_ratio: 0.4     # 指标不在前 40% 则早停（可根据地图特性调整）
-  early_stop_iters: 200  # trial 内至少运行 N iters 后启用 slope 检查
+  min_trial: 6
+  min_steps: 5000000
+  terminate_ratio: 0.4
+  early_stop_iters: 200
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
 
 parameters:
   seed:
     value: 42
-  # ---- algo params (映射到 QMIXParams) ----
   lr:
     min: 1.0e-6
     max: 5.0e-4
@@ -64,7 +57,6 @@ parameters:
   mixer_embed_dim:
     values: [16, 32, 64]
 
-  # ---- training params (映射到 OffPolicyTrainerConfig) ----
   batch_size:
     values: [128, 256, 512]
 

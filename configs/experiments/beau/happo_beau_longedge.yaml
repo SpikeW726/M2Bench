@@ -1,8 +1,3 @@
-# HAPPO 语境下的 MAT+联合 PPO + BEAU（与仓库算法名 happo 对应，实现同 mappo_mat）
-# LongEdge 小图：短 episode、较快迭代
-# 训练: python train.py configs/experiments/beau/happo_beau_longedge.yaml
-# 评估: python evaluators/test.py --model <save_dir>/final --env_config configs/eval/beau/beau_longedge.yaml
-
 algo_name: happo
 env_type: beau
 
@@ -39,7 +34,6 @@ algo:
   encoder_layers: 2
 
 training:
-  # MATOnPolicyCollector 当前仅支持 num_envs=1
   num_envs: 1
   use_subproc: false
   num_steps: 2048

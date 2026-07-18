@@ -4,7 +4,7 @@ import time
 import argparse
 from pathlib import Path
 from dataclasses import fields
-# 添加项目根目录到 Python 路径 (支持从任意目录运行)
+
 _project_root = Path(__file__).resolve().parent.parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
@@ -31,18 +31,11 @@ from configs.network_configs import (
     MASUPCriticConfig, MASUPCriticRNNConfig,
 )
 
-
 def _filter_dataclass_kwargs(cls, raw: dict) -> dict:
-    """只保留 cls 的 dataclass 字段，忽略 YAML 中的多余 key"""
     valid = {f.name for f in fields(cls)}
     return {k: v for k, v in raw.items() if k in valid}
 
-
 def _infer_dims_from_env(env_type: str, env_config_path: str) -> dict:
-    """创建临时环境，推断 obs_dim / action_dim / state_dim / num_agents。
-
-    返回原始维度，调用方根据算法自行组合（如 critic_state_dim = state_dim + num_agents）。
-    """
     env_type_actual, env_cfg = load_eval_config(env_config_path)
     if env_type == "masup":
         env_type = env_type_actual
@@ -61,7 +54,7 @@ def _infer_dims_from_env(env_type: str, env_config_path: str) -> dict:
 
     env.close() if hasattr(env, "close") else None
 
-    print(f"[ImiTrainer] 自动推断维度 (env_type={env_type}):")
+    print(f"[ImiTrainer] Inferred dimensions (env_type={env_type}):")
     print(f"  obs_dim={obs_dim}, action_dim={action_dim}, state_dim={state_dim}, num_agents={num_agents}")
     return {
         "obs_dim": obs_dim,
@@ -70,37 +63,28 @@ def _infer_dims_from_env(env_type: str, env_config_path: str) -> dict:
         "num_agents": num_agents,
     }
 
-
 def _get_pretraining_strategy(algo_name: str, dims: dict) -> dict:
-    """根据算法名称推断预训练策略。
-
-    Returns:
-        mode: "actor_critic" | "actor_only" | "q_net"
-        value_input_key: HDF5 中 value 目标来源字段名
-        value_input_dim: value 网络输入维度（q_net 模式下为 Q-net 输入维度）
-        critic_state_dim: actor_critic 模式下 critic 输入维度（其他模式为 0）
-    """
     policy_type = get_policy_type(algo_name)
     if policy_type == "actor":
         if algo_name == "vdppo":
-            # VDPPO 只预训练 actor，Mixer 随机初始化时 TD target 为噪声，Q-net 预训练无意义
+
             mode = "actor_only"
-            value_input_key = "critic_states"   # 占位，不会实际用到
+            value_input_key = "critic_states"
             value_input_dim = 0
             critic_state_dim = 0
         elif algo_name == "mappo":
             mode = "actor_critic"
-            value_input_key = "critic_states"   # MAPPO 集中式 critic 用 global state
+            value_input_key = "critic_states"
             value_input_dim = dims["state_dim"] + dims["num_agents"]
             critic_state_dim = value_input_dim
         else:
-            # ippo / ppo 等：独立 critic，用 obs 作为 value 输入
+
             mode = "actor_critic"
             value_input_key = "obs"
             value_input_dim = dims["obs_dim"]
             critic_state_dim = value_input_dim
     else:
-        # iql / vdn / qmix 等 value-based 算法
+
         mode = "q_net"
         value_input_key = "obs"
         value_input_dim = dims["obs_dim"]
@@ -113,31 +97,12 @@ def _get_pretraining_strategy(algo_name: str, dims: dict) -> dict:
         "critic_state_dim": critic_state_dim,
     }
 
-
 def load_imitator_config(yaml_path: str | Path) -> dict:
-    """从 YAML 加载模仿学习配置。
-
-    返回 dict，包含：
-        mode: "actor_critic" | "actor_only" | "q_net"
-        actor: nn.Module | None
-        critic: nn.Module | None
-        q_network: nn.Module | None
-        value_input_key: str
-        train_kwargs: dict
-
-    YAML 必填字段:
-        algo_name: mappo | ippo | vdppo | iql | vdn | qmix
-        actor_type: mlp | rnn | mpnn       # actor/vdppo 模式需要
-        q_type: mlp | rnn                  # q_net 模式需要
-        env_config: configs/eval/xxx.yaml  # 推荐：自动推断维度
-        env_type: masup                    # 与 env_config 配套
-    """
     with open(yaml_path) as f:
         raw = yaml.safe_load(f)
 
     algo_name = raw.get("algo_name", "mappo").lower()
 
-    # 优先从环境自动推断维度
     env_config_path = raw.get("env_config")
     if env_config_path is not None:
         env_type = raw.get("env_type", "masup")
@@ -188,7 +153,7 @@ def load_imitator_config(yaml_path: str | Path) -> dict:
         actor_net = create_actor(actor_type, actor_config, obs_dim, action_dim, device="cpu")
 
         if mode == "actor_critic":
-            # MASUP 专供 Critic：masup_mlp / masup_rnn，其他类型退回原 CriticMLP
+
             critic_type = raw.get("critic_type", "")
             if critic_type in ("masup_mlp", "masup_rnn"):
                 critic_raw = raw.get("critic", {})
@@ -218,7 +183,6 @@ def load_imitator_config(yaml_path: str | Path) -> dict:
             raise ValueError(f"Unknown q_type: {q_type}")
         q_net = create_q_network(q_type, q_config, obs_dim, action_dim, device="cpu")
 
-    # 训练相关参数
     train_kwargs = {
         "actor_lr": raw.get("actor_lr", 3e-4),
         "critic_lr": raw.get("critic_lr", 3e-4),
@@ -247,7 +211,6 @@ def load_imitator_config(yaml_path: str | Path) -> dict:
         "train_kwargs": train_kwargs,
     }
 
-
 class imi_trainer:
     def __init__(self, mode: str,
                  actor: nn.Module = None,
@@ -260,12 +223,12 @@ class imi_trainer:
         self.value_input_key = value_input_key
 
         if mode in ("actor_critic", "actor_only"):
-            assert actor is not None, "actor 不能为 None"
+            assert actor is not None, "actor must not be None"
             self.actor = actor.to(self.device)
             self.actor_optimizer = torch.optim.Adam(
                 self.actor.parameters(), lr=kwargs.get("actor_lr", 3e-4), eps=1e-5)
 
-            # Actor 早停配置
+            # Configuration.
             self.actor_patience = kwargs.get("actor_patience", 5)
             self.actor_min_delta = kwargs.get("actor_min_delta", 1e-5)
             self.actor_stopped = False
@@ -273,13 +236,13 @@ class imi_trainer:
             self.actor_no_improve_count = 0
 
             if mode == "actor_critic":
-                assert critic is not None, "actor_critic 模式 critic 不能为 None"
+                assert critic is not None, "critic must not be None in actor_critic mode"
                 self.critic = critic.to(self.device)
                 self.critic_optimizer = torch.optim.Adam(
                     self.critic.parameters(), lr=kwargs.get("critic_lr", 1e-3), eps=1e-5)
 
         elif mode == "q_net":
-            assert q_network is not None, "q_network 不能为 None"
+            assert q_network is not None, "q_network must not be None"
             self.q_network = q_network.to(self.device)
             self.q_optimizer = torch.optim.Adam(
                 self.q_network.parameters(), lr=kwargs.get("q_lr", 3e-4), eps=1e-5)
@@ -288,13 +251,12 @@ class imi_trainer:
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        # Value Normalization（所有模式共用）
         self.use_value_norm = kwargs.get("use_value_norm", False)
         self.ret_mean = 0.0
         self.ret_std = 1.0
-        self.ret_count = 0  # 启发式数据中参与统计的真实样本数
+        self.ret_count = 0
 
-        # Logging 配置
+        # Configuration.
         self.track = kwargs.get("track", False)
         self.exp_name = kwargs.get("exp_name", "imi_train")
         self.run_name = f"{self.exp_name}__{int(time.time())}"
@@ -303,12 +265,10 @@ class imi_trainer:
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.save_model = kwargs.get("save_model", True)
 
-        # 初始化 tensorboard
         self.writer = SummaryWriter(f"runs/{self.run_name}")
         self.writer.add_text("hyperparameters",
             "|param|value|\n|-|-|\n" + "\n".join([f"|{k}|{v}|" for k, v in kwargs.items()]))
 
-        # 初始化 wandb (可选)
         if self.track:
             import wandb
             wandb.init(
@@ -318,25 +278,20 @@ class imi_trainer:
                 sync_tensorboard=True,
             )
 
-    # ------------------------------------------------------------------
-    # 公共入口
-    # ------------------------------------------------------------------
+    # Entry point.
+
     def train(self, data_path: str, batch_size: int = 32, iteration: int = 10):
-        """根据文件格式自动选择训练方法"""
-        # h5py/np.load 不认字面量 `~`，须展开为绝对路径
+
+        # h5py/np.load.
         data_path = os.path.abspath(os.path.expanduser(data_path))
         if data_path.endswith(".h5") or data_path.endswith(".hdf5"):
             self._train_from_hdf5(data_path, batch_size, iteration)
         else:
             self._train_from_npz(data_path, batch_size, iteration)
 
-    # ------------------------------------------------------------------
-    # NPZ 训练路径（全量加载）
-    # ------------------------------------------------------------------
     def _train_from_npz(self, data_path: str, batch_size: int, iteration: int):
-        """从 NPZ 文件训练（全量加载到内存）"""
         with np.load(data_path, mmap_mode="r") as data:
-            raw_mask = data["padded_mask"]    # [N, T, 1]
+            raw_mask = data["padded_mask"]    # [N, T, 1].
             N, T, _ = raw_mask.shape
             M = data["obs"].shape[2]
 
@@ -393,11 +348,7 @@ class imi_trainer:
 
             self.writer.close()
 
-    # ------------------------------------------------------------------
-    # HDF5 训练路径（按 episode 批量预读取）
-    # ------------------------------------------------------------------
     def _train_from_hdf5(self, data_path: str, batch_size: int, iteration: int):
-        """从 HDF5 文件训练（按 episode 批量预读取）"""
         episode_batch_size = min(500, 50000 // batch_size)
 
         with h5py.File(data_path, "r") as hf:
@@ -429,7 +380,7 @@ class imi_trainer:
                     sum_sq_ret += (ep_returns ** 2).sum()
                     count += ep_returns.size
                 if count == 0:
-                    raise ValueError("active_masks 中没有任何 active 样本，无法计算 value normalization")
+                    raise ValueError("active_masks contains no active samples for value normalization")
                 self.ret_mean = sum_ret / count
                 self.ret_std = np.sqrt(sum_sq_ret / count - self.ret_mean ** 2)
                 self.ret_count = int(count)
@@ -468,9 +419,6 @@ class imi_trainer:
 
             self.writer.close()
 
-    # ------------------------------------------------------------------
-    # 单 batch 更新（所有模式统一入口）
-    # ------------------------------------------------------------------
     def _step(self, data: dict, idx: np.ndarray, stats: dict):
         obs_batch = torch.tensor(data["obs"][idx], dtype=torch.float32, device=self.device)
         actions_batch = torch.tensor(data["actions"][idx], dtype=torch.long, device=self.device)
@@ -497,9 +445,7 @@ class imi_trainer:
                              normalized_returns, stats, value_mask_batch)
 
     def _step_actor(self, obs_batch, actions_batch, action_masks_batch, stats, active_mask=None):
-        """Actor BC 更新；有 active_mask 时只对 READY 步计算损失。"""
         def _compute_loss(logits, acts, mask):
-            """masked mean 负对数似然。"""
             per_sample = F.cross_entropy(logits, acts.squeeze(-1), reduction="none")
             if mask is not None:
                 m = mask.squeeze(-1)
@@ -536,7 +482,6 @@ class imi_trainer:
         stats["correct"] += (pred == actions_batch.squeeze(-1)).sum().item()
 
     def _step_critic(self, value_input, normalized_returns, stats, value_mask=None):
-        """Critic MSE 更新；有 active_mask 时只监督 READY 步。"""
         critic_pred = self.critic(value_input)
         if value_mask is not None:
             loss_per_sample = (critic_pred - normalized_returns) ** 2
@@ -558,18 +503,11 @@ class imi_trainer:
 
     def _step_q_net(self, obs_batch, actions_batch, action_masks_batch,
                     normalized_returns, stats, value_mask=None):
-        """Q-network BC + Value MSE 联合更新。
-
-        flat 训练：RNN 每步 hidden=None（自动 zero-init），不跨 timestep 传递 hidden state。
-        BC loss 让专家动作的 Q 值排名最高；Value loss 让专家动作的 Q 值逼近 return。
-        """
         _q_out = self.q_network(obs_batch)
-        q_all = _q_out[0] if isinstance(_q_out, tuple) else _q_out   # [B, action_dim]
+        q_all = _q_out[0] if isinstance(_q_out, tuple) else _q_out   # [B, action_dim].
 
-        # BC loss：对 Q logits 做 cross-entropy（等价于让专家动作的 Q 最大）
         bc_loss = F.cross_entropy(q_all, actions_batch.squeeze(-1))
 
-        # Value loss：专家动作对应 Q 值逼近真实 return
         q_taken = q_all.gather(1, actions_batch).squeeze(-1)
         if value_mask is not None:
             value_mask_1d = value_mask.squeeze(-1)
@@ -592,7 +530,7 @@ class imi_trainer:
         self.q_optimizer.step()
 
         n = len(obs_batch)
-        stats["actor_loss"] += bc_loss.item() * n      # actor_loss 字段复用于 q_net bc_loss
+        stats["actor_loss"] += bc_loss.item() * n
         stats["value_loss"] += value_loss.item() * value_count
         stats["value_total"] += value_count
         stats["total"] += n
@@ -600,9 +538,6 @@ class imi_trainer:
             pred = q_all.argmax(dim=-1)
         stats["correct"] += (pred == actions_batch.squeeze(-1)).sum().item()
 
-    # ------------------------------------------------------------------
-    # 日志 & 早停
-    # ------------------------------------------------------------------
     def _log_and_check_early_stop(self, itr: int, iteration: int,
                                   stats: dict, global_step: int, start_time: float):
         total = max(stats["total"], 1)
@@ -613,7 +548,6 @@ class imi_trainer:
         accuracy = stats["correct"] / total
         sps = int(global_step / (time.time() - start_time + 1e-8))
 
-        # 日志标签根据模式调整
         loss_tag = "q_bc_loss" if self.mode == "q_net" else "actor_loss"
         value_tag = "q_value_loss" if self.mode == "q_net" else "critic_loss"
         self.writer.add_scalar(f"losses/{loss_tag}", avg_actor_loss, itr)
@@ -629,7 +563,6 @@ class imi_trainer:
         print(f"[Iter {itr+1}/{iteration}] {loss_tag}: {avg_actor_loss:.4f}{actor_status}, "
               f"{value_tag}: {avg_value_loss:.4f}, acc: {accuracy:.4f}, SPS: {sps}")
 
-        # 早停（仅 actor 模式）
         if self.mode in ("actor_critic", "actor_only") and not self.actor_stopped:
             if avg_actor_loss < self.best_actor_loss - self.actor_min_delta:
                 self.best_actor_loss = avg_actor_loss
@@ -642,16 +575,8 @@ class imi_trainer:
                           f"Best actor_loss: {self.best_actor_loss:.6f}, acc: {accuracy:.4f}")
                     self._save_actor(avg_actor_loss, accuracy, itr + 1)
 
-    # ------------------------------------------------------------------
-    # 数据加载
-    # ------------------------------------------------------------------
     def _load_episodes_from_hdf5(self, hf: h5py.File, ep_indices: np.ndarray,
                                   flat_mask: np.ndarray) -> dict | None:
-        """从 HDF5 加载指定 episodes 的有效数据，展平为训练样本。
-
-        actor_critic 模式额外加载 value_input_key（critic_states 或 obs）。
-        q_net 模式只需要 obs（value_input_key 也是 obs）。
-        """
         obs_list, actions_list, masks_list, active_list, returns_list = [], [], [], [], []
         value_list = []
 
@@ -690,11 +615,7 @@ class imi_trainer:
             result[value_key] = np.concatenate(value_list, axis=0)
         return result
 
-    # ------------------------------------------------------------------
-    # 保存
-    # ------------------------------------------------------------------
     def _save_actor(self, actor_loss: float, actor_acc: float, stopped_iter: int):
-        """保存 best actor（HuggingFace style）"""
         actor_dir = self.save_dir / f"{self.run_name}_actor_best"
         actor_dir.mkdir(parents=True, exist_ok=True)
 
@@ -721,12 +642,6 @@ class imi_trainer:
         print(f"[ImiTrainer] Saved best actor to {actor_dir}")
 
     def _save_checkpoint(self, stats: dict, total_iterations: int):
-        """保存最终 checkpoint（HuggingFace style）。
-
-        actor_critic: 保存 actor (policy.pt) + critic (critic.pt)
-        actor_only:   保存 actor (policy.pt)
-        q_net:        保存 Q-network (policy.pt)，格式与 train.py _load_pretrained 兼容
-        """
         ckpt_dir = self.save_dir / f"{self.run_name}_final"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -769,7 +684,7 @@ class imi_trainer:
             q_cfg = self.q_network.get_config_dict(
                 self.q_network.input_dim, self.q_network.output_dim)
             config = {
-                "actor": q_cfg,   # 以 "actor" key 保存，保持与 train.py _load_pretrained 格式一致
+                "actor": q_cfg,
                 "extra": {
                     "final_bc_loss": avg_loss,
                     "final_value_loss": avg_value_loss,
@@ -788,30 +703,28 @@ class imi_trainer:
             config = _ensure_native_types(config)
             with open(ckpt_dir / "config.yaml", "w") as f:
                 yaml.dump(config, f, default_flow_style=False)
-            # 保存权重到 policy.pt，train.py 通过 actor_path 指向此文件加载到 q_net
+
             torch.save(self.q_network.state_dict(), ckpt_dir / "policy.pt")
 
         print(f"[ImiTrainer] Saved final checkpoint to {ckpt_dir}")
 
     def _save_final(self, stats: dict, iteration: int):
-        """训练结束时的保存逻辑"""
         self._save_checkpoint(stats, iteration)
         if self.mode in ("actor_critic", "actor_only") and not self.actor_stopped:
             total = max(stats["total"], 1)
             self._save_actor(stats["actor_loss"] / total, stats["correct"] / total, iteration)
 
-
 if __name__ == "__main__":
     os.chdir(_project_root)
 
     parser = argparse.ArgumentParser(
-        description="Imitation learning trainer (支持 MAPPO/IPPO/VDPPO/IQL/VDN/QMIX)")
+        description="Imitation learning trainer for MAPPO/IPPO/VDPPO/IQL/VDN/QMIX")
     parser.add_argument("--config", type=str, default="configs/imitator/masup_mlp_grid.yaml",
-                        help="YAML 配置文件路径")
+                        help="Path to the YAML configuration file")
     parser.add_argument("--data_path", type=str, default=None,
-                        help="覆盖 config 中的 data_path")
+                        help="Override data_path from the configuration")
     parser.add_argument("--save-dir", type=str, default=None,
-                        help="模型保存目录（默认从配置读取，配置未指定时为项目 models 目录）")
+                        help="Model output directory (default: configuration value or project models directory)")
     args = parser.parse_args()
 
     cfg = load_imitator_config(args.config)

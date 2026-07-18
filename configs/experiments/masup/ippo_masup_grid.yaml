@@ -1,6 +1,3 @@
-# IPPO + MASUPEnv (grid) — masup_mlp 预处理网络
-# 用法: python train.py configs/experiments/masup/ippo_masup_grid.yaml
-
 algo_name: ippo
 env_type: masup
 actor_type: masup_mlp

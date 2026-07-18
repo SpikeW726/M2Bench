@@ -1,13 +1,6 @@
-# MAPPO + MPNN Actor + MASUPGraphEnv (grid) 超参数搜索
-# 用法:
 #   python sweep.py --base-config configs/experiments/masupgnn/mappo_masupgnn_grid.yaml \
 #                   --sweep-config configs/sweep/masupgnn/mappo_mpnn_masupgnn_grid.yaml \
 #                   --eval-config configs/eval/masupgnn/masupgnn_grid.yaml --count 40
-#
-# grid 图: 50 节点，均匀边权（均值≈2.2），6 agents，episode_len=500 模拟秒
-# steps_per_episode≈227，num_steps=512 可稳定覆盖多个 episode
-# GNN layers=2 覆盖 grid 直径，不必过深
-
 method: bayes
 
 metric:
@@ -52,12 +45,10 @@ parameters:
     min: 0.9
     max: 1.0
 
-  # grid 短 horizon，gamma 不必过高
   gamma:
     values: [0.97, 0.98, 0.99]
 
   # ---- OnPolicyTrainerConfig ----
-  # grid steps_per_episode≈227，512 足够
   num_steps:
     values: [256, 512, 1024]
 
@@ -67,7 +58,6 @@ parameters:
   update_epochs:
     values: [3, 5, 10]
 
-  # total_steps 由 experiment base 决定
   save_interval:
     value: 500
 

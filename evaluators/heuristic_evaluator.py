@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Evaluate one heuristic patrolling policy directly on PatrolWorld.
 
-Heuristic YAML files only define policy/eval defaults. Runtime environment
-settings are supplied by the command line.
-"""
 from __future__ import annotations
 
 import argparse
@@ -35,9 +31,7 @@ os.environ["MPLCONFIGDIR"] = str(matplotlib_config_dir)
 
 from utils.log_utils import aggregate_episode_metrics, plot_aggregated_metrics
 
-
 GRAPHS_DIR = project_root / "graphs"
-
 
 def load_patrol_world_class():
     module_path = project_root / "envs" / "mdps" / "patrol_core.py"
@@ -49,9 +43,7 @@ def load_patrol_world_class():
     spec.loader.exec_module(module)
     return module.PatrolWorld
 
-
 PatrolWorld = load_patrol_world_class()
-
 
 ENV_DEFAULTS: Dict[str, Any] = {
     "enable_wait": False,
@@ -63,7 +55,6 @@ ENV_DEFAULTS: Dict[str, Any] = {
     "edge_time_jitter_frac": 0.1,
     "edge_time_jitter_seed": None,
 }
-
 
 POLICY_MAP = {
     "ER": ("policies.heuritic.er", "ERPolicy"),
@@ -82,7 +73,6 @@ POLICY_MAP = {
     "CC": ("policies.heuritic.conscientious_cognitive", "ConscientiousCognitivePolicy"),
 }
 
-
 def _project_relative_or_absolute(path: Path) -> str:
     resolved = path.resolve()
     try:
@@ -90,16 +80,7 @@ def _project_relative_or_absolute(path: Path) -> str:
     except ValueError:
         return str(resolved)
 
-
 def resolve_graph_path(map_name_or_path: str) -> str:
-    """Resolve a graph name/path to a usable path.
-
-    Examples accepted by this function:
-      mapA
-      mapA.json
-      graphs/mapA.json
-      C:/somewhere/mapA.json
-    """
     raw = Path(map_name_or_path)
     raw_variants = [raw]
     if not raw.suffix:
@@ -127,9 +108,7 @@ def resolve_graph_path(map_name_or_path: str) -> str:
         f"Graph {map_name_or_path!r} was not found. Checked project root and {GRAPHS_DIR}."
     )
 
-
 def parse_key_value_overrides(values: Optional[List[str]]) -> Dict[str, Any]:
-    """Parse KEY=VALUE overrides, using YAML scalars/lists for VALUE."""
     overrides: Dict[str, Any] = {}
     for item in values or []:
         if "=" not in item:
@@ -141,7 +120,6 @@ def parse_key_value_overrides(values: Optional[List[str]]) -> Dict[str, Any]:
         overrides[key] = yaml.safe_load(raw_value)
     return overrides
 
-
 def default_save_plot(
     policy_name: str,
     graph_path: str,
@@ -149,7 +127,6 @@ def default_save_plot(
 ) -> str:
     map_name = Path(graph_path).stem
     return str(user_path(results_dir) / map_name / policy_name.lower() / f"{policy_name}_eval.png")
-
 
 def build_runtime_env_config(
     args: argparse.Namespace,
@@ -206,10 +183,7 @@ def build_runtime_env_config(
     cfg_dict["episode_len"] = episode_len
     return cfg_dict, custom_dict
 
-
 class HeuristicEvaluator:
-    """Evaluate a heuristic policy by interacting directly with PatrolWorld."""
-
     def __init__(
         self,
         world: PatrolWorld,
@@ -326,9 +300,7 @@ class HeuristicEvaluator:
     def _aggregate_metrics(self) -> Dict[str, Any]:
         return aggregate_episode_metrics(self.metrics_history)
 
-
 def create_policy(policy_name: str, num_agents: int, policy_config: Dict[str, Any]) -> HeuriticBasePolicy:
-    """Create a heuristic policy by name."""
     if policy_name not in POLICY_MAP:
         raise ValueError(f"Unknown policy: {policy_name}. Available: {list(POLICY_MAP.keys())}")
 
@@ -336,7 +308,6 @@ def create_policy(policy_name: str, num_agents: int, policy_config: Dict[str, An
     module = __import__(module_path, fromlist=[class_name])
     policy_class = getattr(module, class_name)
     return policy_class(num_agents, policy_config)
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -417,7 +388,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no_event_driven", action="store_true", help="Use fixed-frame animation.")
     parser.add_argument("--max_frames", type=int, default=None, help="Override eval.max_frames.")
     return parser
-
 
 def main() -> None:
     parser = build_parser()
@@ -506,7 +476,6 @@ def main() -> None:
             save_dir=save_dir,
             max_frames=max_frames,
         )
-
 
 if __name__ == "__main__":
     main()

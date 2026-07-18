@@ -1,10 +1,7 @@
-# NEP Q-table 评估配置 (SF / SFcrimemap)
-# 用法:
 #   python evaluators/test.py \
 #     --env_config configs/eval/nep/nep_SF.yaml \
 #     --model models/qtable-nep-SF/iter_1000 \
 #     --num_episodes 10
-
 algo_name: qtable
 env_type: nep
 
@@ -21,7 +18,7 @@ env:
 
 
 eval:
-  seed: 42              # 评估固定随机性；训练仍随机
+  seed: 42
   num_episodes: 10
   save_plot: evaluators/results/SF/qtable-nep/best_eval.png
   show_plot: false

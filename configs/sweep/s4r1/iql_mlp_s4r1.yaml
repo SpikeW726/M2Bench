@@ -1,24 +1,16 @@
-# IQL + MASUP SF 超参数搜索（独立 Q + sync_replay）
-#
-# SF 图要点: 边权大、T=200 死区、长 episode；与 QMIX SF sweep 对齐 collect/num_steps/warmup 量级。
-# num_steps 固定 512（每 env / iter），避免小值导致单 iter 内完不成 episode → reward N/A。
-#
-# 用法:
 #   python sweep.py --base-config configs/experiments/masup/iql_masup_SF.yaml \
 #                   --sweep-config configs/sweep/masup/iql_masup_SF.yaml --count 40
-
 method: bayes
 
 metric:
   name: eval/wi_fromT
   goal: minimize
 
-# ---- 自定义早停 ----
 early_terminate:
   min_trial: 6
   min_steps: 15000000
   terminate_ratio: 0.4
-  early_stop_iters: 500  
+  early_stop_iters: 500
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5
 

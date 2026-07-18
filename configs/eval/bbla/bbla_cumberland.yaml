@@ -1,4 +1,3 @@
-# bbla @ cumberland 评估配置
 algo_name: qtable
 env_type: bbla
 
@@ -14,7 +13,7 @@ env:
     truncate_by_time: true
 
 eval:
-  seed: 42              # 评估固定随机性；训练仍随机
+  seed: 42
   num_episodes: 10
   save_plot: evaluators/results/cumberland/qtable_bbla/best_eval.png
   show_plot: false

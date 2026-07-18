@@ -1,13 +1,6 @@
-# VDPPO + GRU Actor/Q + OUCSEnv (grid) 超参数搜索
-# 用法:
 #   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_grid.yaml \
 #                   --sweep-config configs/sweep/oucs/vdppo_gru_oucs_grid.yaml \
 #                   --eval-config configs/eval/oucs/oucs_grid.yaml --count 40
-#
-# grid 图: 50 节点，8 agents，均匀边权（均值≈2.2），episode_len=500 模拟秒（FixedStepEnv）
-# steps_per_episode ≈ 500 步，gamma=0.99 已够，不必过高（比 SF=0.999 低）
-# rollout num_steps=2048 → 覆盖约 4 个 episode（充分）
-
 method: bayes
 
 metric:
@@ -48,7 +41,6 @@ parameters:
     min: 0.1
     max: 1.0
 
-  # grid 短 horizon，gamma 不必过高
   gamma:
     values: [0.99, 0.999]
 
@@ -73,7 +65,6 @@ parameters:
   update_epochs:
     values: [3, 5, 10]
 
-  # grid episode 完成频繁，num_steps 不必过大
   num_steps:
     values: [512, 1024]
 

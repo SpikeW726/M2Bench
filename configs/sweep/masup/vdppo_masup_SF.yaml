@@ -1,12 +1,5 @@
-# VDPPO + MASUP SF 超参数搜索
-# 基线 configs/experiments/masup/vdppo_masup_SF.yaml 已含：
-#   masup_mlp / masup_vdppo_rnn、env.norm_reward、actor/q_network 预处理字段。
-# sweep 仅覆盖 algo / training / custom_configs.*（见 apply_sweep_overrides）。
-#
-# 用法:
 #   python sweep.py --base-config configs/experiments/masup/vdppo_masup_SF.yaml \
 #                   --sweep-config configs/sweep/masup/vdppo_masup_SF.yaml --count 40
-
 method: bayes
 
 metric:
@@ -17,7 +10,6 @@ parameters:
   seed:
     value: 42
 
-  # 与基线 YAML 一致（MASUP 预处理 + VDPPO RNN Q）；勿改为 mlp/rnn 以免与 actor/q_network 段不匹配
   actor_type:
     value: masup_mlp
   q_type:
@@ -81,11 +73,10 @@ parameters:
   save_interval:
     value: 500
 
-# ---- 自定义早停 ----
 early_terminate:
-  min_trial: 4             # 前 N 个 trial 仅建立 milestone 基准
-  min_steps: 10000000       # 达到该 env steps 后做 cross-trial 比较
-  terminate_ratio: 0.5     # 指标不在前 40% 则早停（可根据地图特性调整）
-  early_stop_iters: 100  # trial 内至少运行 N iters 后启用 slope 检查
+  min_trial: 4
+  min_steps: 10000000
+  terminate_ratio: 0.5
+  early_stop_iters: 100
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5

@@ -1,16 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-DTAGreedy (Distributed Tabu-list Adaptive Greedy) 启发式策略 - 多智能体版本
+"""Distributed Tabu-list Adaptive Greedy (DTA-Greedy) policy.
 
-与旧 MultiAgentPatrolling 中 DTAGreedyAgent 对齐：
-  base = 1.5 * idl + tabu_penalty + 0.2 * (idl - global_mean)
-  若其他 agent 占据该节点：base *= 0.3
-  随机扰动：仅当 stochastic=True 且 score_jitter>0 时，对每条候选分数乘
-  Uniform(1-jitter, 1+jitter)（对应旧代码中 evaluation_mode=False 时的训练期扰动；
-  评估/可复现运行请设 stochastic=False。）
-
-per-agent 独立 tabu：每次决策后将 current_node 加入该 agent 的 tabu。
+The base score combines idleness, a tabu penalty, and deviation from global mean
+idleness. Occupied candidates are discounted. Optional multiplicative jitter is
+used only in stochastic mode, and each agent maintains an independent tabu list.
 """
+
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,16 +13,7 @@ import numpy as np
 
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
 
-
 class DTAGreedyPolicy(HeuriticBasePolicy):
-    """
-    DTAGreedy 启发式策略（多智能体版本）。
-
-    设计：
-    - compute_actions: 并发处理所有 READY agents
-    - _compute_base_scores: 无随机性的基础分（子类 SSI 可再叠一层噪声）
-    """
-
     def __init__(self, num_agents: int, config: Dict):
         super().__init__(num_agents, config)
 
@@ -35,7 +21,7 @@ class DTAGreedyPolicy(HeuriticBasePolicy):
 
         self.tabu_length: int = int(config.get("tabu_length", ap.get("tabu_length", 5)))
         self.score_jitter: float = float(config.get("score_jitter", ap.get("score_jitter", 0.1)))
-        # 对应旧版 evaluation_mode=False 时才加 Greedy 扰动；为 False 时不加（可复现评估）
+
         self.stochastic: bool = bool(config.get("stochastic", ap.get("stochastic", False)))
 
         self._tabu_lists: Dict[int, List[int]] = {}
@@ -71,12 +57,6 @@ class DTAGreedyPolicy(HeuriticBasePolicy):
         obs: Dict[str, Any],
         global_state: Dict[str, Any],
     ) -> Optional[Tuple[np.ndarray, int, List[int]]]:
-        """
-        计算各邻居的基础分（无 Greedy/SSI 随机层）。
-
-        Returns:
-            (scores, current_node, tabu_list) 或 None
-        """
         neighbors = obs.get("neighbors", [])
         if not neighbors:
             return None
@@ -107,7 +87,6 @@ class DTAGreedyPolicy(HeuriticBasePolicy):
         return scores, current_node, tabu
 
     def _apply_dta_greedy_score_noise(self, scores: np.ndarray) -> None:
-        """与旧版一致：仅 stochastic 且 score_jitter>0 时逐候选乘 (1±jitter) 均匀扰动。原地修改。"""
         if not self.stochastic or self.score_jitter <= 0.0:
             return
         lo, hi = 1.0 - self.score_jitter, 1.0 + self.score_jitter

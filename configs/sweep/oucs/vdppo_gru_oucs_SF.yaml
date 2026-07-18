@@ -1,16 +1,9 @@
-# VDPPO + GRU Actor/Q + OUCSEnv + SFcrimemap 超参数搜索
-# Base 与 SF 图、episode_len、num_agents 等与 eval/oucs/oucs_SF.yaml 对齐。
-#
-# 创建并跑 N 个 trial:
 #   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_SF.yaml \
 #                   --sweep-config configs/sweep/oucs/vdppo_gru_oucs_SF.yaml --count 40
-#
-# 仅创建 sweep（多终端并行 agent）:
 #   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_SF.yaml \
 #                   --sweep-config configs/sweep/oucs/vdppo_gru_oucs_SF.yaml --create-only
 #   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_SF.yaml \
 #                   --sweep-id <ID> --count 15
-
 method: bayes
 
 metric:

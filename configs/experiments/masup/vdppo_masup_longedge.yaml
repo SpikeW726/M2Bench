@@ -1,19 +1,14 @@
 # VDPPO + GRU + MASUPEnv (LongEdge)
-# 用法: python train.py configs/experiments/masup/vdppo_masup_longedge.yaml
-
-# ---- 分发字段 ----
 algo_name: vdppo
 env_type: masup
 actor_type: rnn
 q_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: vdppo-longedge
 graph_name: long_edge
 track_wandb: true
 wandb_project: MAP-RL
 
-# ---- 环境 ----
 env:
   graph_path: graphs/long_edge.json
   enable_wait: true
@@ -30,7 +25,6 @@ env:
     idi_scale: 0.05
     contribution_scale: 0.05
 
-# ---- 算法 ----
 algo:
   use_active_mask: true
   actor_lr: 0.0008729125567828052
@@ -47,7 +41,6 @@ algo:
   mixer_embed_dim: 64
   data_chunk_length: 10
 
-# ---- 训练 ----
 training:
   num_envs: 24
   use_subproc: true
@@ -58,7 +51,6 @@ training:
   update_epochs: 10
   eval_interval: 10
 
-# ---- 网络 ----
 actor:
   rnn_type: gru
   hidden_size: 64

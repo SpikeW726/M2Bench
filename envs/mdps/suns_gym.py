@@ -1,9 +1,8 @@
-"""SUNSGymEnv — JointEventDrivenEnv 版本的 SUNS 环境，用于单智能体 RL 训练。
+"""Single-agent Gymnasium adapter for the SUNS patrol environment.
 
-与 SUNSEnv(ParallelEnv) 共享同一套观测/奖励/截断逻辑，
-但遵循标准 gymnasium.Env 接口，可直接搭配 OnPolicyCollector + A2C/PPO。
-
-多智能体评估仍使用 SUNSEnv(ParallelEnv)。
+It shares observation, reward, and truncation semantics with the parallel
+``SUNSEnv`` but exposes the standard Gymnasium API for A2C and PPO collectors.
+Multi-agent evaluation continues to use ``SUNSEnv``.
 """
 
 from typing import Dict, Optional
@@ -14,13 +13,11 @@ from gymnasium.spaces import Box, Discrete
 from envs.mdps.patrol_core import TickResult
 from envs.mdps.base_envs import JointEventDrivenEnv
 
-
 class SUNSGymEnv(JointEventDrivenEnv):
-
     def __init__(self, config: Dict, **kwargs):
-        super().__init__(config)   # 创建 self.world
+        super().__init__(config)
         assert self.world.num_agents == 1, (
-            "SUNSGymEnv 仅支持 1 个智能体，多智能体请用 SUNSEnv(ParallelEnv)"
+            "SUNSGymEnv supports only one agent; use SUNSEnv (ParallelEnv) for multiple agents"
         )
 
         self.episode_len = config["episode_len"]
@@ -37,7 +34,7 @@ class SUNSGymEnv(JointEventDrivenEnv):
             for j, w in self.world.graph.adj_list[i]:
                 self.weight_mat[self._node_to_idx[i], self._node_to_idx[j]] = w
         self._weight_mat_flat = self.weight_mat.flatten()
-        # phi 向量 + 节点特征 buffer (加速 _build_obs)
+
         self._phi_vec = np.array(
             [float(self.world.graph.phi.get(n, 1.0)) for n in ordered_nodes],
             dtype=np.float32,
@@ -52,7 +49,6 @@ class SUNSGymEnv(JointEventDrivenEnv):
                 "max_time_for_obs", self.episode_len * self.world.max_edge_length
             )
 
-        # gymnasium 标准 spaces (property，非方法)
         idleness_upper = self.max_time_for_obs * self.world.max_phi * 1.1
         node_low = [0.0, 0.0] * N
         node_high = [idleness_upper, self.world.max_path_length] * N
@@ -66,27 +62,16 @@ class SUNSGymEnv(JointEventDrivenEnv):
         )
         self.action_space = Discrete(N)
 
-    # ------------------------------------------------------------------
-    #  gymnasium.Env 标准接口
-    # ------------------------------------------------------------------
-
     def reset(self, seed=None, options=None):
-        # 直接调 gymnasium.Env.reset 处理 seed，再用 init_pos 重置 world
         gymnasium.Env.reset(self, seed=seed)
         self.world.reset(initial_positions=self.init_pos if self.init_pos else None, seed=seed)
         return self._build_obs(None), self._build_info(None)
 
-    # ------------------------------------------------------------------
-    #  JointBaseEnv 抽象方法实现
-    # ------------------------------------------------------------------
-
     def _dispatch_actions(self, action: int):
-        """将节点索引动作提交给 world（全图路由）。"""
         target_node = self._ordered_nodes[action]
         self.world.set_route_action(0, target_node)
 
     def _build_obs(self, result: Optional[TickResult]) -> np.ndarray:
-        """构建观测：[node_features_flat(2N), weight_mat_flat(N²)]"""
         idle_vals = np.array(
             [float(self.world.node_idleness[n]) for n in self._ordered_nodes],
             dtype=np.float32,
@@ -109,10 +94,6 @@ class SUNSGymEnv(JointEventDrivenEnv):
 
     def _compute_truncation(self) -> bool:
         return self._is_truncated()
-
-    # ------------------------------------------------------------------
-    #  内部辅助
-    # ------------------------------------------------------------------
 
     def _is_truncated(self) -> bool:
         if self.truncate_by_time:

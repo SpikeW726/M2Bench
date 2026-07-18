@@ -1,21 +1,14 @@
-# A2C + SUNSGymEnv (TSP12) — 单智能体训练 (论文复现)
-# 训练: python train.py configs/experiments/a2c_suns_tsp12.yaml
-# 多智能体评估: 使用 configs/eval/suns/suns_tsp12.yaml (env_type: suns)
-
-# ---- 分发字段 ----
 algo_name: a2c
 env_type: suns_gym
 actor_type: sun
 critic_type: sun
 
-# ---- 实验元信息 ----
 exp_name: a2c-suns
 graph_name: TSP12
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: false
@@ -27,7 +20,6 @@ env:
   custom_configs:
     truncate_by_time: true
 
-# ---- 算法 ----
 algo:
   lr: 7.0e-4
   gamma: 0.99
@@ -35,7 +27,6 @@ algo:
   vf_coef: 0.5
   ent_coef: 0.01
 
-# ---- 训练 ----
 training:
   num_envs: 12
   use_subproc: true
@@ -46,7 +37,6 @@ training:
   update_epochs: 1
   eval_interval: 10
 
-# ---- 网络 (SUN: f1 2→4→1, f2 3→6→1) ----
 actor:
   num_nodes: 12
   node_feat_dim: 2

@@ -1,22 +1,13 @@
-# MAPPO + MPNN + MASUPGraphEnv (masup_gnn) 超参数搜索（通用，覆盖 TSP12 / longedge / SF 图）
-#
-# 用法（TSP12，imi-init 权重）:
 #   python sweep.py \
 #     --base-config configs/experiments/masupgnn/mappo_mpnn_masupgnn_tsp12_sweep.yaml \
 #     --sweep-config configs/sweep/masupgnn/mappo_mpnn_masupgnn.yaml \
 #     --eval-config configs/eval/masupgnn/masup_gnn_tsp12.yaml \
 #     --count 40
-#
-# 用法（SF，从零训练）:
 #   python sweep.py \
 #     --base-config configs/experiments/masupgnn/mappo_masupgnn_SF.yaml \
 #     --sweep-config configs/sweep/masupgnn/mappo_mpnn_masupgnn.yaml \
 #     --eval-config configs/eval/masupgnn/masupgnn_SF.yaml \
 #     --count 40
-#
-# total_steps 由各 base_config 的 training.total_steps 决定（避免覆盖不同图预算）
-# SF: steps_per_episode≈330 (EventDrivenEnv)，num_steps [1024,2048,4096] 均可正常记录 reward
-
 method: bayes
 
 metric:
@@ -63,7 +54,6 @@ parameters:
   num_steps:
     values: [1024, 2048, 4096]
 
-  # total_steps 由各 experiment base（tsp12/longedge/SF）的 training.total_steps 决定，避免覆盖图相关预算
 
   save_interval:
     value: 400

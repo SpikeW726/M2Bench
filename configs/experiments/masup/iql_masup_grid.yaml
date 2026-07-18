@@ -1,9 +1,3 @@
-# IQL + MASUPEnv (grid) — masup_q_mlp 预处理 Q-network，启用 sync_replay
-# 用法: python train.py configs/experiments/masup/iql_masup_grid.yaml
-#
-# grid 图: 49 节点 (7×7)，边权均匀，6 agents
-# IQL: 独立 Q-network，sync_replay=true 对齐决策步
-
 algo_name: iql
 env_type: masup
 q_type: masup_q_mlp
@@ -56,7 +50,6 @@ training:
   eval_interval: 5
 
 q_network:
-  # ===== MASUP 异构预处理参数 =====
   graph_path: graphs/grid.json
   num_agents: 6
   num_nodes: 50
@@ -65,6 +58,5 @@ q_network:
   proj_dim: 16
   use_log_idleness: false
   T_time: 50.0
-  # ===== Q-network 主干参数 =====
   hidden: [256, 256]
   dueling: false

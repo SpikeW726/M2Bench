@@ -1,29 +1,14 @@
-# A2C + SUNSGymEnv (grid) — 单智能体训练，评估用 configs/eval/suns/suns_grid.yaml（3 agents 共享策略）
-# 训练: python train.py configs/experiments/suns/a2c_suns_grid.yaml
-#
-# grid 图特性:
-#   50 节点，max_degree=7，边权 2~6（均值≈2.2），phi 全 1
-#   EventDrivenEnv (单智能体): 每步推进到该智能体到达事件
-#   steps_per_episode ≈ 500/2.2 ≈ 227 步
-#   → num_steps=1024 可覆盖 ~4 个 episode
-#
-# obs_dim = node_feat_dim × num_nodes + num_nodes² = 2×50 + 50×50 = 2600
-# 注意: 训练 init_positions=[1]，评估 init_positions=[1, 25, 50]（3 agents 评估）
-
-# ---- 分发字段 ----
 algo_name: a2c
 env_type: suns_gym
 actor_type: sun
 critic_type: sun
 
-# ---- 实验元信息 ----
 exp_name: a2c-suns-grid
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/grid.json
   enable_wait: false
@@ -35,7 +20,6 @@ env:
   custom_configs:
     truncate_by_time: true
 
-# ---- 算法 ----
 algo:
   lr: 7.0e-4
   gamma: 0.98
@@ -43,8 +27,6 @@ algo:
   vf_coef: 0.5
   ent_coef: 0.01
 
-# ---- 训练 ----
-# step_per_iteration = 12 × 1024 = 12288
 # max_iterations = ceil(20M / 12288) = 1628
 training:
   num_envs: 48
@@ -56,8 +38,6 @@ training:
   update_epochs: 1
   eval_interval: 10
 
-# ---- 网络 (SUN: f1 2→4→1, f2 3→6→1) ----
-# grid: 50 节点，node_feat_dim=2，obs_dim=2600
 actor:
   num_nodes: 50
   node_feat_dim: 2

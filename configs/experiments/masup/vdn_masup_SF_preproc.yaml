@@ -1,6 +1,3 @@
-# VDN + MASUPEnv (SF / SFcrimemap) + MASUP 异构预处理
-# 用法: python train.py configs/experiments/masup/vdn_masup_SF_preproc.yaml
-
 algo_name: vdn
 env_type: masup
 q_type: masup_q_mlp
@@ -54,7 +51,6 @@ training:
   eval_interval: 25
 
 q_network:
-  # ===== MASUP 异构预处理参数 =====
   graph_path: graphs/SFcrimemap.json
   num_agents: 3
   num_nodes: 12
@@ -63,6 +59,5 @@ q_network:
   proj_dim: 16
   use_log_idleness: false
   T_time: 200.0
-  # ===== Q-network 主干参数 =====
   hidden: [256, 256]
   dueling: false

@@ -1,9 +1,6 @@
-# GBLA Q-table 评估配置 (LongEdge)
-# 用法:
 #   python evaluators/test.py \
 #     --env_config configs/eval/gbla/gbla_longedge.yaml \
 #     --model models/qtable-gbla-longedge/iter_500
-
 algo_name: qtable
 env_type: gbla
 

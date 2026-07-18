@@ -1,14 +1,9 @@
-# VDPPO + GRU + MASUPEnv 超参数搜索
-# 用法:
 #   python sweep.py --base-config configs/experiments/masup/vdppo_masup_longedge.yaml \
 #                   --sweep-config configs/sweep/masup/vdppo_masup.yaml --count 40
-#
-# 并行:
 #   python sweep.py --base-config configs/experiments/masup/vdppo_masup_longedge.yaml \
 #                   --sweep-config configs/sweep/masup/vdppo_masup.yaml --create-only
 #   python sweep.py --base-config configs/experiments/masup/vdppo_masup_longedge.yaml \
 #                   --sweep-id <ID> --count 15
-
 method: bayes
 
 metric:
@@ -16,13 +11,11 @@ metric:
   goal: minimize
 
 parameters:
-  # ---- VDPPOParams: actor 优化器 ----
   actor_lr:
     min: 0.00005
     max: 0.002
     distribution: log_uniform_values
 
-  # ---- VDPPOParams: Q 优化器 ----
   q_lr:
     min: 0.0001
     max: 0.003
@@ -50,7 +43,6 @@ parameters:
     min: 0.9
     max: 1.0
 
-  # ---- VDPPOParams: target 网络 ----
   tau:
     min: 0.01
     max: 0.5
@@ -62,7 +54,6 @@ parameters:
   mixer_embed_dim:
     values: [32, 64, 128]
 
-  # ---- RNN chunk 长度 ----
   data_chunk_length:
     values: [8, 10, 16]
 

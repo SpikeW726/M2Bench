@@ -1,9 +1,7 @@
-"""
-统一训练入口：从 YAML 配置文件启动训练。
+"""Unified training entry point for YAML experiment configurations.
 
-用法:
-    python train.py configs/experiments/mappo_tsp12_imi.yaml
-    python train.py configs/experiments/mappo_tsp12_scratch.yaml
+Run ``python train.py <experiment.yaml>`` to construct the environment, policy,
+algorithm, collector, and trainer registered by the configuration.
 """
 
 import math
@@ -47,24 +45,15 @@ from trainers.sweep_early_stopper import SweepEarlyStop
 from utils.model_io import save_model
 from utils.project_paths import user_path
 
-# WandB：同一进程内多次 train 时按 run.id 重新注册 step 轴
 _WANDB_ENV_STEP_AXIS_RUN_ID: Optional[str] = None
 
-
 def _wandb_init_settings():
-    """WandB 初始化设置；AutoDL 等弱网环境可通过 WANDB_INIT_TIMEOUT 加大超时（秒）。"""
     import wandb
 
     timeout = int(os.environ.get("WANDB_INIT_TIMEOUT", "300"))
     return wandb.Settings(init_timeout=timeout)
 
-
 def _wandb_fix_broken_local_proxy() -> dict[str, str]:
-    """AutoDL 学术加速未开启时 HTTPS_PROXY 指向死端口，会导致 wandb init 重试至超时。
-
-    探测本地代理不可达时临时移除代理环境变量（直连 api.wandb.ai 通常可用）。
-    返回被移除的变量，供调用方在 trial 结束后恢复。
-    """
     from urllib.parse import urlparse
     import socket
 
@@ -94,12 +83,7 @@ def _wandb_fix_broken_local_proxy() -> dict[str, str]:
         )
         return saved
 
-
 def _configure_wandb_env_step_axis() -> None:
-    """注册 global_step 为自定义横轴指标；实际主横轴由 SimpleLogger 的 wandb.log(..., step=) 锁定为环境步数。
-
-    不传 step= 时 WandB 会对每次 log 自增内部计数 → 横轴变成 iteration，与 sweep/直连 train 路径均会不一致。
-    """
     global _WANDB_ENV_STEP_AXIS_RUN_ID
     import wandb
 
@@ -112,34 +96,21 @@ def _configure_wandb_env_step_axis() -> None:
     wandb.define_metric("*", step_metric="global_step")
     _WANDB_ENV_STEP_AXIS_RUN_ID = rid
 
-
-# =============================================================================
-#                          随机种子
-# =============================================================================
-
-
 def _set_training_random_seed(seed: int) -> None:
-    """固定 Python / NumPy / PyTorch RNG（训练可复现）。"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-
 def _maybe_seed_vec_env(vec_env, seed: Optional[int]) -> None:
     if seed is None:
         return
     vec_env.seed(seed)
 
-
-# =============================================================================
-#                              Logger
-# =============================================================================
+# Logger.
 
 class SimpleLogger:
-    """TensorBoard + wandb 日志包装"""
-
     def __init__(self, tb_writer: SummaryWriter, use_wandb: bool = False):
         self.tb_writer = tb_writer
         self.use_wandb = use_wandb
@@ -151,17 +122,13 @@ class SimpleLogger:
             import wandb
 
             _configure_wandb_env_step_axis()
-            # 必须传 step=：否则 WandB 用内部计数器（每次 log +1）→ 横轴变成 iter。
-            # define_metric 仅辅助 UI 选轴；与 step= 同时存在时以 step= 为准。
+
             payload = dict(data)
             gs = int(step)
             payload["global_step"] = gs
             wandb.log(payload, step=gs)
 
-
 class TrainingStageProfiler:
-    """按 iteration 聚合训练阶段耗时，CUDA 路径会同步以避免低估 GPU update。"""
-
     def __init__(self, device: torch.device, sync_cuda: Optional[bool] = None):
         self.device = device
         self.sync_cuda = (
@@ -184,7 +151,7 @@ class TrainingStageProfiler:
     def time_block(self, name: str):
         self._sync()
         start = time.perf_counter()
-        frame = [name, start, 0.0]  # name, start, nested_child_time
+        frame = [name, start, 0.0]  # name, start, nested_child_time.
         self._stack.append(frame)
         try:
             yield
@@ -205,35 +172,33 @@ class TrainingStageProfiler:
         if not self._iter_times:
             return {}
 
-        excl = dict(self._iter_times)          # exclusive：各阶段自身耗时，无重叠
-        incl = dict(self._iter_inclusive_times) # inclusive：含所有子阶段的墙钟时间
+        excl = dict(self._iter_times)
+        incl = dict(self._iter_inclusive_times)
         total_excl = sum(excl.values())
         metrics: Dict[str, float] = {
             "profile/iter_profiled_s": float(total_excl),
             "profile/cuda_synchronized": float(self.sync_cuda),
         }
-        # profile/{name}_s = inclusive（含子阶段），便于直接与其他 inclusive 指标对比
+        # profile/{name}_s = inclusive.
         all_names = set(excl) | set(incl)
         for name in all_names:
             inc_s = incl.get(name, excl.get(name, 0.0))
             exc_s = excl.get(name, 0.0)
             metrics[f"profile/{name}_s"] = float(inc_s)
-            # 百分比用 exclusive，保证所有叶节点之和 ≈ 100%
+
             metrics[f"profile_pct/{name}"] = (
                 float(100.0 * exc_s / total_excl) if total_excl > 0 else 0.0
             )
 
-        # _last_times 存 inclusive，供 format_last 打印有意义的时间
         self._last_times = {n: incl.get(n, excl.get(n, 0.0)) for n in all_names}
         self._iter_times.clear()
         self._iter_inclusive_times.clear()
         return metrics
 
     def format_last(self, top_k: int = 6) -> str:
-        """打印 inclusive 耗时 top-k，百分比相对于 exclusive 总量（不重叠）。"""
         if not self._last_times:
             return ""
-        excl = dict(self._total_times)  # 用累计 exclusive 做占比分母
+        excl = dict(self._total_times)
         total_excl = sum(
             v for k, v in excl.items()
             if k in self._last_times
@@ -248,18 +213,7 @@ class TrainingStageProfiler:
             parts.append(f"{name}={inc_s:.3f}s({pct:.0f}%)")
         return ", ".join(parts)
 
-
-# =============================================================================
-#                          辅助函数
-# =============================================================================
-
 def _wandb_env_metrics_from_finished(finished: list) -> Dict[str, float]:
-    """从各子环境 get_episode_metrics 返回值构造 WandB env/*。
-
-    可选字段（子类实现时写入）：
-    - wi_fromT → env/wi_fromT
-    - wait_ratio → env/wait_ratio（与 MASUP 终端 [WAIT_ACTIONS] 比例一致，enable_wait 场景）
-    """
     if not finished:
         return {}
     out: Dict[str, float] = {
@@ -271,28 +225,19 @@ def _wandb_env_metrics_from_finished(finished: list) -> Dict[str, float]:
     wi_t = [m["wi_fromT"] for m in finished if m.get("wi_fromT") is not None]
     if wi_t:
         out["env/wi_fromT"] = float(np.mean(wi_t))
-    # MASUP(enable_wait) 等在 get_episode_metrics 中返回 wait_ratio（上一完整 episode）
+
     wr = [m["wait_ratio"] for m in finished if "wait_ratio" in m]
     if wr:
         out["env/wait_ratio"] = float(np.mean(wr))
     return out
 
-
 def _infer_dims(vec_env, algo_name: str) -> dict:
-    """从向量化环境推断网络所需的各维度。
-
-    根据 is_parallel_env 分两条路径：
-    - PettingZoo (parallel): 多智能体 dict I/O，有 global_state
-    - Gymnasium (single): 集中式环境，obs 即全局观测
-    """
     if vec_env.is_parallel_env:
         return _infer_dims_parallel(vec_env, algo_name)
     else:
         return _infer_dims_single(vec_env)
 
-
 def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
-    """PettingZoo 多智能体环境维度推断。"""
     agent_ids = vec_env.agents
     num_agents = len(agent_ids)
     obs_space = vec_env.observation_space[agent_ids[0]]
@@ -305,9 +250,9 @@ def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
     states = vec_env.call_env_method("state")
     state_dim = len(states[0])
 
-    # MAPPO/VDPPO: centralized critic = global_state + agent one-hot
-    # IPPO: decentralized critic = per-agent obs（不依赖全局信息）
-    # 其余算法（MAA2C 等）: critic = global_state（无 one-hot）
+    # MAPPO/VDPPO: centralized critic = global_state + agent one-hot.
+    # IPPO: decentralized critic = per-agent obs.
+
     if algo_name in ("mappo", "vdppo"):
         critic_input_dim = state_dim + num_agents
     elif algo_name == "ippo":
@@ -326,15 +271,7 @@ def _infer_dims_parallel(vec_env, algo_name: str) -> dict:
         "critic_input_dim": critic_input_dim,
     }
 
-
 def _infer_dims_single(vec_env) -> dict:
-    """Gymnasium 集中式环境维度推断。
-
-    集中式环境将多智能体建模为单体问题：
-    - obs = 全局联合观测
-    - action = 联合动作
-    - 无 global_state（obs 本身即全局状态）
-    """
     obs_space = vec_env.observation_space
     action_space = vec_env.action_space
 
@@ -352,7 +289,6 @@ def _infer_dims_single(vec_env) -> dict:
         "critic_input_dim": obs_dim,
     }
 
-
 def _load_pretrained(
     actor_net,
     critic_net,
@@ -360,7 +296,6 @@ def _load_pretrained(
     critic_path: Optional[str],
     device,
 ) -> Optional[dict]:
-    """加载预训练权重，返回 value_norm_config（如果存在）。"""
     value_norm_config = None
 
     has_actor_path = actor_path and actor_net is not None
@@ -402,13 +337,7 @@ def _load_pretrained(
 
     return value_norm_config
 
-
 def _build_mat_policy(config: ExperimentConfig, dims: dict, device):
-    """构建 MAT 专属 MATMultiAgentPolicy（GATEncoder + MATDecoder）。
-
-    从 config.algo 获取超参（hidden_dim, num_heads, encoder_layers, decoder_heads）。
-    图结构（adj, node_coords, sorted_nodes）从 config.env 的 graph_path 读取。
-    """
     import json
     import numpy as np
     from networks.mat import GATEncoder, MATDecoder
@@ -420,7 +349,7 @@ def _build_mat_policy(config: ExperimentConfig, dims: dict, device):
 
     graph_path = custom.get("graph_path", getattr(env_cfg, "graph_path", None))
     if graph_path is None:
-        raise ValueError("[MAT] config.env.custom_configs 中必须包含 graph_path 字段")
+        raise ValueError("[MAT] config.env.custom_configs must contain graph_path")
 
     from utils.graph_layout import process_graph_file
     from pathlib import Path
@@ -482,7 +411,6 @@ def _build_mat_policy(config: ExperimentConfig, dims: dict, device):
           f"heads={num_heads}, layers={enc_layers}) + MATDecoder(n_agents={n_agents})")
     return policy
 
-
 def _build_policy(
     config: ExperimentConfig,
     dims: dict,
@@ -491,17 +419,12 @@ def _build_policy(
     q_net=None,
     device=None,
 ):
-    """根据环境类型和算法类型构建 Policy。
-
-    PettingZoo (parallel) → MultiAgentPolicy（包装多个 ActorPolicy / ValuePolicy）
-    Gymnasium (single) → 裸 ActorPolicy / ValuePolicy
-    """
     policy_type = get_policy_type(config.algo_name)
 
     if is_parallel:
-        # ---- 多智能体路径 ----
+
         if policy_type == "mat":
-            # MAT 专属路径：从 vec_env 获取图结构信息，构建 GATEncoder + MATDecoder
+
             return _build_mat_policy(config, dims, device)
         elif policy_type == "value":
             shared = getattr(config.algo, "shared_policy", False)
@@ -528,7 +451,7 @@ def _build_policy(
                 shared=shared,
             )
     else:
-        # ---- 单体路径（集中式 Gymnasium 环境） ----
+
         if policy_type == "value":
             return ValuePolicy(
                 obs_space=dims["obs_space"],
@@ -542,21 +465,12 @@ def _build_policy(
                 actor=actor_net,
             )
 
-
 def _build_collector(
     config: ExperimentConfig,
     algorithm,
     vec_env,
     dims: dict,
 ):
-    """根据环境类型和算法类型构建 Collector。
-
-    PettingZoo → MAOnPolicyCollector / MAOffPolicyCollector
-    Gymnasium  → OnPolicyCollector / OffPolicyCollector
-
-    Off-policy + RNN Q-network → SequenceReplayBuffer（R2D2 预切片）
-    Off-policy + MLP Q-network → ReplayBuffer
-    """
     trainer_type = get_trainer_type(config.algo_name)
     is_parallel = vec_env.is_parallel_env
 
@@ -565,15 +479,14 @@ def _build_collector(
         is_q_recurrent = getattr(algorithm, "is_recurrent", False)
 
         needs_state = config.algo_name in ("qmix",)
-        # VDN/QMIX 等值分解算法须用共享 indices 保证多 agent buffer 时间对齐
+
         needs_shared_indices = config.algo_name in ("vdn", "qmix")
 
-        # sync_replay 仅 IQL 生效
         sync_replay = (
             getattr(config.algo, "sync_replay", False)
             and config.algo_name == "iql"
         )
-        # VDN/QMIX MLP：shared_sync 与 IQL sync_replay 互斥（collector 路径二选一）
+        # VDN/QMIX MLP:shared_sync.
         shared_sync_vdq = (
             getattr(config.algo, "shared_sync", False)
             and needs_shared_indices
@@ -647,17 +560,12 @@ def _build_collector(
             return OffPolicyCollector(algorithm, vec_env, buffer)
     else:
         if get_policy_type(config.algo_name) == "mat":
-            # MAT 专属：决策步缓冲 collector
+
             return MATOnPolicyCollector(algorithm, vec_env, dims["num_agents"])
         elif is_parallel:
             return MAOnPolicyCollector(algorithm, vec_env)
         else:
             return OnPolicyCollector(algorithm, vec_env)
-
-
-# =============================================================================
-#                          Q-table 独立训练路径
-# =============================================================================
 
 def _train_qtable(
     config: ExperimentConfig,
@@ -665,12 +573,6 @@ def _train_qtable(
     early_stopper=None,
     results_dir: str = None,
 ):
-    """Q-table 独立训练路径：复用日志/环境，绕过 nn.Module 流水线。
-
-    根据环境类型自动分派：
-    - ParallelEnv → QTableTrainer（per-agent 独立 Q-table）
-    - Gymnasium Env → JointQTableTrainer（单一集中式 Q-table）
-    """
     from algorithms.tabular.qtable import QTablePolicy, QTableAlgo
     from trainers.qtable_trainer import QTableTrainer, JointQTableTrainer
 
@@ -691,7 +593,7 @@ def _train_qtable(
                 project=config.wandb_project,
                 name=config.run_name,
                 config=asdict(config),
-                # 与 sweep 一致：不同步 TB，避免重复曲线且横轴与 global_step 冲突
+
                 sync_tensorboard=False,
                 settings=_wandb_init_settings(),
             )
@@ -721,7 +623,7 @@ def _train_qtable(
     qtable_eval_meta = {
         "env_type": config.env_type,
         "agent_ids": list(vec_env.agents) if vec_env.is_parallel_env else ["agent_0"],
-        # 训练时的 custom_configs（含 sweep 覆盖），供自动评估复用。
+
         "train_env_custom_configs": dict(config.env.custom_configs or {}),
     }
 
@@ -733,7 +635,7 @@ def _train_qtable(
         best_metric_goal = "minimize"
 
     if vec_env.is_parallel_env:
-        # ParallelEnv：每个 agent 独立 Q-table
+
         action_dim = list(vec_env.action_space.values())[0].n
         agent_ids = vec_env.agents
         print(f"[Train] Q-table (parallel) mode: env={config.env_type}, "
@@ -744,7 +646,7 @@ def _train_qtable(
         }
         algo = QTableAlgo(policies, config.algo)
     else:
-        # Gymnasium Env：单一集中式 Q-table，虚拟 key "agent_0"
+
         action_dim = vec_env.action_space.n
         print(f"[Train] Q-table (joint) mode: env={config.env_type}, "
               f"action_dim={action_dim}, num_envs={tc.num_envs}")
@@ -845,22 +747,8 @@ def _train_qtable(
             wandb.finish()
     vec_env.close()
 
-
-# =============================================================================
-#                              主训练函数
-# =============================================================================
-
 def train(config: ExperimentConfig, eval_config_path: str = None,
           early_stopper=None, results_dir: str = None):
-    """
-    根据 ExperimentConfig 执行完整训练流程。
-
-    流程：环境 → 维度推断 → 网络 → 预训练加载 → Policy → 算法 → Collector → Trainer → 训练
-
-    Args:
-        config: 实验配置。
-        eval_config_path: 评估 YAML 路径；提供则训练结束后自动评估最终模型。
-    """
     if config.algo_name == "qtable":
         _train_qtable(
             config,
@@ -878,7 +766,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         _set_training_random_seed(config.seed)
         print(f"[Train] Random seed: {config.seed}")
 
-    # ---- 1. 日志初始化 ----
+    # Initialization.
     config.save_dir.mkdir(parents=True, exist_ok=True)
     config.log_dir.mkdir(parents=True, exist_ok=True)
     tb_writer = SummaryWriter(config.log_dir)
@@ -898,7 +786,6 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
 
     logger = SimpleLogger(tb_writer, use_wandb=config.track_wandb)
 
-    # ---- 2. 创建向量化环境 ----
     vec_env = create_vec_env(
         env_type=config.env_type,
         env_config=config.env,
@@ -909,13 +796,11 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     print(f"[Train] Created {tc.num_envs} vectorized {config.env_type} envs "
           f"({'subproc' if tc.use_subproc else 'dummy'})")
 
-    # 若启用了 obs 归一化，保留内层 wrapper 引用，供 checkpoint 和 eval 使用
     from envs.venv_wrappers import VectorEnvNormObs, find_vec_wrapper
     _obs_norm_wrapper: Optional[VectorEnvNormObs] = (
         find_vec_wrapper(vec_env, VectorEnvNormObs)
     )
 
-    # ---- 3. 推断维度 ----
     is_parallel = vec_env.is_parallel_env
     dims = _infer_dims(vec_env, config.algo_name)
 
@@ -923,7 +808,6 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     print(f"  Agents: {dims['agent_ids']}, Obs: {dims['obs_dim']}, "
           f"Act: {dims['action_dim']}, CriticIn: {dims['critic_input_dim']}")
 
-    # ---- 4. 创建网络（三路独立） ----
     actor_net = None
     critic_net = None
     q_net = None
@@ -957,7 +841,6 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             device=str(device),
         )
 
-    # ---- 5. 加载预训练权重 ----
     value_norm_config = None
     if trainer_type == "on_policy":
         value_norm_config = _load_pretrained(
@@ -966,17 +849,13 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             device,
         )
     elif trainer_type == "off_policy" and config.actor_path and q_net is not None:
-        # off-policy 加载模仿学习预训练的 Q-network 权重（复用 actor_path 字段）
+
         _load_pretrained(q_net, None, config.actor_path, None, device)
     else:
         print("[Train] Off-policy algorithm, skipping pretrained weight loading")
 
-    # ---- 6. 构建 Policy ----
     policy = _build_policy(config, dims, is_parallel, actor_net=actor_net, q_net=q_net, device=device)
 
-    # ---- 7. 构建算法 ----
-    # context_kwargs 池: 放入所有可能需要的运行时参数，
-    # create_algorithm 会根据算法 __init__ 签名自动过滤。
     context_kwargs = dict(
         num_envs=tc.num_envs,
         action_dim=dims["action_dim"],
@@ -1011,12 +890,10 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         **context_kwargs,
     )
 
-    # ---- 8. 构建 Collector ----
     collector = _build_collector(config, algorithm, vec_env, dims)
     profiler = TrainingStageProfiler(device)
     collector.profiler = profiler
 
-    # ---- 9. 定义 Callbacks ----
     def _make_net_config_dict(net, input_dim, output_dim):
         if net is None:
             return None
@@ -1036,15 +913,13 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     critic_config_dict = _make_net_config_dict(critic_net, dims["critic_input_dim"], 1)
     q_config_dict = _make_net_config_dict(q_net, dims["obs_dim"], dims["action_dim"])
 
-    # 评估时需要的元信息，写入 config.yaml 的 extra 段
     _eval_meta = {
         "algo_name": config.algo_name,
         "env_type": config.env_type,
         "policy_type": get_policy_type(config.algo_name),
         "shared_policy": getattr(config.algo, "shared_policy", True),
         "agent_ids": dims["agent_ids"],
-        # 训练时的 custom_configs（含 sweep 覆盖后的 idi_scale / contribution_scale 等）
-        # 评估时会从 config.yaml 读回并覆盖 eval yaml 里的同名字段，确保评估环境与训练一致
+
         "train_env_custom_configs": dict(config.env.custom_configs or {}),
     }
 
@@ -1059,7 +934,6 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         return {"enabled": False}
 
     def _get_obs_rms_state():
-        """序列化当前 obs_rms 统计量，供 checkpoint 写入和评估时还原。"""
         if _obs_norm_wrapper is None:
             return None
         from utils.model_io import running_mean_std_to_yaml_dict
@@ -1076,14 +950,12 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             pass
         return {}
 
-    # ---- 10. 构建 Trainer ----
-    # 若配置了 eval_config_path 且 eval_interval > 0，构建 inline eval 回调
     inline_eval_fn = None
     if eval_config_path and tc.eval_interval > 0:
         from evaluators.test import eval_policy_inline
         from configs.registry import load_eval_config
         _eval_env_type, _eval_env_cfg = load_eval_config(eval_config_path)
-        # 用训练时的 custom_configs 覆盖 eval yaml，保持 idi_scale 等参数一致
+
         _train_custom = dict(config.env.custom_configs or {})
         if _train_custom:
             _eval_env_cfg.custom_configs = {
@@ -1103,7 +975,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
                 obs_rms=_obs_norm_wrapper.get_obs_rms() if _obs_norm_wrapper is not None else None,
             )
 
-    # ---- best checkpoint 跟踪 ----
+    # best checkpoint.
     best_dir = config.save_dir / "best"
     _best_metric_name: str = (
         early_stopper.metric_name if early_stopper is not None else "eval/wi"
@@ -1156,7 +1028,7 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
         algorithm=algorithm,
         collector=collector,
         training_config=tc,
-        save_checkpoint_fn=None,   # 不再存周期性 iter_* 存档
+        save_checkpoint_fn=None,
         log_extra_fn=log_extra_fn,
         logger=logger,
         eval_fn=inline_eval_fn,
@@ -1164,22 +1036,20 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
     )
     trainer.save_best_fn = save_best_fn
 
-    # ---- 10.5. 若提供 early_stopper，patch trainer 的 log_extra_fn + on_eval_complete ----
     if early_stopper is not None:
         _orig_lef = trainer.log_extra_fn
         def _patched_lef():
             metrics = _orig_lef() if _orig_lef else {}
             if metrics:
                 early_stopper.record_metrics(metrics, trainer.total_steps)
-            # 每轮 log 都检查 slope；避免长 episode 下多轮无 env 指标时永远不触发 within-trial 逻辑
+
             early_stopper.check_and_maybe_raise(trainer.total_steps)
             return metrics
         trainer.log_extra_fn = _patched_lef
-        # 将 inline eval 产生的 eval/... 指标也喂给 early stopper
-        # 这样当 sweep metric 为 eval/wi_fromT 时，cross-trial 和 slope 检查均有数据来源
+
         trainer.on_eval_complete = early_stopper.record_metrics
 
-    # ---- 11. 训练 ----
+    # Training.
     print(f"\n[Train] Starting {config.algo_name.upper()} training")
     if tc.total_steps is not None:
         print(
@@ -1250,7 +1120,6 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
                 wandb.finish()
         vec_env.close()
 
-    # 训练结束后自动评估（早停 re-raise 不会执行到此）
     if eval_config_path:
         from evaluators.test import run_eval_from_config
         if _best_saved and best_dir.is_dir():
@@ -1261,25 +1130,22 @@ def train(config: ExperimentConfig, eval_config_path: str = None,
             print(f"\n[Train] No best checkpoint; auto-eval from final: {_eval_from}")
         run_eval_from_config(str(_eval_from), eval_config_path, results_dir=results_dir)
 
-
-# =============================================================================
-#                              入口
-# =============================================================================
+# Entry point.
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="MAP 统一训练入口")
+    parser = argparse.ArgumentParser(description="Unified MAP training entry point")
     parser.add_argument(
         "config",
         type=str,
-        help="YAML 配置文件路径 (例: configs/experiments/mappo_tsp12_imi.yaml)",
+        help="Path to a YAML configuration file (e.g. configs/experiments/mappo_tsp12_imi.yaml)",
     )
     parser.add_argument(
         "--eval-config",
         type=str,
         default=None,
-        help="评估配置 YAML 路径；提供则训练结束后自动评估最终模型",
+        help="Evaluation YAML path; evaluates the final model after training when provided",
     )
     parser.add_argument(
         "--save-dir",

@@ -1,7 +1,4 @@
 # VDPPO + OUCSEnv @ mapA
-# 图统计: nodes=50, directed_edges=210, max_out_degree=7, avg_edge=7.808, max_edge=22.000
-# 物理时间截断: episode_len=500, total_steps=40000000
-
 algo_name: vdppo
 env_type: oucs
 actor_type: rnn

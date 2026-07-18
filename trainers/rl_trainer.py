@@ -13,42 +13,32 @@ from configs.training_configs import (
 from data.collector import BaseCollector
 from data.batch import CollectResult
 
-
 class BaseTrainer(ABC):
-    """
-    训练器基类。
-
-    Terminology:
-        - iteration: 一次 collect-update 循环
-        - epoch: update 内部对同一批数据的遍历轮数（由 algorithm 控制）
-    """
-
     def __init__(
         self,
         algorithm: BaseAlgorithm,
         collector: BaseCollector,
         config: TrainerConfig,
-        # Callbacks（运行时对象，不适合放进 config）
+
         save_checkpoint_fn: Optional[Callable[[int], None]] = None,
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
         stop_fn: Optional[Callable[[float], bool]] = None,
         logger: Optional[Any] = None,
-        # Inline eval callback：() -> Dict[str, float]，返回指标由 trainer 负责记录
+        # Inline evaluation callback: () -> Dict[str, float].
         eval_fn: Optional[Callable[[], Dict[str, float]]] = None,
-        # 运行时 profiler：由 train.py 注入，避免污染 YAML 配置。
+
         profiler: Optional[Any] = None,
     ):
         self.algorithm = algorithm
         self.collector = collector
 
-        # 从 config 解包（RL 使用 effective_max_iterations 支持 total_steps 预算）
         self.max_iteration = config.effective_max_iterations
         self.step_per_iteration = config.step_per_iteration
         self.save_interval = config.save_interval
         self.verbose = config.verbose
         self.eval_interval = getattr(config, "eval_interval", 0)
 
-        # Callbacks
+        # Callbacks.
         self.save_checkpoint_fn = save_checkpoint_fn
         self.log_extra_fn = log_extra_fn
         self.stop_fn = stop_fn
@@ -56,18 +46,17 @@ class BaseTrainer(ABC):
         self.eval_fn = eval_fn
         self.profiler = profiler
 
-        # State
+        # State.
         self.iteration = 0
         self.total_steps = 0
         self.best_reward = -float('inf')
         self.start_time: float = 0.0
-        # 纯训练时长（不含 inline eval、checkpoint 等开销），用于计算 SPS
+
         self._train_elapsed: float = 0.0
-        # eval 完成时的外部 hook：(metrics: dict, total_steps: int) -> None
-        # 由 train.py 注入，用于将 eval 指标实时喂给 SweepEarlyStopper
+
         self.on_eval_complete: Optional[Callable] = None
-        # best checkpoint hook：(metrics: dict) -> None
-        # 由 train.py 注入；eval 指标创新高时写入 best/
+        # Best-checkpoint hook: (metrics: dict) -> None.
+
         self.save_best_fn: Optional[Callable[[Dict[str, float]], None]] = None
 
     @abstractmethod
@@ -81,7 +70,6 @@ class BaseTrainer(ABC):
         pass
 
     def _compute_sps(self) -> int:
-        # 只除以纯训练时长，不含 inline eval / checkpoint 等额外开销
         return int(self.total_steps / self._train_elapsed) if self._train_elapsed > 0 else 0
 
     def _update_best(self, mean_reward: float) -> bool:
@@ -114,7 +102,6 @@ class BaseTrainer(ABC):
             print(f"[Profile] {summary}")
 
     def _maybe_run_eval(self):
-        """若配置了 eval_fn 且当前 iteration 命中间隔，则执行 inline eval 并记录指标。"""
         if not self.eval_fn or self.eval_interval <= 0:
             return
         if self.iteration % self.eval_interval != 0:
@@ -131,11 +118,11 @@ class BaseTrainer(ABC):
         finally:
             self.algorithm.set_training_mode(True)
         if eval_metrics:
-            # eval 指标创新高时写入 best/（在 log 之前，确保 summary 与 wandb 顺序一致）
+
             if self.save_best_fn is not None:
                 self.save_best_fn(eval_metrics)
             self._log(eval_metrics)
-            # 将 eval 指标喂给 early stopper（供 cross-trial 和 slope 判断）
+
             if self.on_eval_complete is not None:
                 self.on_eval_complete(eval_metrics, self.total_steps)
             if self.verbose:
@@ -148,24 +135,13 @@ class BaseTrainer(ABC):
                 if self.verbose:
                     self._print_profile_summary()
 
-
 class OnPolicyTrainer(BaseTrainer):
-    """
-    On-policy 训练器 (PPO, A2C, MAPPO 等)。
-
-    每轮迭代：
-        1. Collect step_per_iteration 步 (eval mode)
-        2. Compute GAE (algorithm.prepare_batch)
-        3. Update (algorithm.update)
-        4. Clear buffer
-    """
-
     def __init__(
         self,
         algorithm: ActorCriticOnPolicyAlgo,
         collector: BaseCollector,
         config: OnPolicyTrainerConfig,
-        # Callbacks
+        # Callbacks.
         save_checkpoint_fn: Optional[Callable[[int], None]] = None,
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
         stop_fn: Optional[Callable[[float], bool]] = None,
@@ -184,7 +160,7 @@ class OnPolicyTrainer(BaseTrainer):
             eval_fn=eval_fn,
             profiler=profiler,
         )
-        # On-policy 特有参数
+
         self.minibatch_size = config.minibatch_size
         self.update_epochs = config.update_epochs
 
@@ -194,28 +170,28 @@ class OnPolicyTrainer(BaseTrainer):
         self.start_time = time.time()
 
         for self.iteration in range(1, self.max_iteration + 1):
-            # Checkpoint
+            # Checkpoint.
             if self.save_checkpoint_fn and self.iteration % self.save_interval == 0:
                 with self._profile("train/checkpoint"):
                     self.save_checkpoint_fn(self.iteration)
 
-            # Train one iteration
+            # Train one iteration.
             iter_result = self._train_iteration()
 
-            # Log
+            # Log.
             self._log_iteration(iter_result)
 
-            # Inline eval
+            # Inline eval.
             self._maybe_run_eval()
 
-            # Early stop
+            # Early stop.
             mean_reward = iter_result.get("mean_reward")
             if mean_reward is not None and self.stop_fn and self.stop_fn(mean_reward):
                 if self.verbose:
                     print(f"Early stopping at iteration {self.iteration}")
                 break
 
-        # Final checkpoint
+        # Final checkpoint.
         if self.save_checkpoint_fn:
             with self._profile("train/checkpoint"):
                 self.save_checkpoint_fn(self.iteration)
@@ -239,17 +215,17 @@ class OnPolicyTrainer(BaseTrainer):
         """Execute one collect-update iteration."""
         _iter_t0 = time.time()
 
-        # 1. Collect (eval mode)
+        # 1. Collect (eval mode).
         self.algorithm.set_training_mode(False)
         with self._profile("train/collect"):
             result = self.collector.collect(n_steps=self.step_per_iteration)
         self.total_steps += result.n_steps
 
-        # 2. Prepare batch (compute GAE)
+        # 2. Prepare batch (compute GAE).
         with self._profile("train/prepare_batch"):
             batch = self.algorithm.prepare_batch(result.batch)
 
-        # 3. Update (train mode)
+        # 3. Update (train mode).
         self.algorithm.set_training_mode(True)
         with self._profile("train/update"):
             stats = self.algorithm.update(
@@ -258,13 +234,13 @@ class OnPolicyTrainer(BaseTrainer):
                 update_epochs=self.update_epochs,
             )
 
-        # 4. Clear buffer
+        # 4. Clear buffer.
         with self._profile("train/reset_buffer"):
             self.collector.reset_buffer()
 
         self._train_elapsed += time.time() - _iter_t0
 
-        # 5. Build result dict
+        # 5. Build result dict.
         iter_result = {
             "stats": stats,
             "collect_result": result,
@@ -324,25 +300,13 @@ class OnPolicyTrainer(BaseTrainer):
             )
             self._print_profile_summary()
 
-
 class OffPolicyTrainer(BaseTrainer):
-    """
-    Off-policy 训练器 (DQN, IQL, VDQN, QMIX 等)。
-
-    ReplayBuffer 由 collector 持有（OffPolicyCollector / MAOffPolicyCollector），
-    Trainer 通过 collector.sample() / collector.can_sample() 访问。
-
-    每轮迭代：
-        1. collect() 采集少量 step 并自动存入 collector 内部的 buffer
-        2. collector.sample() 采样 → algorithm.update()
-    """
-
     def __init__(
         self,
         algorithm: BaseAlgorithm,
         collector: BaseCollector,
         config: OffPolicyTrainerConfig,
-        # Callbacks
+        # Callbacks.
         save_checkpoint_fn: Optional[Callable[[int], None]] = None,
         log_extra_fn: Optional[Callable[[], Dict[str, float]]] = None,
         stop_fn: Optional[Callable[[float], bool]] = None,
@@ -370,8 +334,8 @@ class OffPolicyTrainer(BaseTrainer):
         self.collector.reset()
         self.start_time = time.time()
 
-        # ---- Warmup: 填充 buffer 但不训练 ----
-        # warmup 步数计入 total_steps，以便 epsilon 衰减能正确以 warmup 为偏移量起算
+        # Training.
+
         if self.warmup_steps > 0:
             if self.verbose:
                 print(f"Warming up buffer with {self.warmup_steps} steps...")
@@ -391,7 +355,6 @@ class OffPolicyTrainer(BaseTrainer):
                     if self.verbose:
                         self._print_profile_summary()
 
-        # ---- 主训练循环 ----
         for self.iteration in range(1, self.max_iteration + 1):
             if self.save_checkpoint_fn and self.iteration % self.save_interval == 0:
                 with self._profile("train/checkpoint"):
@@ -400,7 +363,7 @@ class OffPolicyTrainer(BaseTrainer):
             iter_result = self._train_iteration()
             self._log_iteration(iter_result)
 
-            # Inline eval
+            # Inline eval.
             self._maybe_run_eval()
 
             mean_reward = iter_result.get("mean_reward")
@@ -472,7 +435,7 @@ class OffPolicyTrainer(BaseTrainer):
 
         if stats_list:
             log_data["train/loss"] = np.mean([s.loss for s in stats_list])
-            # 提取 off-policy 特有统计量
+
             for key in ("epsilon", "epsilon_mean", "q_mean", "q_max", "td_error"):
                 vals = [s.extra.get(key) for s in stats_list if s.extra.get(key) is not None]
                 if vals:

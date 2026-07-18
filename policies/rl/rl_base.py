@@ -6,25 +6,24 @@ import torch.nn as nn
 import gymnasium as gym
 from gymnasium.spaces import Box, Discrete, MultiBinary, MultiDiscrete
 
-
 class RLBasePolicy(nn.Module, ABC):
     """Base class for RL policies. Maps observations to actions."""
-    
+
     def __init__(self, obs_space: gym.Space, action_space: gym.Space):
         super().__init__()
         self.obs_space = obs_space
         self.action_space = action_space
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._training_mode = True
-        
-        # Determine action type
+
+        # Determine action type.
         if isinstance(action_space, (Discrete, MultiDiscrete, MultiBinary)):
             self._action_type: Literal["discrete", "continuous"] = "discrete"
         elif isinstance(action_space, Box):
             self._action_type = "continuous"
         else:
             raise ValueError(f"Unsupported action space: {action_space}")
-    
+
     @property
     def action_type(self) -> Literal["discrete", "continuous"]:
         return self._action_type
@@ -57,23 +56,23 @@ class RLBasePolicy(nn.Module, ABC):
         :return: action as int (for discrete env's) or array (for continuous ones).
         """
         obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
-        
+
         infer_ctx = torch.no_grad() if self.is_recurrent else torch.inference_mode()
         with infer_ctx:
             output = self.forward(obs_tensor, state=state, **kwargs)
-        
+
         act = output['act']
-        
-        # To numpy
+
+        # To numpy.
         act_np = act.cpu().numpy() if isinstance(act, torch.Tensor) else act
         act_np = self.map_action(act_np)
-        
+
         return act_np.squeeze(0) if obs.shape[0] == 1 else act_np, output
 
     def add_exploration_noise(self, act: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
         """Add exploration noise. Override in subclass."""
         return act
-    
+
     def map_action(self, act: np.ndarray) -> np.ndarray:
         """Map action to valid range. Override for custom mapping."""
         if isinstance(self.action_space, Box):
@@ -84,14 +83,8 @@ class RLBasePolicy(nn.Module, ABC):
         self._training_mode = mode
         self.train(mode)
 
-
-
 class ActorPolicy(RLBasePolicy):
-    """Policy for actor-critic algorithms (PPO, A2C, SAC, etc.).
-
-    当 actor 是 RNN 网络 (is_recurrent=True) 时，forward 自动穿透 hidden state，
-    并提供 evaluate_actions_sequence 用于 chunk-based 训练。
-    """
+    """Categorical actor policy with action masking and optional recurrence."""
 
     def __init__(
         self,
@@ -108,19 +101,9 @@ class ActorPolicy(RLBasePolicy):
     def is_recurrent(self) -> bool:
         return getattr(self.actor, "is_recurrent", False)
 
-    # -----------------------------------------------------------------
-    #  forward
-    # -----------------------------------------------------------------
+    # forward.
 
     def forward(self, obs: torch.Tensor, state=None, **kwargs) -> Dict[str, Any]:
-        """
-        Args:
-            obs: (batch, *obs_shape)
-            state: RNN hidden state (recurrent_N, batch, hidden_size) 或 None
-            kwargs: 'action_mask' 等
-        Returns:
-            dict with 'act', 'log_prob', 'dist', 'state'
-        """
         if self.is_discrete:
             return self._forward_discrete(obs, state, **kwargs)
         else:
@@ -136,22 +119,21 @@ class ActorPolicy(RLBasePolicy):
         action_mask = kwargs.get("action_mask", None)
         if action_mask is not None:
             mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
-            # 检测 mask 全 False（无合法动作）
+
             if not mask_t.any(dim=-1).all():
                 bad = (~mask_t.any(dim=-1)).nonzero(as_tuple=False).squeeze(-1).tolist()
                 raise RuntimeError(
-                    f"action_mask 全 False（无合法动作）: batch indices={bad}, "
+                    f"action_mask is all False (no valid action): batch indices={bad}, "
                     f"mask shape={mask_t.shape}"
                 )
             logits = logits.masked_fill(~mask_t, float("-inf"))
 
-        # 检测 logits 含 NaN（通常由梯度爆炸导致网络参数损坏）
         if torch.isnan(logits).any():
             nan_frac = torch.isnan(logits).float().mean().item()
             raise RuntimeError(
-                f"logits 含 NaN（梯度爆炸/网络参数损坏）: "
+                "logits contain NaN (possible gradient explosion or corrupted parameters): "
                 f"obs shape={obs.shape}, logits shape={logits.shape}, "
-                f"NaN 比例={nan_frac:.3f}"
+                f"NaN fraction={nan_frac:.3f}"
             )
 
         dist = torch.distributions.Categorical(logits=logits)
@@ -184,25 +166,16 @@ class ActorPolicy(RLBasePolicy):
 
         return {"act": act, "log_prob": log_prob, "mean": mean, "std": std, "dist": dist, "state": new_state}
 
-    # -----------------------------------------------------------------
-    #  evaluate_actions — MLP flat 路径 (不变)
-    # -----------------------------------------------------------------
+    # evaluate_actions - MLP flat.
 
     def evaluate_actions(self, obs: torch.Tensor, act: torch.Tensor, **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Evaluate given actions (MLP flat 路径)。
-
-        Returns:
-            (log_prob, entropy)
-        """
         if self.is_discrete:
             logits = self.actor(obs)
-            # 在 action masking 前检查原始 logits 是否含真正的 NaN/Inf
-            # masking 后的 -inf 是合法值（对应 ON_EDGE 或无效动作），不应视为错误
+
             if torch.isnan(logits).any() or (torch.isinf(logits) & (logits > 0)).any():
                 nan_frac = (~torch.isfinite(logits)).float().mean().item()
                 raise RuntimeError(
-                    f"evaluate_actions raw logits 含 NaN/+Inf: obs shape={obs.shape}, "
+                    f"evaluate_actions raw logits contain NaN/+Inf: obs shape={obs.shape}, "
                     f"logits shape={logits.shape}, bad_frac={nan_frac:.3f}"
                 )
             action_mask = kwargs.get("action_mask", None)
@@ -229,9 +202,7 @@ class ActorPolicy(RLBasePolicy):
 
         return log_prob, entropy
 
-    # -----------------------------------------------------------------
-    #  evaluate_actions_sequence — RNN chunk 路径
-    # -----------------------------------------------------------------
+    # evaluate_actions_sequence - RNN chunk.
 
     def evaluate_actions_sequence(
         self,
@@ -240,33 +211,22 @@ class ActorPolicy(RLBasePolicy):
         hidden_init: torch.Tensor,
         **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        RNN 序列 evaluate。用于 chunk-based PPO update。
-
-        Args:
-            obs_seq: (seq_len, batch, obs_dim)
-            act_seq: (seq_len, batch)
-            hidden_init: (recurrent_N, batch, hidden_size)
-            kwargs: 'action_mask' (seq_len, batch, act_dim) 等
-        Returns:
-            (log_prob, entropy)  shape = (seq_len, batch)
-        """
         logits_seq, _ = self.actor.forward_sequence(obs_seq, hidden_init)
 
         action_mask = kwargs.get("action_mask", None)
 
         if self.is_discrete:
-            # 在 masking 前检查原始 logits 是否含真正的 NaN/+Inf
+
             if torch.isnan(logits_seq).any() or (torch.isinf(logits_seq) & (logits_seq > 0)).any():
                 nan_frac = (~torch.isfinite(logits_seq)).float().mean().item()
                 raise RuntimeError(
-                    f"evaluate_actions_sequence raw logits 含 NaN/+Inf: "
+                    "evaluate_actions_sequence raw logits contain NaN/+Inf: "
                     f"obs_seq shape={obs_seq.shape}, logits shape={logits_seq.shape}, "
                     f"bad_frac={nan_frac:.3f}"
                 )
             if action_mask is not None:
                 mask_t = torch.as_tensor(action_mask, dtype=torch.bool, device=logits_seq.device)
-                # chunk_split padding 产生全零 mask → 全 -inf，设第一个 action 为 valid
+
                 all_masked = ~mask_t.any(dim=-1)
                 if all_masked.any():
                     mask_t = mask_t.clone()
@@ -289,17 +249,10 @@ class ActorPolicy(RLBasePolicy):
         return log_prob, entropy
 
 class ValuePolicy(RLBasePolicy):
-    """
-    Value-based policy: Q-network + epsilon-greedy 动作选择。
+    """Epsilon-greedy discrete policy backed by a Q-network.
 
-    用于 DQN / D3QN / IQL 等 off-policy value-based 算法。
-    与 ActorPolicy 的核心区别：
-    - 输出 Q 值而非概率分布
-    - 探索靠 epsilon-greedy 而非分布采样
-    - 不提供 evaluate_actions / log_prob / entropy
-
-    当 q_network 是 RNN (is_recurrent=True) 时，forward 自动穿透 hidden state，
-    并提供 compute_q_values_sequence 用于序列训练。
+    The policy handles action masks, feed-forward and recurrent inference, and
+    serialization of the current epsilon value alongside network parameters.
     """
 
     def __init__(
@@ -325,17 +278,16 @@ class ValuePolicy(RLBasePolicy):
         mask_t: torch.Tensor,
         where: str,
     ) -> None:
-        """IQL/D3QN 等：在 masked_fill 前锁定 shape / 全 False / NaN 根因。q 可为 (B,A) 或 (S,B,A) 等。"""
         if torch.isnan(q).any():
             nan_frac = torch.isnan(q).float().mean().item()
             raise RuntimeError(
-                f"[{where}] Q 输出含 NaN: q.shape={tuple(q.shape)}, NaN 比例={nan_frac:.3f}"
+                f"[{where}] Q output contains NaN: q.shape={tuple(q.shape)}, NaN fraction={nan_frac:.3f}"
             )
         try:
             mask_bc = torch.broadcast_to(mask_t, q.shape)
         except RuntimeError as e:
             raise RuntimeError(
-                f"[{where}] action_mask 与 Q 形状无法对齐（broadcast 失败）: "
+                f"[{where}] action_mask cannot align with Q (broadcast failed): "
                 f"q.shape={tuple(q.shape)}, mask.shape={tuple(mask_t.shape)}"
             ) from e
         valid = mask_bc.any(dim=-1)
@@ -343,27 +295,16 @@ class ValuePolicy(RLBasePolicy):
             bad_idx = (~valid).nonzero(as_tuple=False)
             sample = bad_idx[:16].tolist()
             raise RuntimeError(
-                f"[{where}] action_mask 全 False（无合法动作）: "
+                f"[{where}] action_mask is all False (no valid action): "
                 f"q.shape={tuple(q.shape)}, mask.shape={tuple(mask_t.shape)}, "
-                f"前若干位置(与 q 除最后一维对齐)={sample}"
+                f"sample positions aligned with q excluding its final dimension={sample}"
             )
 
-    # -----------------------------------------------------------------
-    #  forward (epsilon-greedy)
-    # -----------------------------------------------------------------
+    # forward (epsilon-greedy).
 
     def forward(
         self, obs: torch.Tensor, state=None, **kwargs
     ) -> Dict[str, Any]:
-        """
-        Epsilon-greedy 动作选择。
-
-        training_mode 时使用当前 epsilon 探索，eval 时纯 greedy。
-        RNN 时 state 为 hidden state (recurrent_N, batch, H)。
-
-        Returns:
-            {'act': (batch,), 'q_values': (batch, num_actions), 'state': hidden}
-        """
         if self.is_recurrent:
             hidden = state
             if hidden is None:
@@ -384,14 +325,14 @@ class ValuePolicy(RLBasePolicy):
             mask_t = None
             q_values_masked = q_values
 
-        greedy = q_values_masked.argmax(dim=-1)             # (batch,)
+        greedy = q_values_masked.argmax(dim=-1)             # (batch,).
 
         if self._training_mode and self.epsilon > 0:
             batch_size = obs.shape[0]
             rand_mask = torch.rand(batch_size, device=self.device) < self.epsilon
 
             if mask_t is not None:
-                valid_counts = mask_t.sum(dim=-1).float()   # (batch,)
+                valid_counts = mask_t.sum(dim=-1).float()   # (batch,).
                 rand_probs = mask_t.float() / valid_counts.unsqueeze(-1).clamp(min=1)
                 random_act = torch.multinomial(rand_probs, 1).squeeze(-1)
             else:
@@ -403,17 +344,12 @@ class ValuePolicy(RLBasePolicy):
 
         return {"act": act, "q_values": q_values, "state": new_hidden}
 
-    # -----------------------------------------------------------------
-    #  compute_q_values (单步, 供 compute_loss 使用)
-    # -----------------------------------------------------------------
-
     def compute_q_values(
         self,
         obs: torch.Tensor,
         action_mask: Optional[torch.Tensor] = None,
         hidden: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """直接返回 Q 值 (batch, num_actions)，供算法 compute_loss 使用。"""
         if self.is_recurrent:
             if hidden is None:
                 hidden = self.q_network.get_initial_hidden(obs.shape[0], obs.device)
@@ -427,36 +363,20 @@ class ValuePolicy(RLBasePolicy):
         elif torch.isnan(q).any():
             nan_frac = torch.isnan(q).float().mean().item()
             raise RuntimeError(
-                f"[ValuePolicy.compute_q_values] Q 输出含 NaN（无 mask）: "
-                f"q.shape={tuple(q.shape)}, NaN 比例={nan_frac:.3f}"
+                "[ValuePolicy.compute_q_values] Q output contains NaN without a mask: "
+                f"q.shape={tuple(q.shape)}, NaN fraction={nan_frac:.3f}"
             )
         return q
-
-    # -----------------------------------------------------------------
-    #  compute_q_values_sequence (RNN 序列训练)
-    # -----------------------------------------------------------------
 
     def compute_q_values_sequence(
         self,
         obs_seq: torch.Tensor,
         hidden: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        RNN 序列 Q 值计算。
-
-        Args:
-            obs_seq: (seq_len, batch, obs_dim)
-            hidden: (recurrent_N, batch, H) 或 None（自动零初始化）
-        Returns:
-            q_seq: (seq_len, batch, act_dim)
-            final_hidden: (recurrent_N, batch, H)
-        """
         if hidden is None:
             hidden = self.q_network.get_initial_hidden(obs_seq.shape[1], obs_seq.device)
         q_seq, final_h = self.q_network.forward_sequence(obs_seq, hidden)
         return q_seq, final_h
-
-    # ---- epsilon 管理 ----
 
     def set_epsilon(self, epsilon: float):
         self.epsilon = max(0.0, min(epsilon, 1.0))

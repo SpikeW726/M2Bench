@@ -3,9 +3,9 @@ Model I/O utilities following HuggingFace/MMLab style.
 
 Save format:
     model_dir/
-    ├── config.yaml      # Network architecture config + eval metadata
-    ├── policy.pt        # Policy weights (state_dict only)
-    └── critic.pt        # Critic weights (optional)
+    |-- config.yaml      # Network architecture and evaluation metadata
+    |-- policy.pt        # Policy state_dict
+    `-- critic.pt        # Optional critic state_dict
 
 Usage:
     # Save
@@ -24,9 +24,7 @@ import torch.nn as nn
 import numpy as np
 import gymnasium as gym
 
-
 def _convert_to_native_types(obj: Any) -> Any:
-    """递归将 numpy 类型转为原生 Python 类型，确保 YAML 可序列化。"""
     if isinstance(obj, dict):
         return {k: _convert_to_native_types(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
@@ -42,9 +40,7 @@ def _convert_to_native_types(obj: Any) -> Any:
     else:
         return obj
 
-
 def _get_class_registry() -> Dict[str, type]:
-    """延迟导入，构建网络类名 → 类对象的映射。新增网络时在此注册。"""
     from networks.mlp import ActorMLP, CriticMLP, QMLP
     from networks.rnn import ActorRNN, CriticRNN, QRNN
     from networks.custom.suns import SUNActor, SUNCritic
@@ -69,7 +65,7 @@ def _get_class_registry() -> Dict[str, type]:
         "SUNCritic": SUNCritic,
         "MPNNActor": MPNNActor,
         "GraphSageActor": GraphSageActor,
-        # MASUP 专供网络
+
         "MASUPActorMLP": MASUPActorMLP,
         "MASUPActorRNN": MASUPActorRNN,
         "MASUPCriticMLP": MASUPCriticMLP,
@@ -78,18 +74,13 @@ def _get_class_registry() -> Dict[str, type]:
         "MASUPQRNN": MASUPQRNN,
         "MASUPVDPPOQmlp": MASUPVDPPOQmlp,
         "MASUPVDPPOQrnn": MASUPVDPPOQrnn,
-        # MAT 网络
+
         "GATEncoder": GATEncoder,
         "MATDecoder": MATDecoder,
         "MATMultiAgentPolicy": MATMultiAgentPolicy,
     }
 
-
 def _build_network_from_config(net_cfg: dict, registry: Dict[str, type]) -> nn.Module:
-    """根据 config dict 实例化网络。
-
-    每个网络类须实现 from_config_dict(cls, cfg) 类方法，此处仅做调度。
-    """
     net_type = net_cfg["type"]
     cls = registry.get(net_type)
     if cls is None:
@@ -103,26 +94,15 @@ def _build_network_from_config(net_cfg: dict, registry: Dict[str, type]) -> nn.M
         )
     return cls.from_config_dict(net_cfg)
 
-
-# =========================================================================
-#                         Checkpoint path helpers
-# =========================================================================
+# Checkpoint path helpers.
 
 def trial_checkpoint_subdir(algo_name: str) -> str:
-    """所有算法均以 best/ 作为评估目标。"""
     return "best"
 
-
 def trial_checkpoint_dir(save_dir: str | Path, algo_name: str) -> Path:
-    """返回单次 trial 用于评估 / sweep summary 的 checkpoint 目录（best/）。
-    若 best/ 不存在，调用方可自行 fallback 到 final/。
-    """
     return Path(save_dir) / "best"
 
-
-# =========================================================================
-#                              Save
-# =========================================================================
+# Save.
 
 def save_model(
     save_dir: str | Path,
@@ -172,10 +152,7 @@ def save_model(
         critic_path = save_dir / 'critic.pt'
         torch.save(critic.state_dict(), critic_path)
 
-
-# =========================================================================
-#                              Load (legacy)
-# =========================================================================
+# Load (legacy).
 
 def load_model(
     model_dir: str | Path,
@@ -202,12 +179,12 @@ def load_model(
 
     registry = _get_class_registry()
 
-    # Build and load actor
+    # Build and load actor.
     actor = None
     actor_config = config.get('actor', {})
     if actor_config:
         if actor_class is not None:
-            # 调用方显式传入类时，仍走旧路径（向后兼容）
+
             actor = actor_class(
                 input_dim=actor_config['input_dim'],
                 hidden_sizes=actor_config['hidden_sizes'],
@@ -231,7 +208,7 @@ def load_model(
         actor = actor.to(device)
         actor.eval()
 
-    # Build and load critic
+    # Build and load critic.
     critic = None
     critic_config = config.get('critic', {})
     critic_path = model_dir / 'critic.pt'
@@ -252,19 +229,14 @@ def load_model(
 
     return actor, critic, config
 
-
-# =========================================================================
-#                     Load for Evaluation (通用)
-# =========================================================================
+# Load for Evaluation.
 
 def _propagate_device_to_policies(module: nn.Module, device: torch.device) -> None:
-    """递归将 device 同步到所有 RLBasePolicy 子类，确保评估时 mask/obs 与网络同设备。"""
     from policies.rl.rl_base import RLBasePolicy
     if isinstance(module, RLBasePolicy):
         module.device = device
     for child in module.children():
         _propagate_device_to_policies(child, device)
-
 
 def load_policy_for_eval(
     model_dir: str | Path,
@@ -273,14 +245,6 @@ def load_policy_for_eval(
     action_space: gym.Space,
     device: str | torch.device = 'cpu',
 ) -> nn.Module:
-    """
-    从模型目录自动重建 MultiAgentPolicy 并加载权重。
-
-    读取 config.yaml 中的 extra 段获取 policy_type / shared_policy 等元信息,
-    自动选择 ActorPolicy 或 ValuePolicy 并实例化对应网络。
-
-    向后兼容: 若缺少 extra 段则回退到 actor + shared 默认值。
-    """
     from policies.rl.rl_base import ActorPolicy, ValuePolicy
     from policies.marl.marl_base import MultiAgentPolicy
     from policies.marl.mat_policy import MATMultiAgentPolicy
@@ -293,7 +257,6 @@ def load_policy_for_eval(
     policy_type = extra.get('policy_type', 'actor')
     shared = extra.get('shared_policy', True)
 
-    # ---- MAT：整网保存为 policy，actor 段为嵌套 encoder/decoder（无 MultiAgentPolicy 包装）----
     if policy_type == "mat":
         mat_cfg = config.get("actor")
         if not mat_cfg or "encoder" not in mat_cfg or "decoder" not in mat_cfg:
@@ -342,16 +305,12 @@ def load_policy_for_eval(
         shared=shared,
     )
 
-    # 加载权重
     policy_path = model_dir / 'policy.pt'
     if not policy_path.exists():
         raise FileNotFoundError(f"Policy weights not found: {policy_path}")
 
     state_dict = torch.load(policy_path, map_location=device, weights_only=True)
 
-    # 兼容单体训练→多体评估场景（如 A2C+suns_gym → suns）：
-    # 单体训练保存的是裸 Policy state_dict（key 无 _shared_policy./_policy_dict. 前缀），
-    # 而 MultiAgentPolicy(shared=True) 期望 _shared_policy.* 前缀。
     if state_dict:
         first_key = next(iter(state_dict))
         is_bare_policy = not (
@@ -365,7 +324,7 @@ def load_policy_for_eval(
     multi_policy.to(device)
     dev = torch.device(device)
     multi_policy.device = dev
-    # 递归同步内层 policy 的 device，避免 RLBasePolicy.__init__ 中 hardcode cuda 导致 mask/obs 设备不一致
+
     _propagate_device_to_policies(multi_policy, dev)
     multi_policy.set_training_mode(False)
 
@@ -373,10 +332,7 @@ def load_policy_for_eval(
           f"(shared={shared}) from {model_dir}")
     return multi_policy
 
-
-# =========================================================================
-#                           Convenience
-# =========================================================================
+# Convenience.
 
 def load_actor_only(
     model_dir: str | Path,
@@ -386,17 +342,12 @@ def load_actor_only(
     actor, _, _ = load_model(model_dir, device=device)
     return actor
 
-
 def get_model_config(model_dir: str | Path) -> Dict[str, Any]:
-    """Load only the config without loading weights."""
     config_path = Path(model_dir) / 'config.yaml'
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-
 def running_mean_std_to_yaml_dict(rms) -> Dict[str, Any]:
-    """将 RunningMeanStd / NumpyRMS 写成与 checkpoint ``extra.obs_rms_state`` 相同结构的 dict。"""
-
     def _to_list(v):
         return v.tolist() if isinstance(v, np.ndarray) else float(v)
 
@@ -407,15 +358,7 @@ def running_mean_std_to_yaml_dict(rms) -> Dict[str, Any]:
         "clip_max": rms.clip_max,
     }
 
-
 def load_obs_rms(model_dir: str | Path):
-    """从 checkpoint 的 config.yaml extra.obs_rms_state 重建 NumpyRMS。
-
-    若训练时未启用 norm_obs，返回 None；调用方直接用 `if obs_rms` 判断即可。
-
-    Returns:
-        utils.log_utils.RunningMeanStd 实例，或 None。
-    """
     import numpy as np
     from utils.log_utils import RunningMeanStd
 

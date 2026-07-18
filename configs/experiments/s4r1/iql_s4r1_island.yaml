@@ -1,7 +1,4 @@
 # IQL + S4R1Env @ island
-# 图统计: nodes=50, directed_edges=168, max_out_degree=5, avg_edge=5.296, max_edge=17.029
-# 物理时间截断: episode_len=500, total_steps=40000000
-
 algo_name: iql
 env_type: s4r1
 q_type: mlp

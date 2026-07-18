@@ -1,12 +1,9 @@
-"""数据采集器：从环境中采集数据用于 RL 训练。
+"""Collect environment experience for reinforcement-learning updates.
 
-On-policy:
-    OnPolicyCollector       ← 单智能体，返回 RolloutBatch
-    MAOnPolicyCollector     ← 多智能体，返回 Dict[str, RolloutBatch]
-
-Off-policy:
-    OffPolicyCollector      ← 单智能体，内持 ReplayBuffer
-    MAOffPolicyCollector    ← 多智能体，内持 Dict[str, ReplayBuffer]
+``OnPolicyCollector`` and ``OffPolicyCollector`` handle single-agent vector
+environments. Their ``MA`` counterparts preserve per-agent batches and replay
+buffers. ``MATOnPolicyCollector`` stores only joint READY decision steps for the
+autoregressive Multi-Agent Transformer pipeline.
 """
 
 from abc import ABC, abstractmethod
@@ -20,27 +17,16 @@ from envs.venvs import BaseVectorEnv
 from data.batch import RolloutBatch, TransitionBatch, SequenceBatch, CollectResult
 from data.buffer import ReplayBuffer, SequenceReplayBuffer
 
-
 class BaseCollector(ABC):
-    """
-    采集器基类，定义公共接口。
-
-    Args:
-        algorithm: RL 算法实例（包含 policy）
-        env: 向量化环境
-    """
-
     def __init__(self, algorithm: BaseAlgorithm, env: BaseVectorEnv):
         self.algorithm = algorithm
         self.env = env
         self.num_envs = env.num_envs
 
-        # 当前 obs（reset 后保存）
         self._obs = None
         self._info = None
         self.profiler = None
 
-        # Episode 统计
         self._episode_rewards: List[float] = []
         self._episode_lengths: List[int] = []
         self._current_rewards = np.zeros(self.num_envs)
@@ -58,11 +44,9 @@ class BaseCollector(ABC):
 
     @abstractmethod
     def _reset_buffer(self):
-        """重置内部缓冲区"""
         pass
 
     def reset(self, **kwargs) -> Tuple[Any, Any]:
-        """重置环境并返回初始 obs"""
         self._obs, self._info = self.env.reset(**kwargs)
         self._current_rewards = np.zeros(self.num_envs)
         self._current_lengths = np.zeros(self.num_envs, dtype=int)
@@ -71,7 +55,6 @@ class BaseCollector(ABC):
         return self._obs, self._info
 
     def reset_buffer(self):
-        """清空 buffer（供 Trainer 调用）"""
         self._reset_buffer()
         self._episode_rewards = []
         self._episode_lengths = []
@@ -87,24 +70,14 @@ class BaseCollector(ABC):
             return nullcontext()
         return self.profiler.time_block(name)
 
-
-# =============================================================================
-#                          On-Policy Collectors
-# =============================================================================
+# On-Policy Collectors.
 
 class OnPolicyCollector(BaseCollector):
-    """
-    单智能体 on-policy 采集器。
-
-    处理 Gymnasium Env（ndarray 格式 I/O），返回 RolloutBatch。
-    RNN 时维护 per-env hidden state 并在 episode 边界重置。
-    """
-
     def __init__(self, algorithm: BaseAlgorithm, env: BaseVectorEnv):
         if env.is_parallel_env:
             raise ValueError(
-                "OnPolicyCollector 只支持 Gymnasium Env，"
-                "多智能体请用 MAOnPolicyCollector"
+                "OnPolicyCollector supports only Gymnasium environments; "
+                "use MAOnPolicyCollector for multi-agent environments"
             )
         super().__init__(algorithm, env)
 
@@ -139,9 +112,9 @@ class OnPolicyCollector(BaseCollector):
         n_episodes: Optional[int] = None,
     ) -> CollectResult:
         if n_steps is None and n_episodes is None:
-            raise ValueError("必须指定 n_steps 或 n_episodes")
+            raise ValueError("Either n_steps or n_episodes must be specified")
         if n_episodes is not None:
-            raise NotImplementedError("暂不支持按 episode 采集")
+            raise NotImplementedError("Episode-based collection is not supported yet")
 
         if self._obs is None:
             self.reset()
@@ -155,7 +128,6 @@ class OnPolicyCollector(BaseCollector):
             obs_t = torch.as_tensor(self._obs, dtype=torch.float32, device=device)
             action_mask = self._extract_action_mask(self._info, device)
 
-            # RNN: 存储当前步 hidden
             if self._is_recurrent:
                 self._rnn_hidden_buf.append(
                     self._hidden.transpose(0, 1).cpu().numpy()
@@ -173,7 +145,6 @@ class OnPolicyCollector(BaseCollector):
                 act = output['act'].cpu().numpy()
                 log_prob = output['log_prob'].cpu().numpy()
 
-            # RNN: 更新 hidden
             if self._is_recurrent:
                 self._hidden = output['state']
 
@@ -246,24 +217,15 @@ class OnPolicyCollector(BaseCollector):
             return None
         return torch.as_tensor(np.stack(masks), dtype=torch.bool, device=device)
 
-
 class MAOnPolicyCollector(BaseCollector):
-    """
-    多智能体 on-policy 采集器。
-
-    处理 PettingZoo ParallelEnv（Dict 格式 I/O），
-    支持 global_state 采集用于 MAPPO centralized critic。
-    RNN 时维护 per-agent per-env hidden state 并在 episode 边界重置。
-    """
-
     def __init__(self, algorithm: BaseAlgorithm, env: BaseVectorEnv):
         if not env.is_parallel_env:
             raise ValueError(
-                "MAOnPolicyCollector 只支持 ParallelEnv，"
-                "单智能体请用 OnPolicyCollector"
+                "MAOnPolicyCollector supports only ParallelEnv; "
+                "use OnPolicyCollector for single-agent environments"
             )
         self.agents = env.agents
-        # 必须在 super().__init__ 之前设置，_reset_buffer 依赖此标志
+
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         super().__init__(algorithm, env)
 
@@ -272,7 +234,6 @@ class MAOnPolicyCollector(BaseCollector):
             self._init_hidden()
 
     def _init_hidden(self):
-        """初始化所有 agent 的 hidden state 为零。"""
         policy = self.algorithm.policy
         device = getattr(self.algorithm, "device", policy.device)
         self._hidden = {}
@@ -305,9 +266,9 @@ class MAOnPolicyCollector(BaseCollector):
         n_episodes: Optional[int] = None,
     ) -> CollectResult:
         if n_steps is None and n_episodes is None:
-            raise ValueError("必须指定 n_steps 或 n_episodes")
+            raise ValueError("Either n_steps or n_episodes must be specified")
         if n_episodes is not None:
-            raise NotImplementedError("暂不支持按 episode 采集")
+            raise NotImplementedError("Episode-based collection is not supported yet")
 
         if self._obs is None:
             self.reset()
@@ -320,9 +281,8 @@ class MAOnPolicyCollector(BaseCollector):
             with self._profile("collect/state_query"):
                 global_states = self._get_global_states()
 
-            # RNN: 存储当前步的 hidden（作为该步的 initial hidden）
             if self._is_recurrent:
-                # 一次性搬到 CPU，避免每个 agent 各触发一次同步。
+
                 hidden_np = torch.stack(
                     [self._hidden[agent].transpose(0, 1) for agent in self.agents],
                     dim=0,
@@ -335,12 +295,11 @@ class MAOnPolicyCollector(BaseCollector):
                     self._obs, self._info, hidden_dict=self._hidden,
                 )
 
-            # RNN: 更新 hidden
             if self._is_recurrent and new_hidden is not None:
                 self._hidden = new_hidden
 
             with self._profile("collect/buffer_write"):
-                # log_prob 同步合并为一次 CPU copy，减少采样阶段 GPU 同步次数。
+
                 log_prob_np = torch.stack(
                     [outputs[agent]['log_prob'] for agent in self.agents],
                     dim=0,
@@ -388,7 +347,7 @@ class MAOnPolicyCollector(BaseCollector):
             for agent in self.agents:
                 self._buffers[agent]['final_global_state'].append(final_gs_list)
 
-            # per-agent final obs（供 IPPO obs-based critic 的 truncation bootstrap 使用）
+            # per-agent final obs.
             for agent in self.agents:
                 final_obs_list = []
                 for i in range(self.num_envs):
@@ -398,7 +357,6 @@ class MAOnPolicyCollector(BaseCollector):
                         final_obs_list.append(None)
                 self._buffers[agent]['final_obs'].append(final_obs_list)
 
-            # 所有智能体平均 reward
             mean_rew = sum(rew[a] for a in self.agents) / len(self.agents)
             self._current_rewards += mean_rew
             self._current_lengths += 1
@@ -410,7 +368,7 @@ class MAOnPolicyCollector(BaseCollector):
                     self._handle_done(
                         i, self._current_rewards[i], self._current_lengths[i]
                     )
-                    # RNN: episode 结束时重置对应 env 的 hidden
+
                     if self._is_recurrent:
                         for agent in self.agents:
                             self._hidden[agent][:, i, :] = 0.0
@@ -418,8 +376,6 @@ class MAOnPolicyCollector(BaseCollector):
             self._obs = next_obs
             self._info = info
 
-        # rollout 结束后立刻采集边界 global state（= 下一步的初始 state）。
-        # 供 VDPPO 修正 next_states[-1]，其他算法忽略此字段。
         with self._profile("collect/state_query"):
             boundary_gs = self._get_global_states()
 
@@ -466,11 +422,6 @@ class MAOnPolicyCollector(BaseCollector):
         )
 
     def _get_global_states(self) -> Optional[np.ndarray]:
-        """获取所有 env 的 global state。
-
-        失败时显式抛出异常而非静默返回 None，避免 CTDE 算法
-        （如 QMIX）用零值 state 通过超网络产生无意义的 Q_tot。
-        """
         if hasattr(self.env, 'call_env_method'):
             states = self.env.call_env_method("state")
         else:
@@ -480,22 +431,9 @@ class MAOnPolicyCollector(BaseCollector):
             return None
         return np.stack(states)
 
-
-# =============================================================================
-#                          Off-Policy Collectors
-# =============================================================================
+# Off-Policy Collectors.
 
 class OffPolicyCollector(BaseCollector):
-    """
-    单智能体 off-policy 采集器。
-
-    MLP 模式: 内持 ReplayBuffer，逐 step 存入 transition。
-    RNN 模式: 内持 SequenceReplayBuffer，按 episode 存储（预切片 + 向量化采样）。
-
-    collect() 将 transitions 存入 buffer，返回 CollectResult（仅统计量）。
-    Trainer 通过 sample() / can_sample() 从 buffer 采样。
-    """
-
     def __init__(
         self,
         algorithm: BaseAlgorithm,
@@ -504,8 +442,8 @@ class OffPolicyCollector(BaseCollector):
     ):
         if env.is_parallel_env:
             raise ValueError(
-                "OffPolicyCollector 只支持 Gymnasium Env，"
-                "多智能体请用 MAOffPolicyCollector"
+                "OffPolicyCollector supports only Gymnasium environments; "
+                "use MAOffPolicyCollector for multi-agent environments"
             )
         self.buffer = buffer
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
@@ -513,7 +451,6 @@ class OffPolicyCollector(BaseCollector):
         super().__init__(algorithm, env)
 
     def _init_ep_buf(self) -> dict:
-        """创建空的 dict-of-lists episode 临时缓冲区。"""
         buf = {"obs": [], "act": [], "rew": [], "next_obs": [], "done": []}
         if getattr(self.buffer, "has_action_mask", False):
             buf["action_mask"] = []
@@ -546,9 +483,9 @@ class OffPolicyCollector(BaseCollector):
         n_episodes: Optional[int] = None,
     ) -> CollectResult:
         if n_steps is None and n_episodes is None:
-            raise ValueError("必须指定 n_steps 或 n_episodes")
+            raise ValueError("Either n_steps or n_episodes must be specified")
         if n_episodes is not None:
-            raise NotImplementedError("暂不支持按 episode 采集")
+            raise NotImplementedError("Episode-based collection is not supported yet")
 
         if self._obs is None:
             self.reset()
@@ -634,7 +571,6 @@ class OffPolicyCollector(BaseCollector):
         )
 
     def _flush_episode(self, env_idx: int):
-        """将 env_idx 的 episode buffer 合并推入 SequenceReplayBuffer。"""
         eb = self._episode_buffers[env_idx]
         if not eb["obs"]:
             return
@@ -657,17 +593,7 @@ class OffPolicyCollector(BaseCollector):
     def can_sample(self, batch_size: int) -> bool:
         return len(self.buffer) >= batch_size
 
-
 class MAOffPolicyCollector(BaseCollector):
-    """
-    多智能体 off-policy 采集器。
-
-    MLP 模式: 内持 Dict[str, ReplayBuffer]，逐 step 存入。
-    RNN 模式: 内持 Dict[str, SequenceReplayBuffer]，按 episode 预切片存储。
-
-    每个 agent 的 transitions 独立存入对应 buffer。
-    """
-
     def __init__(
         self,
         algorithm: BaseAlgorithm,
@@ -681,16 +607,14 @@ class MAOffPolicyCollector(BaseCollector):
     ):
         if not env.is_parallel_env:
             raise ValueError(
-                "MAOffPolicyCollector 只支持 ParallelEnv，"
-                "单智能体请用 OffPolicyCollector"
+                "MAOffPolicyCollector supports only ParallelEnv; "
+                "use OffPolicyCollector for single-agent environments"
             )
         self.buffers = buffers
         self.agents = env.agents
         self._is_recurrent = getattr(algorithm.policy, "is_recurrent", False)
         self._collect_state = collect_state
-        # VDN/QMIX 等值分解算法需要 shared_indices 保证多 agent buffer 时间对齐；
-        # 若未显式传入，仅在 collect_state=True（QMIX 路径）时默认启用，
-        # 调用方应根据算法语义显式传入该参数。
+
         self._shared_indices = collect_state if shared_indices is None else shared_indices
         self._sync_mode = sync_mode
         self._shared_sync_mode = shared_sync_mode
@@ -699,7 +623,6 @@ class MAOffPolicyCollector(BaseCollector):
         super().__init__(algorithm, env)
 
     def _init_ep_buf(self, agent: str) -> dict:
-        """创建空的 dict-of-lists episode 临时缓冲区。"""
         buf = {"obs": [], "act": [], "rew": [], "next_obs": [], "done": []}
         if getattr(self.buffers.get(agent), "has_action_mask", False):
             buf["action_mask"] = []
@@ -749,7 +672,6 @@ class MAOffPolicyCollector(BaseCollector):
         return result
 
     def _init_hidden(self):
-        """初始化所有 agent 的 hidden state 为零。"""
         policy = self.algorithm.policy
         device = getattr(self.algorithm, "device", policy.device)
         self._hidden = {}
@@ -763,9 +685,9 @@ class MAOffPolicyCollector(BaseCollector):
         n_episodes: Optional[int] = None,
     ) -> CollectResult:
         if n_steps is None and n_episodes is None:
-            raise ValueError("必须指定 n_steps 或 n_episodes")
+            raise ValueError("Either n_steps or n_episodes must be specified")
         if n_episodes is not None:
-            raise NotImplementedError("暂不支持按 episode 采集")
+            raise NotImplementedError("Episode-based collection is not supported yet")
 
         if self._obs is None:
             self.reset()
@@ -804,11 +726,11 @@ class MAOffPolicyCollector(BaseCollector):
 
             if self._collect_state and (cur_state is None or next_state is None):
                 raise RuntimeError(
-                    "CTDE(off-policy) 需要 global state，但 VectorEnv 未返回有效 state()。"
-                    "QMIX 等算法会因此写入错误 replay；请检查 env.call_env_method('state') 与并行封装。"
+                    "Off-policy CTDE requires a global state, but VectorEnv returned no valid state(). "
+                    "This would corrupt replay for QMIX-like algorithms; check "
+                    "env.call_env_method('state') and the vector wrapper."
                 )
 
-            # 提取 step 后的 active_mask（用于判断 agent 是否到达）
             next_active_masks: Dict[str, Optional[np.ndarray]] = {}
             for agent in self.agents:
                 next_active_masks[agent] = _extract_agent_active_mask_np(
@@ -826,14 +748,14 @@ class MAOffPolicyCollector(BaseCollector):
                             eb["obs"].append(self._obs[agent][i].copy())
                             eb["act"].append(actions[agent][i])
                             eb["rew"].append(rew[agent][i])
-                            # 截断≠真实终止：trunc step 使用 final_obs，done 只由 terminated 决定。
+
                             if trunc[agent][i] and isinstance(info[agent][i], dict):
                                 final_obs = info[agent][i].get("final_obs")
                                 next_obs_i = final_obs if final_obs is not None else next_obs[agent][i].copy()
                             else:
                                 next_obs_i = next_obs[agent][i].copy()
                             eb["next_obs"].append(next_obs_i)
-                            eb["done"].append(float(term[agent][i]))  # trunc 不视为 terminal
+                            eb["done"].append(float(term[agent][i]))
                             if am is not None:
                                 eb["action_mask"].append(am[i].copy())
                             if next_am is not None:
@@ -864,7 +786,7 @@ class MAOffPolicyCollector(BaseCollector):
                     )
                 else:
                     for agent in self.agents:
-                        # TD 语义：截断≠真实终止，done 只由 term 决定。
+
                         done_td = term[agent].astype(np.float32)
                         next_obs_td = next_obs[agent].copy()
                         for i in range(self.num_envs):
@@ -915,7 +837,6 @@ class MAOffPolicyCollector(BaseCollector):
         )
 
     def _flush_episodes(self, env_idx: int):
-        """将 env_idx 的所有 agent episode buffer 合并推入对应 SequenceReplayBuffer。"""
         for agent in self.agents:
             eb = self._episode_buffers[agent][env_idx]
             if not eb["obs"]:
@@ -952,7 +873,6 @@ class MAOffPolicyCollector(BaseCollector):
         cur_state: Optional[np.ndarray],
         next_state: Optional[np.ndarray],
     ):
-        """VDN/QMIX MLP：每步每 env 槽位仍 add 一条（shared-index），READY 槽位延迟 overwrite 累积 r 与 γ^k。"""
         gamma = self._gamma
         for agent in self.agents:
             done_td = term[agent].astype(np.float32)
@@ -1050,7 +970,6 @@ class MAOffPolicyCollector(BaseCollector):
         cur_state: Optional[np.ndarray],
         next_state: Optional[np.ndarray],
     ):
-        """MLP 同步路径：跟踪 pending decision，累积折扣 reward，到达时 flush。"""
         gamma = self._gamma
         for agent in self.agents:
             done = (term[agent] | trunc[agent]).astype(np.float32)
@@ -1105,11 +1024,6 @@ class MAOffPolicyCollector(BaseCollector):
                     self._pending[agent][i] = None
 
     def _get_global_states(self) -> Optional[np.ndarray]:
-        """获取所有 env 的 global state。
-
-        失败时显式抛出异常而非静默返回 None，避免 CTDE 算法
-        （如 QMIX）用零值 state 通过超网络产生无意义的 Q_tot。
-        """
         if hasattr(self.env, 'call_env_method'):
             states = self.env.call_env_method("state")
         else:
@@ -1121,8 +1035,8 @@ class MAOffPolicyCollector(BaseCollector):
 
     def sample(self, batch_size: int) -> Dict[str, Union[TransitionBatch, SequenceBatch]]:
         first_buf = next(iter(self.buffers.values()))
-        # shared_indices: VDN/QMIX 要求所有 agent 取同一批 episode/transition，
-        # 保证多 agent 数据时间对齐，对 ReplayBuffer 和 SequenceReplayBuffer 均适用。
+        # shared_indices: VDN/QMIX.
+
         if self._shared_indices:
             indices = np.random.choice(len(first_buf), size=batch_size, replace=False)
             return {
@@ -1137,17 +1051,11 @@ class MAOffPolicyCollector(BaseCollector):
     def can_sample(self, batch_size: int) -> bool:
         return all(len(buf) >= batch_size for buf in self.buffers.values())
 
-
-# =============================================================================
-#                        辅助函数（action_mask 提取）
-# =============================================================================
-
 def _extract_action_mask_single(
     info: Optional[np.ndarray],
     num_envs: int,
     device: torch.device,
 ) -> Optional[torch.Tensor]:
-    """从单智能体 vectorized info 中提取 action_mask → tensor。"""
     if info is None:
         return None
     masks = []
@@ -1158,12 +1066,10 @@ def _extract_action_mask_single(
         return None
     return torch.as_tensor(np.stack(masks), dtype=torch.bool, device=device)
 
-
 def _extract_action_mask_single_np(
     info: Optional[np.ndarray],
     num_envs: int,
 ) -> Optional[np.ndarray]:
-    """从单智能体 vectorized info 中提取 action_mask → numpy。"""
     if info is None:
         return None
     masks = []
@@ -1174,13 +1080,11 @@ def _extract_action_mask_single_np(
         return None
     return np.stack(masks)
 
-
 def _extract_agent_action_mask_np(
     info_dict: Optional[Dict[str, np.ndarray]],
     agent: str,
     num_envs: int,
 ) -> Optional[np.ndarray]:
-    """从多智能体 vectorized info 中提取某 agent 的 action_mask → numpy。"""
     if info_dict is None or agent not in info_dict:
         return None
     info_arr = info_dict[agent]
@@ -1192,13 +1096,11 @@ def _extract_agent_action_mask_np(
         return None
     return np.stack(masks)
 
-
 def _extract_agent_active_mask_np(
     info_dict: Optional[Dict[str, np.ndarray]],
     agent: str,
     num_envs: int,
 ) -> Optional[np.ndarray]:
-    """从多智能体 vectorized info 中提取某 agent 的 active_mask → numpy。"""
     if info_dict is None or agent not in info_dict:
         return None
     info_arr = info_dict[agent]
@@ -1210,56 +1112,36 @@ def _extract_agent_active_mask_np(
             masks.append(1.0)
     return np.array(masks, dtype=np.float32)
 
-
-# =============================================================================
-#                          向后兼容别名
-# =============================================================================
-
 Collector = OnPolicyCollector
 MACollector = MAOnPolicyCollector
 
-
-# =============================================================================
-#                      MATOnPolicyCollector（决策步缓冲）
-# =============================================================================
-
 class MATOnPolicyCollector(BaseCollector):
-    """MAT（Multi-Agent Transformer）专用 On-Policy 采集器。
+    """Collect joint READY decisions for Multi-Agent Transformer PPO.
 
-    关键设计（严格遵循 asy_ppo.py）:
-    - 只在 any(active_mask)==True 时存入 buffer（决策步缓冲）
-    - 累积决策步之间的 change_reward
-    - state_mat() / get_current_node_indices() 通过 call_env_method 获取
-
-    初始化时环境必须已经 reset，且支持 state_mat() / get_adj() / get_current_node_indices()
-    方法（即 BEAU 环境）。
-
-    collect(n_steps) 中 n_steps 指**仿真步数**（不是决策步数）；
-    result.n_steps 也返回仿真步数（供 Trainer 统计 total_steps）。
-    result.batch 为 MATBatch，只含决策步。
+    Unlike standard collectors, it stores only event times at which at least one
+    agent can decide. Graph state, active masks, autoregressive action context,
+    joint log-probabilities, rewards, and done flags remain aligned per decision.
     """
 
     def __init__(self, algorithm, env: "BaseVectorEnv", n_agents: int):
-        from algorithms.marl.mappo_mat import MATBatch  # 避免循环导入
+        from algorithms.marl.mappo_mat import MATBatch
         self._MATBatch = MATBatch
         self.n_agents = n_agents
-        # 当前 shift_action：(num_envs, N, N, 2)
+
         self._last_shift: Optional[torch.Tensor] = None
-        # 当前 episode 每个 env 的 change_reward（决策步间累积）
+
         self._change_rewards: Optional[np.ndarray] = None
         super().__init__(algorithm, env)
 
-    # -------------------------------------------------------------------------
-
     def _reset_buffer(self):
-        self._graph_state_buf: List[np.ndarray] = []   # (N, G, 3)
-        self._actions_buf: List[np.ndarray] = []        # (N,) int
-        self._log_probs_buf: List[np.ndarray] = []      # (N, G)
-        self._rewards_buf: List[float] = []             # scalar
-        self._shift_buf: List[np.ndarray] = []          # (N, N, 2)
-        self._node_idx_buf: List[np.ndarray] = []       # (N,) int
-        self._active_mask_buf: List[np.ndarray] = []    # (N,)
-        # 最后一步的状态（用于 MC return bootstrap）
+        self._graph_state_buf: List[np.ndarray] = []   # (N, G, 3).
+        self._actions_buf: List[np.ndarray] = []        # (N,) int.
+        self._log_probs_buf: List[np.ndarray] = []      # (N, G).
+        self._rewards_buf: List[float] = []
+        self._shift_buf: List[np.ndarray] = []          # (N, N, 2).
+        self._node_idx_buf: List[np.ndarray] = []       # (N,) int.
+        self._active_mask_buf: List[np.ndarray] = []    # (N,).
+
         self._last_graph_state: Optional[np.ndarray] = None
         self._last_node_idx: Optional[np.ndarray] = None
         self._last_active_mask: Optional[np.ndarray] = None
@@ -1267,7 +1149,7 @@ class MATOnPolicyCollector(BaseCollector):
 
     def reset(self, **kwargs):
         result = super().reset(**kwargs)
-        # 初始化 shift_action 全零
+
         device = self.algorithm.device
         self._last_shift = torch.zeros(
             self.num_envs, self.n_agents, self.n_agents, 2,
@@ -1276,20 +1158,17 @@ class MATOnPolicyCollector(BaseCollector):
         self._change_rewards = np.zeros(self.num_envs, dtype=np.float32)
         return result
 
-    # -------------------------------------------------------------------------
-
     def collect(
         self,
         n_steps: Optional[int] = None,
         n_episodes: Optional[int] = None,
     ) -> "CollectResult":
-        """收集 n_steps 仿真步，只存决策步到 buffer。"""
         if n_steps is None:
-            raise ValueError("MATOnPolicyCollector 暂只支持 n_steps 模式")
+            raise ValueError("MATOnPolicyCollector currently supports only n_steps mode")
         if self.num_envs != 1:
             raise ValueError(
-                f"MATOnPolicyCollector 当前仅支持 num_envs=1，"
-                f"当前 num_envs={self.num_envs}。请在实验 YAML 中将 training.num_envs 设为 1。"
+                "MATOnPolicyCollector currently requires num_envs=1; "
+                f"received num_envs={self.num_envs}. Set training.num_envs to 1 in the experiment YAML."
             )
         if self._obs is None:
             self.reset()
@@ -1302,48 +1181,38 @@ class MATOnPolicyCollector(BaseCollector):
         sim_step_count = 0
 
         while sim_step_count < n_steps:
-            # ---- 从环境获取图结构全局状态（每 env 一份）----
-            # 假设 num_envs=1（多 env 扩展见注释）
+
             with self._profile("collect/state_query"):
-                graph_states = self.env.call_env_method("state_mat")      # List[(N,G,3)]
-                node_idxs = self.env.call_env_method("get_current_node_indices")  # List[(N,)]
+                graph_states = self.env.call_env_method("state_mat")      # List[(N,G,3)].
+                node_idxs = self.env.call_env_method("get_current_node_indices")  # List[(N,)].
 
-            # 取 env 0（num_envs=1 时）
-            graph_state = graph_states[0]   # (N, G, 3)
-            node_idx    = node_idxs[0]      # (N,) int32
+            graph_state = graph_states[0]   # (N, G, 3).
+            node_idx    = node_idxs[0]      # (N,) int32.
 
-            # 从 info 提取 active_mask（每个 agent 的 active_mask）
-            active_mask = self._extract_active_mask_all_agents()  # (N,) float
+            active_mask = self._extract_active_mask_all_agents()  # (N,) float.
 
-            # ---- 联合动作采样（无论哪些 agent READY，统一前向传播）----
-            graph_state_batch = graph_state[np.newaxis]  # (1, N, G, 3)
-            node_idx_batch    = node_idx[np.newaxis]      # (1, N)
-            am_batch          = active_mask[np.newaxis]   # (1, N)
-            last_shift_env    = self._last_shift[0:1]     # (1, N, N, 2)
+            graph_state_batch = graph_state[np.newaxis]  # (1, N, G, 3).
+            node_idx_batch    = node_idx[np.newaxis]      # (1, N).
+            am_batch          = active_mask[np.newaxis]   # (1, N).
+            last_shift_env    = self._last_shift[0:1]     # (1, N, N, 2).
 
             with self._profile("collect/policy_forward"):
                 actions_np, log_probs_t, _, shift_new = policy.compute_joint_actions(
                     graph_state_batch, node_idx_batch, am_batch, last_shift_env
                 )
-            # actions_np: (1, N)  log_probs_t: (1, N, G)  shift_new: (1, N, N, 2)
+            # actions_np: (1, N) log_probs_t: (1, N, G) shift_new: (1, N, N, 2).
 
-            actions_env = actions_np[0]           # (N,) int
-            log_probs_env = log_probs_t[0].cpu().numpy()  # (N, G)
+            actions_env = actions_np[0]           # (N,) int.
+            log_probs_env = log_probs_t[0].cpu().numpy()  # (N, G).
             self._last_shift[0] = shift_new[0]
 
-            # ---- 将 graph_index 转为 PettingZoo action dict ----
-            # BEAU 与 MASUPEnv 相同：Discrete(max_neighbors+2)
-            # 但 MAT 输出的是 graph index；需要在 env 侧映射
-            # 通过 call_env_method 请求环境将 graph_index 转为实际动作
             with self._profile("collect/state_query"):
                 actions_env_mapped = self._map_graph_idx_to_env_actions(actions_env, node_idx)
 
-            # ---- 环境步 ----
             with self._profile("collect/env_step"):
-                obs_dict, rew_dict, term_dict, trunc_dict, info_dict = \
+                obs_dict, rew_dict, term_dict, trunc_dict, info_dict =\
                     self.env.step(actions_env_mapped)
 
-            # 共享奖励：取 agent_0 的奖励（与原论文 shared_reward 对应）
             shared_rew = self._get_shared_reward(rew_dict)
 
             self._change_rewards[0] += shared_rew
@@ -1356,7 +1225,6 @@ class MATOnPolicyCollector(BaseCollector):
             self._current_rewards[0] += shared_rew
             self._current_lengths[0] += 1
 
-            # ---- 只在有 READY agent 时存入 buffer（决策步缓冲）----
             any_ready = bool(active_mask.any())
             if any_ready:
                 with self._profile("collect/buffer_write"):
@@ -1367,9 +1235,8 @@ class MATOnPolicyCollector(BaseCollector):
                     self._shift_buf.append(shift_new[0].cpu().numpy().copy())
                     self._node_idx_buf.append(node_idx.copy())
                     self._active_mask_buf.append(active_mask.copy())
-                    self._change_rewards[0] = 0.0  # 重置 change_reward
+                    self._change_rewards[0] = 0.0
 
-            # episode 结束时重置
             if done:
                 self._change_rewards[0] = 0.0
                 self._last_shift[0] = torch.zeros(
@@ -1380,7 +1247,6 @@ class MATOnPolicyCollector(BaseCollector):
             self._obs = obs_dict
             self._info = info_dict
 
-        # 保存最后一步状态供 MC return bootstrap
         with self._profile("collect/state_query"):
             last_gs = self.env.call_env_method("state_mat")[0]
             last_ni = self.env.call_env_method("get_current_node_indices")[0]
@@ -1390,11 +1256,10 @@ class MATOnPolicyCollector(BaseCollector):
         self._last_active_mask = last_am
         self._last_shift_np = self._last_shift[0].cpu().numpy()
 
-        # ---- 构建 MATBatch ----
         with self._profile("collect/batch_build"):
             T = len(self._rewards_buf)
             if T == 0:
-                # 极端情况：整个 n_steps 内无决策步（不应发生）
+
                 batch = self._MATBatch(
                     graph_state=np.zeros((1, self.n_agents, 1, 3), dtype=np.float32),
                     actions=np.zeros((1, self.n_agents), dtype=np.int64),
@@ -1406,13 +1271,13 @@ class MATOnPolicyCollector(BaseCollector):
                 )
             else:
                 batch = self._MATBatch(
-                    graph_state=np.stack(self._graph_state_buf),   # (T,N,G,3)
-                    actions=np.stack(self._actions_buf),            # (T,N)
-                    log_probs=np.stack(self._log_probs_buf),        # (T,N,G)
-                    rewards=np.array(self._rewards_buf, dtype=np.float32),  # (T,)
-                    shift_action=np.stack(self._shift_buf),         # (T,N,N,2)
-                    node_last_idx=np.stack(self._node_idx_buf),     # (T,N)
-                    active_mask=np.stack(self._active_mask_buf),    # (T,N)
+                    graph_state=np.stack(self._graph_state_buf),   # (T,N,G,3).
+                    actions=np.stack(self._actions_buf),            # (T,N).
+                    log_probs=np.stack(self._log_probs_buf),        # (T,N,G).
+                    rewards=np.array(self._rewards_buf, dtype=np.float32),  # (T,).
+                    shift_action=np.stack(self._shift_buf),         # (T,N,N,2).
+                    node_last_idx=np.stack(self._node_idx_buf),     # (T,N).
+                    active_mask=np.stack(self._active_mask_buf),    # (T,N).
                     last_graph_state=self._last_graph_state,
                     last_node_idx=self._last_node_idx,
                     last_active_mask=self._last_active_mask,
@@ -1427,12 +1292,7 @@ class MATOnPolicyCollector(BaseCollector):
             episode_lengths=self._episode_lengths.copy(),
         )
 
-    # -------------------------------------------------------------------------
-    #  私有辅助
-    # -------------------------------------------------------------------------
-
     def _extract_active_mask_all_agents(self) -> np.ndarray:
-        """从 self._info 提取每个 agent 的 active_mask，返回 (N,) float32。"""
         info = self._info
         mask = np.ones(self.n_agents, dtype=np.float32)
         if info is None:
@@ -1453,28 +1313,22 @@ class MATOnPolicyCollector(BaseCollector):
 
     def _map_graph_idx_to_env_actions(
         self,
-        graph_idx_actions: np.ndarray,  # (N,) int — graph index
-        current_node_idx: np.ndarray,   # (N,) int
+        graph_idx_actions: np.ndarray,  # (N,) int - graph index.
+        current_node_idx: np.ndarray,   # (N,) int.
     ) -> Dict[str, np.ndarray]:
-        """将 graph index 转为 VectorEnv.step() 所需格式。
-
-        VectorEnv.step() 期望: Dict[str, np.ndarray(num_envs,)]
-        即每个 agent 的动作数组（长度=num_envs，这里 num_envs=1）。
-        """
         results = self.env.call_env_method(
             "graph_idx_to_action",
             graph_idx_actions.tolist(),
         )
-        # results[0]: Dict[str, int]（env 0 的 agent->action 映射）
+        # results[0]: Dict[str, int].
         per_env_dict = results[0]
-        # 封装为 {agent: np.array([action])} 格式，长度=1
+
         return {
             agent: np.array([act], dtype=np.int64)
             for agent, act in per_env_dict.items()
         }
 
     def _get_shared_reward(self, rew_dict) -> float:
-        """从 reward dict 中取 agent_0 的标量奖励（共享奖励，与原论文对应）。"""
         if rew_dict is None:
             return 0.0
         for key in ("agent_0", "agent_0"):
@@ -1486,7 +1340,6 @@ class MATOnPolicyCollector(BaseCollector):
         return 0.0
 
     def _check_done(self, term_dict, trunc_dict) -> bool:
-        """任意 agent done → episode done（env_0）。"""
         if term_dict is None and trunc_dict is None:
             return False
         for d in (term_dict, trunc_dict):

@@ -1,20 +1,11 @@
-# MAPPO + MAGECEnv 超参数搜索（通用，覆盖 longedge / TSP12 / SF 图）
-# 用法（longedge）:
 #   python sweep.py --base-config configs/experiments/magec/mappo_magec_longedge.yaml \
 #                   --sweep-config configs/sweep/magec/mappo_magec.yaml --count 40
-# 用法（SF）:
 #   python sweep.py --base-config configs/experiments/magec/mappo_magec_SF.yaml \
 #                   --sweep-config configs/sweep/magec/mappo_magec.yaml --count 40
-#
-# 并行示例:
 #   python sweep.py --base-config configs/experiments/magec/mappo_magec_SF.yaml \
 #                   --sweep-config configs/sweep/magec/mappo_magec.yaml --create-only
 #   python sweep.py --base-config configs/experiments/magec/mappo_magec_SF.yaml \
 #                   --sweep-id <ID> --count 15
-#
-# total_steps 由各 base_config 的 training.total_steps 决定（避免覆盖不同图的预算）
-# num_steps 最小值 512: SF 图 steps_per_episode≈330，256 会导致部分 iteration reward=N/A
-
 method: bayes
 
 metric:
@@ -24,7 +15,6 @@ metric:
 parameters:
   seed:
     value: 42
-  # ---- MAPPOParams: 优化器 ----
   actor_lr:
     min: 5.0e-6
     max: 1.0e-3
@@ -56,7 +46,6 @@ parameters:
     value: 0.999
 
   # ---- OnPolicyTrainerConfig ----
-  # 最小值 512: SF EventDrivenEnv 上 256 步/env 约只覆盖 0.77 个 episode，易出现 N/A
   num_steps:
     values: [3072, 4096]
 
@@ -66,16 +55,14 @@ parameters:
   update_epochs:
     values: [3, 5]
 
-  # total_steps 由各 experiment base 的 training.total_steps 决定，避免覆盖不同图预算
 
   save_interval:
     value: 200
 
-  # ---- 自定义早停 ----
 early_terminate:
-  min_trial: 4              # 前 N 个 trial 仅建立 milestone 基准
-  min_steps: 10000000       # 达到该 env steps 后做 cross-trial 比较
-  terminate_ratio: 0.5      # 指标不在前 40% 则早停（可根据地图特性调整）
-  early_stop_iters: 200     # trial 内至少运行 N iters 后启用 slope 检查
+  min_trial: 4
+  min_steps: 10000000
+  terminate_ratio: 0.5
+  early_stop_iters: 200
   slope_horizons: [16, 64, 128]
   slope_threshold: 3.0e-5

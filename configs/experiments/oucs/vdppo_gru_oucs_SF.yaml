@@ -1,25 +1,18 @@
 # VDPPO + GRU + OUCSEnv (SF / SFcrimemap)
-# 单卡训练:
 #   python train.py configs/experiments/oucs/vdppo_gru_oucs_SF.yaml
-# WandB sweep（推荐 SF 专用，含 early_terminate）:
 #   python sweep.py --base-config configs/experiments/oucs/vdppo_gru_oucs_SF.yaml \
 #                   --sweep-config configs/sweep/oucs/vdppo_gru_oucs_SF.yaml --count 40
-# 亦可用通用 sweep（无 SF 早停块）: configs/sweep/oucs/vdppo_gru_oucs.yaml
-
-# ---- 分发字段 ----
 algo_name: vdppo
 env_type: oucs
 actor_type: rnn
 q_type: rnn
 
-# ---- 实验元信息 ----
 exp_name: vdppo-gru-oucs-SF
 graph_name: SF
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境（与 masup_SF eval 中 num_agents / init_positions / episode_len 对齐）----
 env:
   graph_path: graphs/SFcrimemap.json
   enable_wait: false
@@ -32,7 +25,6 @@ env:
     truncate_by_time: true
     penalised_factor: 1.5
 
-# ---- 算法 ----
 algo:
   use_active_mask: true
   actor_lr: 0.0005
@@ -47,12 +39,9 @@ algo:
   target_update_freq: 1
   q_clip_range: null
   mixer_embed_dim: 64
-  # 与更长 rollout 对齐，利于 GRU 时序 credit
   data_chunk_length: 16
   reward_global: false
 
-# ---- 训练 ----
-# SF 长边 + 按时间截断：加大并行与每轮步数，减少「整轮无 episode 结束」导致的 reward=N/A
 training:
   num_envs: 64
   use_subproc: true
@@ -63,7 +52,6 @@ training:
   update_epochs: 5
   eval_interval: 10
 
-# ---- 网络 ----
 actor:
   rnn_type: gru
   hidden_size: 64

@@ -63,7 +63,7 @@ parameters:
     value: models/imi-mappo-pre-masup-grid-9a/imi_pre_masup_mlp_mappo_grid_9a__1780897681_final/policy.pt
   critic_path:
     value: models/imi-mappo-pre-masup-grid-9a/imi_pre_masup_mlp_mappo_grid_9a__1780897681_final/critic.pt
-    
+
 early_terminate:
   min_trial: 4
   min_steps: 15000000

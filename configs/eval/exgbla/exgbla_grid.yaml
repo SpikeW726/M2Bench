@@ -1,7 +1,4 @@
-# ExGBLAEnv grid 评估配置（3 agents，含扩展邻居位置，FixedStepEnv）
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/exgbla/exgbla_grid.yaml --model models/xxx/final
-
 algo_name: qtable
 env_type: ex_gbla
 

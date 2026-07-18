@@ -1,13 +1,6 @@
-# MAPPO + MAGECEnv (grid) 超参数搜索
-# 用法:
 #   python sweep.py --base-config configs/experiments/magec/mappo_magec_grid.yaml \
 #                   --sweep-config configs/sweep/magec/mappo_magec_grid.yaml \
 #                   --eval-config configs/eval/magec/magec_grid.yaml --count 40
-#
-# grid 图: 50 节点，phi=1（均匀），6 agents，episode_len=500 模拟秒
-# steps_per_episode≈227，num_steps=512 可稳定覆盖 2+ episode
-# gamma 无需过高（比 SF），ent_coef 适中
-
 method: bayes
 
 metric:
@@ -52,12 +45,10 @@ parameters:
   gae_lambda:
     values: [0.95, 0.99, 0.999]
 
-  # grid 短 horizon，gamma 不必过高
   gamma:
     value: 0.999
 
   # ---- OnPolicyTrainerConfig ----
-  # grid steps_per_episode≈227，512 足够覆盖 episode
   num_steps:
     values: [1024, 2048]
   minibatch_size:
@@ -65,6 +56,5 @@ parameters:
   update_epochs:
     values: [3, 5]
 
-  # total_steps 由 experiment base 决定
   save_interval:
     value: 200

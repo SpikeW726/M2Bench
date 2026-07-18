@@ -1,7 +1,4 @@
-# OUCSEnv grid 评估配置（8 agents，norm_obs: true）
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/oucs/oucs_grid.yaml --model models/xxx/final
-
 env_type: oucs
 
 env:

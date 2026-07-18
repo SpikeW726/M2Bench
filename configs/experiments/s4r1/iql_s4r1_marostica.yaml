@@ -1,7 +1,4 @@
 # IQL + S4R1Env @ marostica
-# 图统计: nodes=41, directed_edges=106, max_out_degree=4, avg_edge=2.49, max_edge=4.0
-# 物理时间截断: episode_len=500, total_steps=50000000
-
 algo_name: iql
 env_type: s4r1
 q_type: mlp

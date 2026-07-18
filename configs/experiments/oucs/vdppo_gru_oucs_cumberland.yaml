@@ -1,7 +1,4 @@
 # VDPPO + OUCSEnv @ cumberland
-# 图统计: nodes=40, directed_edges=88, max_out_degree=4, avg_edge=5.702, max_edge=13.275
-# 物理时间截断: episode_len=500, total_steps=40000000
-
 algo_name: vdppo
 env_type: oucs
 actor_type: rnn

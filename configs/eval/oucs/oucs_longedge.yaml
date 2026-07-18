@@ -1,7 +1,4 @@
-# OUCSEnv LongEdge 评估配置
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/oucs/oucs_longedge.yaml --model models/xxx/final
-
 env_type: oucs
 
 env:

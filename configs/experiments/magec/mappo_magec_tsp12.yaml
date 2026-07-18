@@ -1,34 +1,24 @@
-# MAPPO + MAGECEnv (TSP12) — MAGEC Neighbor Scoring Actor + MLP Critic
-# 完整复现 Goeckner et al. 2024 论文设计（phi 加权 idleness，事件驱动）
-# 用法: python train.py configs/experiments/mappo_magec_tsp12_scratch.yaml
-
-# ---- 分发字段 ----
 algo_name: mappo
 env_type: magec
 actor_type: sage
 critic_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: mappo-magec-tsp12
 graph_name: TSP12
 track_wandb: True
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
-# episode_len: 物理时间(truncate_by_time=true) 或 step 数(false)
-# TSP12: 12 节点, max_degree=5, action_dim=6, state_dim=156
 env:
   graph_path: graphs/simple_TSP_12.json
   norm_reward: true
   num_agents: 3
   episode_len: 300
   custom_configs:
-    truncate_by_time: true   # 按物理时间截止
-    alpha: 1.0               # local reward 系数
-    beta: 0.5                # terminal reward 系数
+    truncate_by_time: true
+    alpha: 1.0
+    beta: 0.5
 
-# ---- 算法 (自动映射到 MAPPOParams) ----
 algo:
   use_active_mask: true
   actor_lr: 3.0e-4
@@ -40,7 +30,6 @@ algo:
   ent_coef: 0.01
   shared_policy: true
 
-# ---- 训练 ----
 training:
   num_envs: 8
   use_subproc: true
@@ -51,28 +40,22 @@ training:
   update_epochs: 5
   eval_interval: 10
 
-# ---- 网络 ----
-# GraphSageActor (Neighbor Scoring 模式):
-#   action_dim = max_degree + 1 = 5 + 1 = 6  (由 env 动态传入)
 #   node_feat_dim=3: [nodeType, phi_idleness_norm, degree]
 #   edge_feat_dim=2: [weight_norm, neighborIndex]
-#   global_feat_dim=2: [avg_phi_idle_norm, worst_phi_idle_norm] (actor 不使用)
 actor:
   graph_path: graphs/simple_TSP_12.json
   agent_num: 3
   role_imformation: agent-index
   hidden_dim: 64
-  gnn_layers: 5               # 论文 K=10
+  gnn_layers: 5
   actor_mlp_layers: 1
   mlp_activation: relu
-  node_feat_dim: 3             # 须与 MAGECEnv 一致
-  edge_feat_dim: 2             # 须与 MAGECEnv 一致
-  global_feat_dim: 2           # 须与 MAGECEnv 一致
-  neighbor_scoring: true       # 启用 MAGEC Neighbor Scoring 分支
-  use_jk: false                # 是否启用 Jumping Knowledge
+  node_feat_dim: 3
+  edge_feat_dim: 2
+  global_feat_dim: 2
+  neighbor_scoring: true
+  use_jk: false
 
-# CriticMLP 输入为 MAPPO 中心化状态
 # state_dim = num_nodes + num_nodes^2 = 12 + 144 = 156
-# critic_input_dim = state_dim + agent_one_hot = 156 + 3 = 159 (由 train.py 自动计算)
 critic:
   hidden: [256, 256]

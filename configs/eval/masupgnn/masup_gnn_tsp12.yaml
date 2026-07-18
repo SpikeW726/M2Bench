@@ -1,7 +1,4 @@
-# MASUPGraphEnv (masup_gnn) TSP12 评估配置
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/masupgnn/masup_gnn_tsp12.yaml --model models/xxx/final
-
 env_type: masup_gnn
 
 env:

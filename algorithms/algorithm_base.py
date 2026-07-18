@@ -1,22 +1,24 @@
-"""RL 算法基类层次结构。
+"""Shared reinforcement-learning algorithm infrastructure.
 
-BaseAlgorithm
-├── ActorCriticOnPolicyAlgo  ← AC On-Policy 通用基础设施 (GAE, prepare_batch)
-│   └── A2CBase              ← update 骨架 + hook methods (在 rl/a2c.py 中定义)
-│       ├── A2CAlgo          ← 单智能体 A2C
-│       ├── MAA2CAlgo        ← 多智能体 A2C (+ CentralizedCriticMixin)
-│       └── PPOBase          ← PPO hook overrides (在 rl/ppo.py 中定义)
-│           ├── PPOAlgo
-│           ├── IPPOAlgo
-│           └── MAPPOAlgo    ← (+ CentralizedCriticMixin)
-└── QLearningOffPolicyAlgo   (DQN/SAC, 待完善)
+The hierarchy separates reusable update mechanics from algorithm-specific
+losses::
 
-设计原则：
-- ActorCriticOnPolicyAlgo 只含算法无关的公共逻辑 (GAE, value norm, prepare_batch)
-- A2CBase 提供 update 骨架 (Template Method)，通过 hook 支持 A2C/PPO 差异化
-- PPO 特有逻辑 (clipped surrogate, KL early stopping) 在 PPOBase 中 override
-- CTDE 辅助方法在 CentralizedCriticMixin (marl/ctde_mixin.py) 中
-- optimizer / lr_scheduler 由最终子类创建
+    BaseAlgorithm
+    |-- ActorCriticOnPolicyAlgo
+    |   `-- A2CBase
+    |       |-- A2CAlgo
+    |       |-- MAA2CAlgo + CentralizedCriticMixin
+    |       `-- PPOBase
+    |           |-- PPOAlgo
+    |           |-- IPPOAlgo
+    |           `-- MAPPOAlgo + CentralizedCriticMixin
+    `-- QLearningOffPolicyAlgo
+
+``ActorCriticOnPolicyAlgo`` owns GAE, value normalization, truncation
+bootstrapping, and batch preparation. ``A2CBase`` supplies the update template,
+while PPO-specific clipping and KL stopping are implemented by ``PPOBase``.
+Centralized-training helpers live in ``CentralizedCriticMixin``. Concrete
+subclasses create their own optimizers and learning-rate schedulers.
 """
 
 from abc import ABC, abstractmethod
@@ -30,35 +32,27 @@ from configs.algo_configs import OnPolicyParams
 from policies.rl.rl_base import RLBasePolicy, ActorPolicy
 from data.batch import BaseBatch, RolloutBatch, TransitionBatch
 
-
 @dataclass
 class TrainingStats:
-    """Algorithm.update() 返回的训练统计量。"""
+    """Statistics returned by an algorithm update."""
+
     loss: float = 0.0
     policy_loss: float = 0.0
     value_loss: float = 0.0
     entropy: float = 0.0
     extra: Dict[str, float] = field(default_factory=dict)
 
-
-# ============================================================================
-#                             Base Algorithm
-# ============================================================================
+# Base Algorithm.
 
 class BaseAlgorithm(nn.Module, ABC):
-    """
-    RL 算法基类。
-
-    职责：loss 计算、梯度更新、LR 调度。
-    optimizer 和 lr_scheduler 由子类在自身 __init__ 中创建。
-    """
+    """Base class responsible for loss computation and parameter updates."""
 
     def __init__(self, policy: RLBasePolicy):
         super().__init__()
         self.policy = policy
         self.device = policy.device
 
-        # 由子类创建
+        # Created by subclasses.
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.lr_scheduler = None
 
@@ -67,25 +61,17 @@ class BaseAlgorithm(nn.Module, ABC):
         pass
 
     def set_training_mode(self, mode: bool):
-        """切换 train/eval 模式。"""
         self.train(mode)
         self.policy.set_training_mode(mode)
 
-
-# ============================================================================
-#                          On-Policy Algorithm
-# ============================================================================
+# On-Policy Algorithm.
 
 class ActorCriticOnPolicyAlgo(BaseAlgorithm):
-    """
-    On-policy Actor-Critic 通用基类。
+    """Algorithm-independent infrastructure for on-policy actor-critic methods.
 
-    提供算法无关的公共基础设施，不含任何 PPO / A2C 特有逻辑：
-    - _gae_vectorized():        向量化 GAE（标准 + A+ 透明 GAE）
-    - _compute_trunc_bootstrap(): truncation 处的 V bootstrap
-    - prepare_batch():          单 RolloutBatch 的 GAE 预处理
-
-    update() 留给子类（PPOBase / A2CBase 等）实现。
+    This class implements standard and transparent GAE, truncation
+    bootstrapping, value normalization, and rollout preprocessing. Concrete
+    A2C and PPO classes provide the optimization step.
     """
 
     def __init__(
@@ -100,7 +86,6 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         self.critic = critic.to(self.device) if critic is not None else None
         self.num_envs = num_envs
 
-        # Actor-Critic On-Policy 通用超参
         self.gamma = params.gamma
         self.gae_lambda = params.gae_lambda
         self.vf_coef = params.vf_coef
@@ -111,7 +96,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         self.use_value_norm = params.use_value_norm
         self.data_chunk_length = params.data_chunk_length
 
-        # Value Normalization
+        # Value Normalization.
         self.ret_rms = None
         if self.use_value_norm:
             from utils.train_utils import RunningMeanStd
@@ -120,59 +105,46 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
                 self.ret_rms.mean.fill_(value_norm_config.get('ret_mean', 0.0))
                 self.ret_rms.var.fill_(value_norm_config.get('ret_std', 1.0) ** 2)
                 self.ret_rms.count.fill_(float(value_norm_config.get('ret_count', 1)))
-                # self.ret_rms.count.fill_(1.0)
 
-        # RNN critic hidden state（跨 collect 持久化）
+        # RNN critic hidden state.
         self._critic_hidden: Optional[torch.Tensor] = None
 
     @property
     def is_recurrent(self) -> bool:
-        """Actor 是否为 RNN"""
         return getattr(self.policy, "is_recurrent", False)
 
     @property
     def is_critic_recurrent(self) -> bool:
-        """Critic 是否为 RNN"""
         if self.critic is None:
             return False
         return getattr(self.critic, "is_recurrent", False)
 
     @property
     def is_any_recurrent(self) -> bool:
-        """Actor 或 Critic 任一为 RNN 时，需要 chunk_split"""
         return self.is_recurrent or self.is_critic_recurrent
-
-    # ====================================================================
-    #                     向量化 GAE（核心共享方法）
-    # ====================================================================
 
     def _gae_vectorized(
         self,
-        rewards: torch.Tensor,                          # (T, N)
-        values: torch.Tensor,                           # (T, N) real scale
-        dones: torch.Tensor,                            # (T, N)
-        truncateds: Optional[torch.Tensor],             # (T, N) or None
-        trunc_bootstrap: torch.Tensor,                  # (T, N) 预计算的 truncation bootstrap V
-        active_mask: Optional[torch.Tensor] = None,     # (T, N) or None
+        rewards: torch.Tensor,                          # (T, N).
+        values: torch.Tensor,                           # (T, N) real scale.
+        dones: torch.Tensor,                            # (T, N).
+        truncateds: Optional[torch.Tensor],             # (T, N) or None.
+        trunc_bootstrap: torch.Tensor,                  # Shape: (T, N).
+        active_mask: Optional[torch.Tensor] = None,     # (T, N) or None.
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute GAE for all environments in parallel.
+
+        With no ``active_mask``, this is standard GAE. When the mask is present,
+        rewards from inactive transitions are accumulated into the preceding
+        active transition. ``trunc_bootstrap`` contains precomputed ``V(s')``
+        values at truncations and zero elsewhere.
+
+        Returns flattened advantage and return tensors of shape ``(T * N,)``.
         """
-        向量化 GAE，沿 env 维度 N 并行计算。
 
-        支持两种模式：
-        1. 标准 GAE（active_mask=None）
-        2. A+ 透明 GAE（active_mask 存在时，inactive 步的奖励累积到前一个 active 步）
-
-        Args:
-            trunc_bootstrap: 每个 truncation 点的 V(s') bootstrap 值，
-                             非 truncation 位置为 0。由调用方预计算。
-
-        Returns:
-            advantages (T*N,), returns (T*N,)
-        """
         T, N = rewards.shape
         device = rewards.device
 
-        # ---- 1. 构建 mask ----
         if truncateds is not None:
             trunc_mask = truncateds > 0.5
         else:
@@ -181,10 +153,8 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         done_mask = dones > 0.5
         term_mask = done_mask & ~trunc_mask
 
-        # ---- 2. 最后一步 bootstrap ----
-        last_step_bootstrap = values[-1].clone()  # (N,)
+        last_step_bootstrap = values[-1].clone()  # (N,).
 
-        # ---- 3. 反向循环 ----
         use_transparent = active_mask is not None
         active_bool = active_mask > 0.5 if use_transparent else None
 
@@ -192,7 +162,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         last_gae = torch.zeros(N, device=device)
 
         if not use_transparent:
-            # ===== 标准 GAE =====
+
             for t in reversed(range(T)):
                 if t == T - 1:
                     next_val = last_step_bootstrap.clone()
@@ -211,7 +181,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
                 )
                 advantages[t] = last_gae
         else:
-            # ===== A+ 透明 GAE =====
+
             next_active_val = last_step_bootstrap.clone()
             acc_reward = torch.zeros(N, device=device)
             acc_discount = torch.ones(N, device=device)
@@ -220,7 +190,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
             for t in reversed(range(T)):
                 active_t = active_bool[t]
 
-                # done 边界处理
+                # Handle episode boundaries.
                 if done_mask[t].any():
                     done_val = torch.where(
                         term_mask[t],
@@ -233,17 +203,15 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
                     acc_discount = torch.where(done_mask[t], torch.ones_like(acc_discount), acc_discount)
                     acc_gae_decay = torch.where(done_mask[t], torch.ones_like(acc_gae_decay), acc_gae_decay)
 
-                # active 步：用累积量计算多步 δ + GAE
                 effective_next_val = acc_reward + acc_discount * next_active_val
                 delta_active = rewards[t] + self.gamma * effective_next_val - values[t]
                 gae_active = delta_active + self.gamma * self.gae_lambda * acc_gae_decay * last_gae
 
-                # inactive 步：累积奖励和折扣
                 new_acc_reward = rewards[t] + self.gamma * acc_reward
                 new_acc_discount = self.gamma * acc_discount
                 new_acc_gae_decay = self.gamma * self.gae_lambda * acc_gae_decay
 
-                # 选择性更新
+                # Apply the update selectively.
                 last_gae = torch.where(active_t, gae_active, last_gae)
                 advantages[t] = torch.where(active_t, gae_active, torch.zeros_like(gae_active))
                 next_active_val = torch.where(active_t, values[t], next_active_val)
@@ -256,21 +224,12 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
 
     def _compute_trunc_bootstrap(
         self,
-        truncateds: torch.Tensor,       # (T, N) or None
-        final_global_states,             # T x N nested list, or None
-        critic_input: torch.Tensor,      # (T*N, critic_dim) — 已构建好的 critic 输入
+        truncateds: torch.Tensor,       # (T, N) or None.
+        final_global_states,             # T x N nested list, or None.
+        critic_input: torch.Tensor,      # Shape: (T*N, critic_dim).
         T: int,
         N: int,
     ) -> torch.Tensor:
-        """
-        计算 truncation 处的 bootstrap V(s')。
-
-        默认实现：直接用 final_global_state 过 critic。
-        MAPPO override 此方法以添加 agent one-hot 拼接和 value denorm。
-
-        Returns:
-            trunc_bootstrap: (T, N) tensor，非 truncation 位置为 0
-        """
         device = critic_input.device
         trunc_bootstrap = torch.zeros(T, N, device=device)
 
@@ -281,7 +240,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         if not trunc_mask.any():
             return trunc_bootstrap
 
-        trunc_positions = trunc_mask.nonzero(as_tuple=False)  # (K, 2)
+        trunc_positions = trunc_mask.nonzero(as_tuple=False)  # (K, 2).
 
         batch_states = []
         valid_k_indices = []
@@ -299,7 +258,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
             states_t = torch.stack(batch_states)
 
             if self.is_critic_recurrent:
-                # Truncation = 新 episode 开始，hidden 归零
+
                 zero_h = self.critic.get_initial_hidden(len(batch_states), device)
                 v_raw, _ = self.critic(states_t, zero_h)
                 v_raw = v_raw.squeeze(-1)
@@ -318,35 +277,17 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
 
         return trunc_bootstrap
 
-    # ====================================================================
-    #                     Batch 预处理（通用 GAE 预处理）
-    # ====================================================================
-
-    # ====================================================================
-    #                  Critic RNN 序列处理辅助方法
-    # ====================================================================
-
     def _critic_rnn_values(
         self,
-        critic_input: torch.Tensor,    # (T*N, critic_dim)
-        done_2d: torch.Tensor,          # (T, N)
+        critic_input: torch.Tensor,    # (T*N, critic_dim).
+        done_2d: torch.Tensor,          # (T, N).
         T: int,
         N: int,
         agent_key: Optional[str] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        逐步处理 RNN critic，在 done 边界重置 hidden。
-
-        agent_key 不为 None 时使用 per-agent hidden（IPPO/PPO 多智能体场景），
-        为 None 时使用共享 self._critic_hidden（向后兼容）。
-
-        Returns:
-            values_norm: (T, N) 归一化尺度的值
-            all_hidden: (T, recurrent_N, N, H) 每步的 critic hidden（用于 chunk_split）
-        """
         critic_seq = critic_input.view(T, N, -1)
 
-        # 选择 hidden: per-agent 或 shared
+        # Select per-agent or shared hidden state.
         if agent_key is not None:
             if not hasattr(self, '_critic_hidden_per_agent'):
                 self._critic_hidden_per_agent: Dict[str, torch.Tensor] = {}
@@ -363,37 +304,27 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
 
         for t in range(T):
             if t > 0:
-                done_prev = done_2d[t - 1] > 0.5      # (N,)
+                done_prev = done_2d[t - 1] > 0.5      # (N,).
                 if done_prev.any():
                     hidden = hidden.clone()
                     hidden[:, done_prev, :] = 0.0
 
             all_hidden.append(hidden)
 
-            v_t, hidden = self.critic(critic_seq[t], hidden)    # (N, 1), (rN, N, H)
-            all_values.append(v_t.squeeze(-1))                  # (N,)
+            v_t, hidden = self.critic(critic_seq[t], hidden)    # (N, 1), (rN, N, H).
+            all_values.append(v_t.squeeze(-1))                  # (N,).
 
-        # 持久化最终 hidden
+        # Persist the final hidden state.
         if agent_key is not None:
             self._critic_hidden_per_agent[agent_key] = hidden.detach()
         else:
             self._critic_hidden = hidden.detach()
 
-        values_norm = torch.stack(all_values, dim=0)            # (T, N)
-        critic_rnn_hidden = torch.stack(all_hidden, dim=0)      # (T, rN, N, H)
+        values_norm = torch.stack(all_values, dim=0)            # (T, N).
+        critic_rnn_hidden = torch.stack(all_hidden, dim=0)      # (T, rN, N, H).
         return values_norm, critic_rnn_hidden
 
-    # ====================================================================
-    #                     Batch 预处理（通用 GAE 预处理）
-    # ====================================================================
-
     def prepare_batch(self, batch: RolloutBatch) -> RolloutBatch:
-        """
-        单 RolloutBatch 的 GAE 预处理。
-
-        流程: reshape → compute values → trunc bootstrap → vectorized GAE → value norm → flatten
-        RNN critic 时逐步处理序列并记录 hidden，供 update 中 chunk_split 使用。
-        """
         final_gs = batch.final_global_state
         batch = batch.to_tensor(self.device)
 
@@ -410,7 +341,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
                 values_norm, critic_rnn_h = self._critic_rnn_values(
                     critic_input, done_2d, T, N,
                 )
-                # (T, rN, N, H) -> (T*N, rN, H) 与 batch flat 布局对齐
+                # Shape: (T, rN, N, H) -> (T*N, rN, H).
                 rN, H = critic_rnn_h.shape[1], critic_rnn_h.shape[3]
                 batch.critic_rnn_hidden = critic_rnn_h.permute(0, 2, 1, 3).reshape(T * N, rN, H)
             else:
@@ -437,7 +368,7 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
             )
             values_flat = values_norm.view(-1)
 
-        # 更新 Value Normalization 统计量
+        # Update value-normalization statistics.
         if self.use_value_norm and self.ret_rms is not None:
             if active_mask_2d is not None:
                 active_flat = batch.active_mask > 0.5
@@ -452,22 +383,15 @@ class ActorCriticOnPolicyAlgo(BaseAlgorithm):
         batch.value = values_flat
         return batch
 
-
-
-# ============================================================================
-#                          Off-Policy Algorithm
-# ============================================================================
+# Off-Policy Algorithm.
 
 class QLearningOffPolicyAlgo(BaseAlgorithm):
-    """
-    单智能体 off-policy Q-learning 基类 (D3QN 等)。
+    """Shared optimization and target-network logic for Q-learning methods.
 
-    提供：
-    - 单优化器 + 梯度裁剪
-    - target network 创建 / soft-hard update
-    - 标准 update 流程 (compute_loss → backward → optimizer.step → target update)
-
-    policy 预期为 ValuePolicy（内含 Q-network + epsilon-greedy）。
+    Subclasses implement ``compute_loss``. ``tau < 1`` performs soft target
+    updates; otherwise a hard copy is made every ``target_update_freq`` updates.
+    Both flat transition and recurrent sequence batches are supported by concrete
+    algorithms.
     """
 
     def __init__(
@@ -493,7 +417,7 @@ class QLearningOffPolicyAlgo(BaseAlgorithm):
     def is_recurrent(self) -> bool:
         return getattr(self.policy, "is_recurrent", False)
 
-    # ---- target network 管理 ----
+    # target network.
 
     def _create_target_network(self):
         import copy
@@ -512,16 +436,7 @@ class QLearningOffPolicyAlgo(BaseAlgorithm):
         if self.target_policy is not None:
             self.target_policy.load_state_dict(self.policy.state_dict())
 
-    # ---- 标准 update 流程 ----
-
     def update(self, batch: BaseBatch, **kwargs) -> TrainingStats:
-        """compute_loss → backward → clip → step → target update。
-
-        子类若需在 update 前后增加逻辑（如 epsilon 衰减），
-        应 override 此方法并调用 super().update()。
-
-        注意：compute_loss 接收的 batch 已转为 tensor。
-        """
         batch = batch.to_tensor(self.device)
         loss, stats = self.compute_loss(batch)
 
@@ -548,5 +463,4 @@ class QLearningOffPolicyAlgo(BaseAlgorithm):
 
     @abstractmethod
     def compute_loss(self, batch: BaseBatch) -> tuple[torch.Tensor, TrainingStats]:
-        """计算 TD loss。batch 已在 update() 中转为 device tensor。"""
         pass

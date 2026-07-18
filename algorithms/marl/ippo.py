@@ -1,5 +1,3 @@
-"""IPPO: Independent PPO — 每个 agent 独立策略网络，共享 critic，单优化器。"""
-
 from typing import Dict, Optional
 import numpy as np
 import torch
@@ -11,17 +9,7 @@ from configs.algo_configs import IPPOParams
 from policies.marl.marl_base import MultiAgentPolicy
 from data.batch import RolloutBatch
 
-
 class IPPOAlgo(PPOBase):
-    """
-    IPPO: 独立策略 + 共享 Critic + 单优化器。
-
-    继承 PPOBase 的 PPO 超参 (clip_range, clip_vloss, target_kl)，
-    override prepare_batch 和 update 以支持 per-agent 独立策略：
-    - prepare_batch: per-agent 循环调用基类 _gae_vectorized
-    - update: 同步 minibatch 切分，per-agent 累加 PPO loss
-    """
-
     def __init__(
         self,
         policy: MultiAgentPolicy,
@@ -34,13 +22,12 @@ class IPPOAlgo(PPOBase):
     ):
         super().__init__(policy, critic, params, num_envs, value_norm_config=value_norm_config)
 
-        # 单优化器: 所有独立 policy + critic
         self.optimizer = torch.optim.Adam(
             list(policy.parameters()) + list(critic.parameters()),
             lr=params.lr,
         )
 
-        # LR scheduler
+        # LR scheduler.
         self.lr_scheduler = None
         if params.use_lr_scheduler and total_iterations and optimizer_steps_per_iter:
             decay_steps = int(total_iterations * params.lr_decay_ratio * optimizer_steps_per_iter)
@@ -51,23 +38,14 @@ class IPPOAlgo(PPOBase):
                 total_iters=decay_steps,
             )
 
-    # ====================================================================
-    #                          Batch 预处理
-    # ====================================================================
+    # Preprocessing.
 
     def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> Dict[str, RolloutBatch]:
-        """
-        Per-agent 向量化 GAE 预处理。
-
-        每个 agent 独立计算: values → trunc bootstrap → _gae_vectorized
-        结果保留 Dict[str, RolloutBatch] 供 update 使用。
-        RNN 时记录 T/N 供 chunk_split 使用。
-        """
         N = self.num_envs
         all_ret_for_norm = []
 
         for agent, batch in batch_dict.items():
-            final_obs = batch.final_obs          # per-agent final obs，供 truncation bootstrap
+            final_obs = batch.final_obs          # per-agent final obs.
             batch = batch.to_tensor(self.device)
             total_size = batch.obs.shape[0]
             T = total_size // N
@@ -75,7 +53,7 @@ class IPPOAlgo(PPOBase):
             self._last_N = N
 
             with torch.no_grad():
-                # IPPO: critic 只用 per-agent 局部 obs，不使用全局 state
+
                 critic_input = batch.obs
                 done_2d = batch.done.view(T, N)
 
@@ -129,9 +107,7 @@ class IPPOAlgo(PPOBase):
 
         return batch_dict
 
-    # ====================================================================
-    #                          PPO Update
-    # ====================================================================
+    # PPO Update.
 
     def update(
         self,
@@ -139,11 +115,6 @@ class IPPOAlgo(PPOBase):
         minibatch_size: int = -1,
         update_epochs: int = 1,
     ) -> TrainingStats:
-        """
-        同步 minibatch PPO 更新：所有 agent 的 batch 同步切分，
-        per-minibatch 累加各 agent 的 loss 后做一次 optimizer step。
-        RNN 时使用 chunk_split + evaluate_actions_sequence。
-        """
         agents = list(batch_dict.keys())
         n_agents = len(agents)
         batch_dict = {k: v.to_tensor(self.device) for k, v in batch_dict.items()}
@@ -186,7 +157,7 @@ class IPPOAlgo(PPOBase):
                     mb = agent_mbs[agent][mb_idx]
                     agent_policy = self.policy.get_policy(agent)
 
-                    # ---- Active mask ----
+                    # Active mask.
                     if self.use_active_mask and mb.active_mask is not None:
                         am = mb.active_mask.float()
                         if _any_rnn:
@@ -195,7 +166,7 @@ class IPPOAlgo(PPOBase):
                     else:
                         am = None
 
-                    # ---- Advantage normalization ----
+                    # Advantage normalization.
                     mb_adv = mb.adv
                     if _any_rnn:
                         mb_adv = mb_adv.reshape(-1)
@@ -207,7 +178,7 @@ class IPPOAlgo(PPOBase):
                         elif mb_adv.numel() > 1:
                             mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
-                    # ---- Policy loss ----
+                    # Policy loss.
                     if self.is_recurrent:
                         new_log_prob, entropy = agent_policy.evaluate_actions_sequence(
                             mb.obs, mb.act, mb.rnn_hidden,
@@ -238,8 +209,8 @@ class IPPOAlgo(PPOBase):
                         pg_loss = pg_loss_per_sample.mean()
                         ent_loss = entropy.mean()
 
-                    # ---- Value loss ----
-                    # IPPO: critic 只用 per-agent 局部 obs
+                    # Value loss.
+
                     critic_input = mb.obs
                     if self.is_critic_recurrent:
                         new_value_seq, _ = self.critic.forward_sequence(

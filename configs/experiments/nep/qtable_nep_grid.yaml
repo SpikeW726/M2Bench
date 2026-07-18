@@ -1,16 +1,4 @@
-# QTable + NEPEnv (grid) — 联合 Q-table 巡逻
-# 用法: python train.py configs/experiments/nep/qtable_nep_grid.yaml
-#
-# grid 图特性（状态空间分析）:
-#   50 节点，182 条有向边
-#   num_agents=3 → edge_combinations_count = C(182, 2) = 16471
-#   state_space = num_nodes × edge_combinations = 50 × 16471 = 823,550 状态
 #   action_space = max_neighbors = 7
-#   Q-table 大小 ≈ 823,550 × 7 ≈ 5.8M 条目（内存可接受但探索较慢）
-#
-# 注意: grid 图 state_space 约为 SF（103K）的 8 倍，充分探索需要极长训练步数。
-# 建议较长 epsilon_decay 以充分探索；若收敛过慢可考虑减少 num_agents=2。
-
 algo_name: qtable
 env_type: nep
 exp_name: qtable-nep-grid

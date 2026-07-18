@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 按 sweep 分组, 每组只保留指标最好的 N 个 trial, 其余删除
+
 import argparse
 import os
 import re
@@ -10,22 +10,17 @@ from datetime import datetime
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 
-# trial 文件夹命名: YYYYMMDD_HHMMSS
 TRIAL_RE = re.compile(r"^(\d{8})_(\d{6})$")
-# 从 config.yaml 中提取 best_metric_value
+
 METRIC_RE = re.compile(r"^\s*best_metric_value:\s*([+-]?[\d.eE+-]+|null)\s*$")
-# 中间迭代快照子目录: iter_<数字>(DRL) / ep_<数字>(Q-table epoch) 等
-# 保留 trial 时需删掉这些中间快照, 只留 best/final
+
 ITER_SNAPSHOT_RE = re.compile(r"^(?:iter|ep)_(\d+)$")
 
-# 保留 trial 时, 内部只留下这些子目录
 KEEP_SUBDIRS = ("best", "final")
 
 SKIP_PREFIXES = ("imi", "happo")
 
-
 def parse_trial_time(name):
-    # 返回 trial 的起始时间 (datetime), 非法命名返回 None
     m = TRIAL_RE.match(name)
     if not m:
         return None
@@ -34,9 +29,7 @@ def parse_trial_time(name):
     except ValueError:
         return None
 
-
 def read_metric(trial_dir):
-    # 优先 best 子目录, 否则 final 子目录; 返回 (value, source) 或 (None, reason)
     for sub in ("best", "final"):
         cfg = os.path.join(trial_dir, sub, "config.yaml")
         if not os.path.isfile(cfg):
@@ -47,17 +40,16 @@ def read_metric(trial_dir):
                 if m:
                     raw = m.group(1)
                     if raw == "null":
-                        return None, f"{sub}/config.yaml: best_metric_value 为 null"
+                        return None, f"{sub}/config.yaml: best_metric_value is null"
                     try:
                         return float(raw), sub
                     except ValueError:
-                        return None, f"{sub}/config.yaml: best_metric_value 无法解析 ({raw})"
-        # 找到 config 但无该字段, 继续尝试下一个子目录
-    return None, "未找到 best_metric_value 字段 (best/final config 均缺失)"
+                        return None, f"{sub}/config.yaml: cannot parse best_metric_value ({raw})"
 
+    return None, "best_metric_value not found in best or final config"
 
 def group_into_sweeps(trials, gap_hours):
-    # trials: [(name, datetime)] 已按时间排序; 相邻间隔超过阈值则切分为新 sweep
+    # trials: [(name, datetime)].
     sweeps = []
     cur = []
     prev_t = None
@@ -71,19 +63,13 @@ def group_into_sweeps(trials, gap_hours):
         sweeps.append(cur)
     return sweeps
 
-
 def cleanup_trial_dir(trial_dir, dry_run):
-    # 删除 trial 内部除 best/final 外的中间快照子目录(iter_500 / ep_1000 等)
-    # 特殊情况: 若 trial 内部没有任何 best/final, 只有 iter_*/ep_* 快照,
-    #   则保留后缀数字最大的一个, 删除其余所有快照
-    # 返回被清理的子目录相对路径列表(用于打印)
     removed = []
     if not os.path.isdir(trial_dir):
         return removed
 
-    # 收集所有 iter_<数字> / ep_<数字> 子目录
-    iter_snapshots = []  # [(int 后缀, 子目录名), ...]
-    has_keep_dir = False  # 是否存在 best/final
+    iter_snapshots = []
+    has_keep_dir = False
     for sub in os.listdir(trial_dir):
         full = os.path.join(trial_dir, sub)
         if not os.path.isdir(full):
@@ -99,7 +85,7 @@ def cleanup_trial_dir(trial_dir, dry_run):
         return removed
 
     if not has_keep_dir:
-        # 只有 iter_*/ep_* 没有 best/final: 保留数字最大的一个
+
         iter_snapshots.sort(key=lambda x: x[0])
         keep_name = iter_snapshots[-1][1]
         for _, sub in iter_snapshots:
@@ -109,93 +95,90 @@ def cleanup_trial_dir(trial_dir, dry_run):
             if not dry_run:
                 shutil.rmtree(os.path.join(trial_dir, sub))
     else:
-        # 有 best/final: 所有中间快照都删掉
+
         for _, sub in iter_snapshots:
             removed.append(sub)
             if not dry_run:
                 shutil.rmtree(os.path.join(trial_dir, sub))
     return removed
 
-
 def process_experiment(exp_dir, keep, gap_hours, dry_run):
     exp_name = os.path.basename(exp_dir)
     entries = sorted(os.listdir(exp_dir))
 
-    trials = []  # 合法 trial: (name, datetime)
+    trials = []
     for name in entries:
         full = os.path.join(exp_dir, name)
         if not os.path.isdir(full):
             continue
         t = parse_trial_time(name)
         if t is None:
-            print(f"  [跳过] 非 trial 文件夹: {name}")
+            print(f"  [skip] Not a trial directory: {name}")
             continue
         trials.append((name, t))
 
     if not trials:
-        print(f"  无有效 trial, 跳过")
+        print("  No valid trials; skipping")
         return
 
     trials.sort(key=lambda x: x[1])
     sweeps = group_into_sweeps(trials, gap_hours)
 
-    print(f"  共 {len(trials)} 个 trial, 划分为 {len(sweeps)} 个 sweep")
+    print(f"  Found {len(trials)} trials grouped into {len(sweeps)} sweeps")
 
     to_delete = []
     for i, sweep in enumerate(sweeps, 1):
         span = f"{sweep[0][0]} ~ {sweep[-1][0]}"
-        scored = []      # (value, name)
-        unscored = []    # 无指标, 一律保留
+        scored = []      # (value, name).
+        unscored = []
         for name, _ in sweep:
             val, info = read_metric(os.path.join(exp_dir, name))
             if val is None:
-                print(f"    [提示] sweep#{i} {name}: {info} -> 无法判断, 保留")
+                print(f"    [note] sweep#{i} {name}: {info} -> indeterminate, keeping")
                 unscored.append(name)
             else:
                 scored.append((val, name))
 
-        # 数值越小越好
         scored.sort(key=lambda x: x[0])
         kept = scored[:keep]
         removed = scored[keep:]
 
-        print(f"  -- sweep#{i} ({span}), {len(sweep)} 个 trial --")
+        print(f"  -- sweep#{i} ({span}), {len(sweep)} trials --")
         for val, name in kept:
             pruned = cleanup_trial_dir(os.path.join(exp_dir, name), dry_run)
-            extra = f", 清理中间快照: {', '.join(pruned)}" if pruned else ""
-            print(f"    [保留] {name}  (best_metric_value={val}){extra}")
+            extra = f", removed intermediate checkpoints: {', '.join(pruned)}" if pruned else ""
+            print(f"    [keep] {name}  (best_metric_value={val}){extra}")
         for name in unscored:
             pruned = cleanup_trial_dir(os.path.join(exp_dir, name), dry_run)
-            extra = f", 清理中间快照: {', '.join(pruned)}" if pruned else ""
-            print(f"    [保留] {name}  (无指标){extra}")
+            extra = f", removed intermediate checkpoints: {', '.join(pruned)}" if pruned else ""
+            print(f"    [keep] {name}  (no metric){extra}")
         for val, name in removed:
-            print(f"    [删除] {name}  (best_metric_value={val})")
+            print(f"    [delete] {name}  (best_metric_value={val})")
             to_delete.append(os.path.join(exp_dir, name))
 
     if not dry_run:
         for path in to_delete:
             shutil.rmtree(path)
         if to_delete:
-            print(f"  已删除 {len(to_delete)} 个 trial")
-
+            print(f"  Deleted {len(to_delete)} trials")
 
 def main():
-    parser = argparse.ArgumentParser(description="按 sweep 分组保留指标最好的若干 trial")
-    parser.add_argument("--root", default=DEFAULT_MODELS_DIR, help="models 根目录")
-    parser.add_argument("--keep", type=int, default=2, help="每个 sweep 保留的 trial 数")
+    parser = argparse.ArgumentParser(description="Keep the best trials within each sweep group")
+    parser.add_argument("--root", default=DEFAULT_MODELS_DIR, help="Models root directory")
+    parser.add_argument("--keep", type=int, default=2, help="Number of trials to keep per sweep")
     parser.add_argument("--gap-hours", type=float, default=24.0,
-                        help="相邻 trial 间隔超过该小时数则视为不同 sweep")
+                        help="Start a new sweep group when adjacent trials differ by more than this many hours")
     parser.add_argument("--execute", action="store_true",
-                        help="真正执行删除; 不加该参数则为 dry-run 仅打印")
+                        help="Actually delete files; without this flag, only print the dry-run actions")
     args = parser.parse_args()
 
     dry_run = not args.execute
-    mode = "DRY-RUN (仅打印, 不删除)" if dry_run else "EXECUTE (将真实删除)"
-    print(f"模式: {mode}")
-    print(f"根目录: {args.root} | 每 sweep 保留: {args.keep} | sweep 间隔阈值: {args.gap_hours}h\n")
+    mode = "DRY-RUN (print only)" if dry_run else "EXECUTE (files will be deleted)"
+    print(f"Mode: {mode}")
+    print(f"Root: {args.root} | Keep per sweep: {args.keep} | Sweep gap: {args.gap_hours}h\n")
 
     if not os.path.isdir(args.root):
-        print(f"错误: 根目录不存在 {args.root}")
+        print(f"Error: root directory does not exist: {args.root}")
         sys.exit(1)
 
     for exp_name in sorted(os.listdir(args.root)):
@@ -203,12 +186,11 @@ def main():
         if not os.path.isdir(exp_dir):
             continue
         if exp_name.startswith(SKIP_PREFIXES):
-            print(f"[跳过实验] {exp_name} (imi/happo 开头)")
+            print(f"[skip experiment] {exp_name} (imi/happo prefix)")
             continue
-        print(f"[实验] {exp_name}")
+        print(f"[experiment] {exp_name}")
         process_experiment(exp_dir, args.keep, args.gap_hours, dry_run)
         print()
-
 
 if __name__ == "__main__":
     main()

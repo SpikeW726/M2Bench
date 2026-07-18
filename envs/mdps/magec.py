@@ -1,17 +1,10 @@
-"""
-MAGECEnv — Multi-Agent Graph Embedding-based Coordination 环境。
+"""Environment for MAGEC graph-based multi-agent coordination.
 
-完整复现论文:
-  Goeckner et al., "Graph Neural Network-based Multi-agent Reinforcement
-  Learning for Resilient Distributed Coordination of Multi-Robot Systems"
-
-设计要点：
-  - 继承 EventDrivenEnv（事件驱动，tick_to_next_event）
-  - action_dim = max_degree + 1（最后维为专用 no-op 槽）
-  - ON_EDGE agent: action_mask=[0..0,1], active_mask=0，动作被 env.step 忽略
-  - 节点 idleness 均以 phi 加权后再归一化
-  - 虚拟节点动态边完整复现论文 Section IV-E.1
-  - 双模截断: truncate_by_time (物理时间) 或 step_count
+The environment is event-driven and uses ``max_degree + 1`` actions, reserving
+the final slot for no-op. Agents on edges expose only no-op and have a zero active
+mask. Node idleness is priority-weighted before normalization, virtual-agent
+edges follow the paper's construction, and episodes may truncate by physical
+time or environment steps.
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -21,22 +14,10 @@ from gymnasium.spaces import Box, Discrete
 from envs.mdps.base_envs import EventDrivenEnv
 from envs.mdps.patrol_core import AgentState, TickResult
 
-
 class MAGECEnv(EventDrivenEnv):
-    """MAGEC 多智能体巡逻环境。
-
-    观测向量遵守 gnn.py 文件头的通用协议：
-      [node_feats | edge_src | edge_dst | edge_attr | edge_mask | global_feat | identity]
-
-    节点特征 (node_feat_dim=3): [nodeType, phi_weighted_idleness_norm, degree]
-    边特征 (edge_feat_dim=2):   [weight_norm, neighborIndex_float]
-    全局特征 (global_feat_dim=2): [avg_phi_idleness_norm, worst_phi_idleness_norm]
-    identity: one-hot agent index (agent-index 模式)
-    """
-
-    NODE_TYPE_PATROL = 0.0   # 巡逻节点
-    NODE_TYPE_AGENT  = 1.0   # 虚拟 agent 节点
-    NEIGHBOR_IDX_NONE = -1.0 # 不可作为 action target 的边
+    NODE_TYPE_PATROL = 0.0
+    NODE_TYPE_AGENT  = 1.0
+    NEIGHBOR_IDX_NONE = -1.0
 
     def __init__(self, config: Dict, **kwargs):
         super().__init__(config)
@@ -44,64 +25,54 @@ class MAGECEnv(EventDrivenEnv):
         w = self.world
         graph = w.graph
 
-        # ---- 图结构基础量 ----
         self.static_node_num   = w.num_nodes
-        self.static_edge_num   = w.num_edges           # 有向边数
+        self.static_edge_num   = w.num_edges
         self.agent_num         = w.num_agents
-        self.max_neighbor_deg  = w.max_neighbors       # 图中节点最大出度
-        self.max_edge_length   = w.max_edge_length     # 边权归一化分母
+        self.max_neighbor_deg  = w.max_neighbors
+        self.max_edge_length   = w.max_edge_length
 
-        # action space: neighbor indices 0..max_degree-1 + no-op(最后维)
+        # action space: neighbor indices 0.max_degree-1 + no-op.
         self.action_dim = self.max_neighbor_deg + 1
 
-        # 静态节点排序（保证索引确定性）
         self.sorted_nodes = sorted(graph.nodes)
         self.node_to_idx  = {n: i for i, n in enumerate(self.sorted_nodes)}
 
-        # 每个节点的邻居按 neighbor_id 升序排列 → 决定 neighborIndex 顺序
         self.sorted_adj: Dict[int, List[Tuple[int, float]]] = {
             v: sorted(graph.adj_list[v], key=lambda x: x[0])
             for v in self.sorted_nodes
         }
 
-        # ---- 图结构：静态有向边列表 ----
         self.static_edges: List[Tuple[int, int, float]] = []
         for v in self.sorted_nodes:
             for nbr, w_edge in self.sorted_adj[v]:
                 self.static_edges.append((v, nbr, w_edge))
 
-        # ---- 观测维度 ----
-        self.node_feat_dim   = 3   # [nodeType, idleness_norm, degree]
-        self.edge_feat_dim   = 2   # [weight_norm, neighborIndex]
-        self.global_feat_dim = 2   # [avg_phi_idle_norm, worst_phi_idle_norm]
-        self.identity_dim    = self.agent_num  # one-hot
+        self.node_feat_dim   = 3   # [nodeType, idleness_norm, degree].
+        self.edge_feat_dim   = 2   # [weight_norm, neighborIndex].
+        self.global_feat_dim = 2   # [avg_phi_idle_norm, worst_phi_idle_norm].
+        self.identity_dim    = self.agent_num  # one-hot.
 
-        # 总节点数 = 静态 + 虚拟 agent 节点
         self.total_nodes = self.static_node_num + self.agent_num
 
-        # 虚拟节点最大出边数: READY 时 1(到当前节点) + max_deg(到邻居)
         self.max_agent_edges   = 1 + self.max_neighbor_deg
         self.total_max_edges   = self.static_edge_num + self.agent_num * self.max_agent_edges
 
         self.obs_size = (
-            self.total_nodes * self.node_feat_dim       # 节点特征
-            + self.total_max_edges * 2                   # edge_src + edge_dst
-            + self.total_max_edges * self.edge_feat_dim  # edge_attr
-            + self.total_max_edges                       # edge_mask
-            + self.global_feat_dim                       # 全局特征
-            + self.identity_dim                          # identity
+            self.total_nodes * self.node_feat_dim
+            + self.total_max_edges * 2                   # edge_src + edge_dst.
+            + self.total_max_edges * self.edge_feat_dim  # edge_attr.
+            + self.total_max_edges                       # edge_mask.
+            + self.global_feat_dim
+            + self.identity_dim                          # identity.
         )
 
-        # ---- 截断参数（episode_len 来自 EnvConfig，其余来自 custom_configs）----
         self.episode_len      = config["episode_len"]
         self.truncate_by_time = kwargs.get("truncate_by_time", True)
 
-        # ---- 奖励参数（论文 Section IV-E.2，来自 custom_configs）----
         self.alpha = kwargs.get("alpha", 1.0)
         self.beta  = kwargs.get("beta", 0.5)
         self.eps   = 1e-6
 
-        # ---- 邻接矩阵（for state()）----
         n = self.static_node_num
         self._adj_matrix = np.zeros((n, n), dtype=np.float32)
         for v in self.sorted_nodes:
@@ -111,7 +82,6 @@ class MAGECEnv(EventDrivenEnv):
                 self._adj_matrix[vi, ni] = 1.0
         self._adj_flat = self._adj_matrix.flatten()
 
-        # ---- _build_obs 加速: 邻居索引查表 + 静态边张量 + 复用 buffer ----
         self._neighbor_pos_of: Dict[Tuple[int, int], int] = {}
         for v in self.sorted_nodes:
             for k, (nbr, _) in enumerate(self.sorted_adj[v]):
@@ -147,10 +117,6 @@ class MAGECEnv(EventDrivenEnv):
         self._global_buf = np.zeros(2, dtype=np.float32)
         self._identity_rows = np.eye(self.agent_num, dtype=np.float32)
 
-    # ------------------------------------------------------------------
-    #  PettingZoo 接口
-    # ------------------------------------------------------------------
-
     def observation_space(self, agent: str):
         n_node = self.total_nodes * self.node_feat_dim
         n_edge_idx = self.total_max_edges * 2
@@ -169,18 +135,12 @@ class MAGECEnv(EventDrivenEnv):
         return Discrete(self.action_dim)
 
     def state(self) -> np.ndarray:
-        """MAPPO Critic 全局状态: phi 加权归一化空闲度 + 邻接矩阵展开。"""
         weighted = self._phi_weighted_idleness()
         w_min, w_max = weighted.min(), weighted.max()
         idleness_norm = (weighted - w_min) / (w_max - w_min + self.eps)
         return np.concatenate([idleness_norm, self._adj_flat]).astype(np.float32)
 
-    # ------------------------------------------------------------------
-    #  内部辅助：phi 加权空闲度
-    # ------------------------------------------------------------------
-
     def _phi_weighted_idleness(self) -> np.ndarray:
-        """返回每个静态节点的 phi * idleness，按 sorted_nodes 顺序。"""
         idle = self.world.node_idleness
         idle_vals = np.array(
             [float(idle.get(v, 0.0)) for v in self.sorted_nodes],
@@ -188,12 +148,7 @@ class MAGECEnv(EventDrivenEnv):
         )
         return self._phi_vec * idle_vals
 
-    # ------------------------------------------------------------------
-    #  观测构建
-    # ------------------------------------------------------------------
-
     def _build_obs(self, result: Optional[TickResult]) -> Dict[str, np.ndarray]:
-        """构建所有 agent 的图结构观测（公共前缀只算一次，仅 identity 按 agent 不同）。"""
         w = self.world
         ml = max(self.max_edge_length, self.eps)
 
@@ -202,7 +157,6 @@ class MAGECEnv(EventDrivenEnv):
         w_max = float(weighted.max())
         denom = w_max - w_min + self.eps
 
-        # ---- 节点特征 ----
         nf = self._node_feats_buf
         sn = self.static_node_num
         idle_norm = (weighted - w_min) / denom
@@ -220,7 +174,6 @@ class MAGECEnv(EventDrivenEnv):
             nf[row, 1] = 0.0
             nf[row, 2] = virt_deg
 
-        # ---- 边: 静态段 + 动态段 ----
         es = self._edge_src_buf
         ed = self._edge_dst_buf
         ea = self._edge_attr_buf
@@ -274,7 +227,7 @@ class MAGECEnv(EventDrivenEnv):
                 except Exception:
                     full_dist = float(self.max_edge_length)
 
-                remaining_dist = float(ag.nominal_action_remaining) * float(ag.speed)  # 名义剩余距离
+                remaining_dist = float(ag.nominal_action_remaining) * float(ag.speed)
                 dist_traveled = max(0.0, full_dist - remaining_dist)
 
                 es[pos] = virt_idx
@@ -297,12 +250,10 @@ class MAGECEnv(EventDrivenEnv):
                     ea[pos, 1] = self.NEIGHBOR_IDX_NONE
                     pos += 1
 
-        # ---- 边掩码 ----
         mask = self._edge_mask_buf
         mask[:real_edge_count] = 1.0
         mask[real_edge_count:] = 0.0
 
-        # ---- 全局特征 ----
         avg_phi_idle = float(weighted.mean())
         worst_phi_idle = float(weighted.max())
         norm_denom = worst_phi_idle + self.eps
@@ -310,7 +261,6 @@ class MAGECEnv(EventDrivenEnv):
         gb[0] = avg_phi_idle / norm_denom
         gb[1] = 1.0
 
-        # ---- 公共前缀（与原先 list 拼接顺序一致）----
         prefix = np.concatenate(
             (nf.ravel(), es, ed, ea.reshape(-1), mask, gb),
         )
@@ -322,9 +272,7 @@ class MAGECEnv(EventDrivenEnv):
 
         return obs
 
-    # ------------------------------------------------------------------
-    #  Info（action_mask + active_mask）
-    # ------------------------------------------------------------------
+    # Info(action_mask + active_mask).
 
     def _build_info(self, result: Optional[TickResult]) -> Dict[str, Dict]:
         infos: Dict[str, Dict] = {}
@@ -337,10 +285,10 @@ class MAGECEnv(EventDrivenEnv):
                 deg      = len(self.sorted_adj.get(cur_node, []))
                 mask     = ([1.0] * deg
                             + [0.0] * (self.max_neighbor_deg - deg)
-                            + [0.0])   # no-op 槽对 READY agent 始终=0
+                            + [0.0])
                 active   = 1
             else:
-                mask   = [0.0] * self.max_neighbor_deg + [1.0]  # 仅 no-op 槽=1
+                mask   = [0.0] * self.max_neighbor_deg + [1.0]
                 active = 0
 
             infos[f"agent_{i}"] = {
@@ -348,10 +296,6 @@ class MAGECEnv(EventDrivenEnv):
                 "active_mask": active,
             }
         return infos
-
-    # ------------------------------------------------------------------
-    #  奖励
-    # ------------------------------------------------------------------
 
     def _compute_rewards(self, result: TickResult) -> Dict[str, float]:
         w      = self.world
@@ -362,7 +306,6 @@ class MAGECEnv(EventDrivenEnv):
         weighted    = self._phi_weighted_idleness()
         avg_phi_idle = float(weighted.mean())
 
-        # 是否为截断步（在奖励中同时附加 terminal reward）
         if self.truncate_by_time:
             is_terminal = w.current_time >= (self.episode_len - 1e-9)
         else:
@@ -389,21 +332,13 @@ class MAGECEnv(EventDrivenEnv):
 
         return rewards
 
-    # ------------------------------------------------------------------
-    #  动作解码
-    # ------------------------------------------------------------------
-
     def _action_to_target(self, agent_id: int, action_idx: int) -> int:
         cur_node  = self.world.agents[agent_id].position
         neighbors = self.sorted_adj.get(cur_node, [])
         if action_idx < len(neighbors):
             return neighbors[action_idx][0]
-        # 越界保底（action_mask 应已防止）
-        return neighbors[0][0] if neighbors else cur_node
 
-    # ------------------------------------------------------------------
-    #  截断
-    # ------------------------------------------------------------------
+        return neighbors[0][0] if neighbors else cur_node
 
     def _compute_truncations(self) -> Dict[str, bool]:
         w = self.world
@@ -413,12 +348,7 @@ class MAGECEnv(EventDrivenEnv):
             trunc = w.step_count >= self.episode_len
         return {a: trunc for a in self.agents}
 
-    # ------------------------------------------------------------------
-    #  辅助
-    # ------------------------------------------------------------------
-
     def _get_neighbor_index(self, v: int, nbr: int) -> int:
-        """返回 nbr 在 sorted_adj[v] 中的位置（neighborIndex）。"""
         return int(self._neighbor_pos_of.get((v, nbr), -1))
 
     def get_episode_metrics(self) -> Optional[dict]:

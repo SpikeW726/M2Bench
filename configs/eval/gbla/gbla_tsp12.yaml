@@ -1,10 +1,7 @@
-# GBLA Q-table 评估配置 (TSP12)
-# 用法:
 #   python evaluators/test.py \
 #     --env_config configs/eval/gbla/gbla_tsp12.yaml \
 #     --model models/qtable-gbla/ep_1000 \
 #     --num_episodes 10
-
 algo_name: qtable
 env_type: gbla
 

@@ -1,4 +1,3 @@
-# masup @ SF (1 agent) 评估配置
 env_type: masup
 
 env:

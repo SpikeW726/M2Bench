@@ -1,12 +1,6 @@
-# QTable + BBLAEnv (grid) 超参数搜索
-# 用法:
 #   python sweep.py --base-config configs/experiments/bbla/qtable_bbla_grid.yaml \
 #                   --sweep-config configs/sweep/bbla/qtable_bbla_grid.yaml \
 #                   --eval-config configs/eval/bbla/bbla_grid.yaml --count 20
-#
-# grid 图: 50 节点，max_degree=7，均匀边权（均值≈2.2），FixedStepEnv
-# 状态空间远小于 SF（全连通），epsilon 可较快衰减
-
 method: bayes
 
 metric:
@@ -37,7 +31,6 @@ parameters:
     value: 0.05
   save_interval:
     value: 1000
-  # grid max_degree=7，状态空间较 SF 小，衰减步数减少
   epsilon_decay_steps:
     min: 8000000
     max: 12000000

@@ -1,19 +1,14 @@
 # VDN + MASUPEnv (LongEdge)
-# 用法: python train.py configs/experiments/masup/vdn_masup_longedge.yaml
-
-# ---- 分发字段 ----
 algo_name: vdn
 env_type: masup
 q_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: vdn-longedge
 graph_name: long_edge
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/long_edge.json
   enable_wait: true
@@ -30,7 +25,6 @@ env:
     idi_scale: 0.05
     contribution_scale: 0.05
 
-# ---- 算法 ----
 algo:
   lr: 0.00004552319235447177
   gamma: 0.98
@@ -45,7 +39,6 @@ algo:
   shared_sync: true
   max_grad_norm: 1
 
-# ---- 训练 ----
 training:
   num_envs: 24
   use_subproc: true

@@ -18,7 +18,6 @@ import numpy as np
 
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
 
-
 class HCRPolicy(HeuriticBasePolicy):
     """Heuristic Conscientious Reactive policy."""
 

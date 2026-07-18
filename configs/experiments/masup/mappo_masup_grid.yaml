@@ -1,11 +1,3 @@
-# MAPPO + MASUPEnv (grid) — masup_mlp 预处理网络
-# 用法: python train.py configs/experiments/masup/mappo_masup_grid.yaml
-#
-# grid 图特性:
-#   50 节点（7×7 网格 + depot），规则网格，6 agents（与 graphs/grid.json / num_nodes 一致）
-#   episode_len=500, T=50 → episode 完成频繁，γ 不必过高
-#   EventDrivenEnv: 每步推进到下一 agent 到达事件
-
 algo_name: mappo
 env_type: masup
 actor_type: masup_mlp
@@ -55,16 +47,15 @@ training:
   update_epochs: 5
   eval_interval: 10
 
-# ---- 网络（须与 env.custom_configs 中 T / role_imformation 一致）----
 actor:
   graph_path: graphs/grid.json
   num_agents: 6
-  num_nodes: 50   # graphs/grid.json 节点数（1..50 含 depot）
+  num_nodes: 50
   role_imformation: decision
   gpe_dim: 8
   proj_dim: 16
   use_log_idleness: false
-  T_time: 50.0    # 与 env.custom_configs.T 一致
+  T_time: 50.0
   hidden: [256, 256]
 
 critic:

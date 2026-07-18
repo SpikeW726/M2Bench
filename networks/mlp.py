@@ -6,11 +6,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-
 def layer_init(layer: nn.Linear, std=np.sqrt(2), bias_const=0.0):
     """
     Initialize linear layer with orthogonal weights.
-    
+
     Args:
         layer: nn.Linear layer
         std: Gain for orthogonal initialization
@@ -19,7 +18,6 @@ def layer_init(layer: nn.Linear, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
-
 
 class ActorMLP(nn.Module):
     """
@@ -30,23 +28,23 @@ class ActorMLP(nn.Module):
 
     def __init__(self, input_dim, hidden_sizes, output_dim):
         super().__init__()
-        # Store config for checkpoint saving
+        # Store config for checkpoint saving.
         self.input_dim = input_dim
         self.hidden_sizes = list(hidden_sizes)
         self.output_dim = output_dim
-        
+
         layers = []
         current_dim = input_dim
 
-        # Build hidden layers
+        # Build hidden layers.
         for h_dim in hidden_sizes:
             layers.append(layer_init(nn.Linear(current_dim, h_dim), std=np.sqrt(2)))
             layers.append(nn.Tanh())
             current_dim = h_dim
 
-        # Output layer with small std for stable init
+        # Output layer with small std for stable init.
         layers.append(layer_init(nn.Linear(current_dim, output_dim), std=0.01))
-        
+
         self.network = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -68,7 +66,6 @@ class ActorMLP(nn.Module):
             output_dim=cfg["output_dim"],
         )
 
-
 class CriticMLP(nn.Module):
     """
     Critic network (Value Function).
@@ -78,23 +75,23 @@ class CriticMLP(nn.Module):
 
     def __init__(self, input_dim, hidden_sizes, output_dim=1):
         super().__init__()
-        # Store config for checkpoint saving
+        # Store config for checkpoint saving.
         self.input_dim = input_dim
         self.hidden_sizes = list(hidden_sizes)
         self.output_dim = output_dim
-        
+
         layers = []
         current_dim = input_dim
 
-        # Build hidden layers
+        # Build hidden layers.
         for h_dim in hidden_sizes:
             layers.append(layer_init(nn.Linear(current_dim, h_dim), std=np.sqrt(2)))
             layers.append(nn.Tanh())
             current_dim = h_dim
 
-        # Output layer with std=1.0
+        # Output layer with std=1.0.
         layers.append(layer_init(nn.Linear(current_dim, output_dim), std=1.0))
-        
+
         self.network = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -116,12 +113,7 @@ class CriticMLP(nn.Module):
             output_dim=cfg.get("output_dim", 1),
         )
 
-
 class QMLP(nn.Module):
-    """
-    Q-network MLP，输出 action_dim 个 Q 值。
-    dueling=True 时使用 Dueling 架构: Q = V + A - mean(A)。
-    """
     is_recurrent = False
 
     def __init__(self, input_dim, hidden_sizes, output_dim, dueling=False):
@@ -148,9 +140,9 @@ class QMLP(nn.Module):
     def forward(self, x):
         features = self.shared(x)
         if self.dueling:
-            v = self.v_stream(features)                          # (batch, 1)
-            a = self.a_stream(features)                          # (batch, output_dim)
-            return v + a - a.mean(dim=-1, keepdim=True)          # (batch, output_dim)
+            v = self.v_stream(features)                          # (batch, 1).
+            a = self.a_stream(features)                          # (batch, output_dim).
+            return v + a - a.mean(dim=-1, keepdim=True)          # (batch, output_dim).
         return self.q_head(features)
 
     def get_config_dict(self, input_dim: int, output_dim: int) -> dict:

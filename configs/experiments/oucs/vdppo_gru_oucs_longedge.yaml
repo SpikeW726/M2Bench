@@ -1,17 +1,14 @@
-# ---- 分发字段 ----
 algo_name: vdppo
 env_type: oucs
 actor_type: rnn
 q_type: rnn
 
-# ---- 实验元信息 ----
 exp_name: vdppo-gru-oucs
 graph_name: long_edge
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/long_edge.json
   enable_wait: false
@@ -24,7 +21,6 @@ env:
     truncate_by_time: true
     penalised_factor: 1.5
 
-# ---- 算法 ----
 algo:
   use_active_mask: true
   actor_lr: 0.0005
@@ -42,7 +38,6 @@ algo:
   data_chunk_length: 10
   reward_global: false
 
-# ---- 训练 ----
 training:
   num_envs: 12
   use_subproc: true
@@ -53,12 +48,11 @@ training:
   update_epochs: 5
   eval_interval: 10
 
-# ---- 网络 ----
 actor:
   rnn_type: gru
   hidden_size: 64
   num_layers: 1
-  fc_hidden: [256, 256]   # GRU 前编码层
+  fc_hidden: [256, 256]
 
 q_network:
   rnn_type: gru

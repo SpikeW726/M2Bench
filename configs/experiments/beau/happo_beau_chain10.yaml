@@ -1,8 +1,4 @@
 # HAPPO + BEAU @ chain10
-# 图统计: nodes=10, directed_edges=18, max_out_degree=2, avg_edge=1.111, max_edge=2.000
-# 物理时间截断: episode_len=100, total_steps=20000000
-# 调参目标: 样本效率优先（尽快收敛），非 wall-clock 吞吐
-
 algo_name: happo
 env_type: beau
 
@@ -31,23 +27,23 @@ algo:
   ent_coef: 0.01
   vf_coef: 0.5
   max_grad_norm: 10.0
-  lr: 8.0e-5            # 适中偏高，配合高频 update 加速收敛
+  lr: 8.0e-5
   policy_update_steps: 5
   factor: 0.5
   patience: 100
   hidden_dim: 64
   num_heads: 4
-  encoder_layers: 1     # chain10 小图，浅网络足够
+  encoder_layers: 1
 
 training:
   num_envs: 1
   use_subproc: false
-  num_steps: 128        # 短 rollout → 更频繁更新 policy（on-policy 数据更新鲜）
+  num_steps: 128
   total_steps: 20000000
   save_interval: 500
-  minibatch_size: 64    # batch≈128×4=512，每 epoch 8 个 mini-batch
-  update_epochs: 12     # 同一批数据多学几遍，不增加 env 等待
-  eval_interval: 20     # 按 iteration 计；128 步/iter → 约每 2560 env steps eval 一次
+  minibatch_size: 64
+  update_epochs: 12
+  eval_interval: 20
   eval_episodes: 3
 
 eval_config_path: configs/eval/beau/beau_chain10.yaml

@@ -1,16 +1,4 @@
-# QTable + NEPEnv (SF / SFcrimemap) — 联合 Q-table 巡逻
-# 用法: python train.py configs/experiments/nep/qtable_nep_SF.yaml
-#
-# SF 图特性（状态空间分析）:
-#   12 节点，有向边 132 条（全连通 12×11）
-#   num_agents=3 → edge_combinations_count = C(132,2) = 8646
-#   state_space = num_nodes × edge_combinations = 12 × 8646 = 103,752 states（+2 特殊状态）
 #   action_space = max_neighbors = 11
-#   Q-table 大小 ≈ 103,752 × 11 = 1,141,272 条目（可行但较大）
-#
-# epsilon_decay_steps：按 state_space 等比例缩放（TSP12 longedge ≈ 27.7M / state_space≈1584 × 103752）
-#   → 约 200M 步充分探索（4 env 并行共 800M 次决策）
-
 algo_name: qtable
 env_type: nep
 exp_name: qtable-nep-SF
@@ -35,7 +23,6 @@ algo:
   gamma: 0.999
   epsilon_start: 0.2
   epsilon_end: 0.05
-  # SF 状态空间远大于 longedge，延长探索期以充分覆盖
   epsilon_decay_steps: 10000000
 
 training:

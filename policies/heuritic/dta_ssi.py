@@ -1,20 +1,16 @@
 # -*- coding: utf-8 -*-
-"""
-DTASSI (Distributed Tabu-list Adaptive Sequential Single Item) 启发式策略
+"""Distributed Tabu-list Adaptive Sequential Single Item (DTA-SSI) policy.
 
-与旧 MultiAgentPatrolling 中 DTASSIAgent 一致：
-- 基础分与 DTAGreedy 相同（由基类 _compute_base_scores 计算）
-- 在基础分之上，**每个邻居候选**再乘 Uniform(ssi_uniform_low, ssi_uniform_high)，默认 [0.9, 1.1]（与旧代码中固定 randomness 一致）
-- **不**使用 DTAGreedy 的 stochastic/score_jitter 路径（SSI 的随机性独立配置）
-
-原框架中 bid_weight / auction_timeout 未参与实际打分，此处仍可从配置读取以兼容，但不影响决策。
+DTA-SSI reuses the deterministic DTA-Greedy base score, then applies independent
+uniform noise to each candidate. This noise is configured separately from the
+DTA-Greedy stochastic path. Legacy bid and timeout settings do not affect scores.
 """
+
 import random
 import numpy as np
 from typing import Any, Dict, Optional
 
 from policies.heuritic.dta_greedy import DTAGreedyPolicy
-
 
 class DTASSIPolicy(DTAGreedyPolicy):
     def __init__(self, num_agents: int, config: Dict):
@@ -22,7 +18,6 @@ class DTASSIPolicy(DTAGreedyPolicy):
 
         ap = config.get("algorithm_params", {}) if isinstance(config.get("algorithm_params", {}), dict) else {}
 
-        # SSI 专用：逐候选乘性扰动（旧实现固定 0.9~1.1，此处可配）
         self._ssi_lo: float = float(
             ap.get("ssi_uniform_low", config.get("ssi_uniform_low", 0.9))
         )
@@ -32,7 +27,6 @@ class DTASSIPolicy(DTAGreedyPolicy):
         if self._ssi_lo > self._ssi_hi:
             self._ssi_lo, self._ssi_hi = self._ssi_hi, self._ssi_lo
 
-        # 兼容旧配置字段，不参与选边
         self.bid_weight: float = float(config.get("bid_weight", ap.get("bid_weight", 1.2)))
         self.auction_timeout: int = int(config.get("auction_timeout", ap.get("auction_timeout", 10)))
 
@@ -49,7 +43,6 @@ class DTASSIPolicy(DTAGreedyPolicy):
         scores, current_node, tabu = out
         scores = scores.copy()
 
-        # 与旧 DTASSI 一致：每条 score 再乘独立 Uniform（默认 0.9~1.1）
         for i in range(len(scores)):
             scores[i] *= random.uniform(self._ssi_lo, self._ssi_hi)
 

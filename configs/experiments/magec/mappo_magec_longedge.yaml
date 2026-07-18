@@ -1,21 +1,14 @@
-# MAPPO + MAGECEnv (LongEdge) — MAGEC Neighbor Scoring Actor + MLP Critic
-# 用法: python train.py configs/experiments/magec/mappo_magec_longedge.yaml
-
-# ---- 分发字段 ----
 algo_name: mappo
 env_type: magec
 actor_type: sage
 critic_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: mappo-magec-longedge
 graph_name: long_edge
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
-# long_edge.json: 4 节点, max_degree=3, action_dim=4
 # state_dim = num_nodes + num_nodes^2 = 4 + 16 = 20
 env:
   graph_path: graphs/long_edge.json
@@ -28,7 +21,6 @@ env:
     alpha: 1.0
     beta: 0.5
 
-# ---- 算法 ----
 algo:
   use_active_mask: true
   actor_lr: 3.0e-4
@@ -40,7 +32,6 @@ algo:
   ent_coef: 0.01
   shared_policy: true
 
-# ---- 训练 ----
 training:
   num_envs: 8
   use_subproc: True
@@ -51,13 +42,10 @@ training:
   update_epochs: 5
   eval_interval: 10
 
-# ---- 网络 ----
-# GraphSageActor (Neighbor Scoring 模式):
 #   long_edge.json: max_degree=3, action_dim=4
 #   node_feat_dim=3: [nodeType, phi_idleness_norm, degree]
 #   edge_feat_dim=2: [weight_norm, neighborIndex]
 #   global_feat_dim=2: [avg_phi_idle_norm, worst_phi_idle_norm]
-# critic_input_dim = state_dim + agent_one_hot = 20 + 3 = 23 (train.py 自动计算)
 actor:
   graph_path: graphs/long_edge.json
   agent_num: 3

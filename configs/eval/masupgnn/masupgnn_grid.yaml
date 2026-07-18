@@ -1,7 +1,4 @@
-# MASUPGraphEnv (masup_gnn) grid 评估配置（6 agents，MPNN Actor）
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/masupgnn/masupgnn_grid.yaml --model models/xxx/final
-
 env_type: masup_gnn
 
 env:

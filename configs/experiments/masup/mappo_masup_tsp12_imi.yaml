@@ -1,13 +1,8 @@
-# MAPPO + MASUPEnv (TSP12) — 模仿学习预训练 → RL 微调
-# 用法: python train.py configs/experiments/mappo_tsp12_imi.yaml
-
-# ---- 分发字段 ----
 algo_name: mappo
 env_type: masup
 actor_type: mlp
 critic_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: mappo-imi
 graph_name: TSP12
 track_wandb: true
@@ -16,7 +11,6 @@ seed: 42
 actor_path: models/imi-pure-norm-random-init/imi_train__1770181266_final/policy.pt
 critic_path: models/imi-pure-norm-random-init/imi_train__1770181266_final/critic.pt
 
-# ---- 环境 ----
 env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: true
@@ -33,7 +27,6 @@ env:
     idi_scale: 0.05
     contribution_scale: 0.05
 
-# ---- 算法 (自动映射到 MAPPOParams) ----
 algo:
   use_active_mask: True
   actor_lr: 3.0e-5
@@ -45,14 +38,13 @@ algo:
   ent_coef: 0.1
   clip_vloss: true
   use_lr_scheduler: False
+
   # actor_lr_start_factor: 1.0
   # actor_lr_end_factor: 0.1
   # actor_lr_decay_ratio: 0.8
   # critic_lr_start_factor: 1.0
   # critic_lr_end_factor: 0.1
   # critic_lr_decay_ratio: 0.8
-
-# ---- 训练 (自动映射到 OnPolicyTrainerConfig) ----
 training:
   num_envs: 4
   use_subproc: True
@@ -63,7 +55,6 @@ training:
   update_epochs: 10
   eval_interval: 10
 
-# ---- 网络 ----
 actor:
   hidden: [256, 256]
 critic:

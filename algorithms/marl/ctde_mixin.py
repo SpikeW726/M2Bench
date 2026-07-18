@@ -1,9 +1,8 @@
-"""CentralizedCriticMixin — CTDE 算法共享的 Centralized Critic 辅助方法。
+"""Centralized-critic helpers shared by CTDE algorithms.
 
-纯 Mixin，无继承基类，无自身状态。
-使用方须同时继承 ActorCriticOnPolicyAlgo 子类以获得 self.critic / self.device 等属性。
-
-适用于: MAPPOAlgo, MAA2CAlgo (参数共享 + Centralized Critic)
+This stateless mixin expects an ``ActorCriticOnPolicyAlgo`` subclass to provide
+the critic and device. MAPPO and MAA2C use it for agent-identity concatenation,
+truncation bootstrapping, recurrent critic evaluation, and CTDE batch preparation.
 """
 
 from typing import Dict, List, Optional
@@ -12,30 +11,18 @@ import torch.nn as nn
 
 from data.batch import RolloutBatch
 
-
 class CentralizedCriticMixin:
-    """CTDE 辅助方法 Mixin。
 
-    提供：
-    - _compute_trunc_bootstrap_with_onehot: one-hot 拼接 + truncation bootstrap
-    - _critic_rnn_values_with_onehot: per-agent RNN critic 序列处理
-    - _prepare_batch_ctde: 完整 CTDE GAE 预处理（per-agent 循环 → 合并单 batch）
-    """
-
-    # ====================================================================
-    #                Truncation Bootstrap（one-hot 拼接）
-    # ====================================================================
-
+    # Truncation Bootstrap.
     def _compute_trunc_bootstrap_with_onehot(
         self,
-        truncateds: Optional[torch.Tensor],     # (T, N) or None
-        final_global_states,                     # T x N nested list
+        truncateds: Optional[torch.Tensor],     # (T, N) or None.
+        final_global_states,                     # T x N nested list.
         agent_idx: int,
         num_agents: int,
         T: int,
         N: int,
     ) -> torch.Tensor:
-        """计算 truncation 处 bootstrap V，使用 one-hot 拼接 + value denorm。"""
         device = self.device
         trunc_bootstrap = torch.zeros(T, N, device=device)
 
@@ -85,19 +72,14 @@ class CentralizedCriticMixin:
 
         return trunc_bootstrap
 
-    # ====================================================================
-    #              RNN Critic 序列处理（per-agent one-hot）
-    # ====================================================================
-
     def _critic_rnn_values_with_onehot(
         self,
-        critic_input: torch.Tensor,    # (T*N, critic_dim) 已拼接 one-hot
-        done_2d: torch.Tensor,          # (T, N)
+        critic_input: torch.Tensor,    # Shape: (T*N, critic_dim).
+        done_2d: torch.Tensor,          # (T, N).
         agent_key: str,
         T: int,
         N: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """逐步处理 RNN critic（per-agent），done 边界重置 hidden。"""
         critic_seq = critic_input.view(T, N, -1)
 
         if not hasattr(self, "_critic_hidden_per_agent"):
@@ -123,22 +105,16 @@ class CentralizedCriticMixin:
 
         self._critic_hidden_per_agent[agent_key] = hidden.detach()
 
-        values_norm = torch.stack(all_values, dim=0)        # (T, N)
-        critic_rnn_h = torch.stack(all_hidden, dim=0)       # (T, rN, N, H)
+        values_norm = torch.stack(all_values, dim=0)        # (T, N).
+        critic_rnn_h = torch.stack(all_hidden, dim=0)       # (T, rN, N, H).
         return values_norm, critic_rnn_h
 
-    # ====================================================================
-    #           CTDE prepare_batch（per-agent 循环 → 合并单 batch）
-    # ====================================================================
+    # CTDE prepare_batch.
 
     def _prepare_batch_ctde(
         self,
         batch_dict: Dict[str, RolloutBatch],
     ) -> RolloutBatch:
-        """CTDE GAE 预处理：per-agent one-hot 拼接 + 向量化 GAE → 合并为单 RolloutBatch。
-
-        MAA2CAlgo 和 MAPPOAlgo 共用此方法。
-        """
         agents = list(batch_dict.keys())
         num_agents = len(agents)
         N = self.num_envs
@@ -211,7 +187,6 @@ class CentralizedCriticMixin:
             if batch.rnn_hidden is not None:
                 all_rnn_hidden.append(batch.rnn_hidden)
 
-        # Value Normalization 统计量
         if self.use_value_norm and self.ret_rms is not None:
             all_ret_tensor = torch.cat(all_ret, dim=0)
             if all_active_mask:

@@ -1,10 +1,7 @@
-# ExGBLA Q-table 评估配置 (SF / SFcrimemap)
-# 用法:
 #   python evaluators/test.py \
 #     --env_config configs/eval/exgbla/exgbla_SF.yaml \
 #     --model models/qtable-ex_gbla-SF/iter_1000 \
 #     --num_episodes 10
-
 algo_name: qtable
 env_type: ex_gbla
 

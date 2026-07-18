@@ -1,6 +1,3 @@
-# SUNSEnv TSP12 评估配置 (多智能体 + intention 协调)
-# 用法: python evaluators/test.py --env_config configs/eval/suns/suns_tsp12.yaml --model models/a2c-suns/final
-
 env_type: suns
 
 env:

@@ -1,14 +1,10 @@
-"""向量化环境包装器。"""
-
 from typing import Any, List, Optional, Type
 import numpy as np
 
 from envs.venvs import BaseVectorEnv
 from utils.log_utils import RunningMeanStd as NumpyRMS
 
-
 def find_vec_wrapper(vec_env: Any, wrapper_type: Type[Any]) -> Optional[Any]:
-    """沿 BaseVectorEnv 外包链查找指定 wrapper 实例。"""
     cur = vec_env
     seen = set()
     while cur is not None and id(cur) not in seen:
@@ -18,83 +14,67 @@ def find_vec_wrapper(vec_env: Any, wrapper_type: Type[Any]) -> Optional[Any]:
         cur = getattr(cur, "venv", None)
     return None
 
-
 class VectorEnvWrapper(BaseVectorEnv):
-    """向量化环境包装器基类。"""
-    
     def __init__(self, venv: BaseVectorEnv):
-        # 不调用 super().__init__，直接代理
+        # Delegate directly without calling super().__init__().
         self.venv = venv
-    
+
     def __len__(self) -> int:
         return len(self.venv)
 
     @property
     def is_parallel_env(self) -> bool:
-        """透传底层环境类型（Gym / PettingZoo Parallel）。"""
         return self.venv.is_parallel_env
 
     @property
     def agents(self):
-        """透传并行环境 agent 列表（Gym 环境为 None）。"""
         return self.venv.agents
-    
+
     @property
     def num_envs(self) -> int:
         return self.venv.num_envs
-    
+
     @property
     def observation_space(self):
         return self.venv.observation_space
-    
+
     @property
     def action_space(self):
         return self.venv.action_space
-    
+
     @property
     def is_closed(self) -> bool:
         return self.venv.is_closed
-    
+
     def reset(self, env_id=None, **kwargs):
         return self.venv.reset(env_id, **kwargs)
-    
+
     def step(self, actions, env_id=None):
         return self.venv.step(actions, env_id)
-    
+
     def seed(self, seed=None):
         return self.venv.seed(seed)
-    
+
     def get_env_attr(self, key: str, env_id=None) -> List[Any]:
         return self.venv.get_env_attr(key, env_id)
 
     def call_env_method(self, method_name: str, *args, env_id=None, **kwargs):
-        """透传调用底层环境方法（如 state()）。"""
         return self.venv.call_env_method(method_name, *args, env_id=env_id, **kwargs)
-    
+
     def set_env_attr(self, key: str, value: Any, env_id=None) -> None:
         self.venv.set_env_attr(key, value, env_id)
-    
+
     def render(self, **kwargs):
         return self.venv.render(**kwargs)
-    
+
     def close(self) -> None:
         self.venv.close()
 
-
 class VectorEnvNormObs(VectorEnvWrapper):
-    """
-    观测归一化包装器。
+    """Normalize vector observations with running per-feature statistics.
 
-    使用 running mean/std 将观测归一化到近似 N(0,1) 分布，有助于稳定训练。
-    同时支持：
-    - Gymnasium 单智能体：obs 为 ndarray (num_envs, obs_dim)
-    - PettingZoo ParallelEnv：obs 为 Dict[str, ndarray]，各 agent shape (num_envs, obs_dim)
-      同构智能体共享同一个 RMS（将所有 agent 的 obs 合并后更新统计量）。
-
-    Args:
-        venv: 被包装的向量化环境
-        update_obs_rms: 是否在 reset/step 时更新统计量
-        clip_max: 归一化后的裁剪范围，默认 10.0
+    Statistics update only in training mode. Gymnasium observations share one
+    accumulator; PettingZoo observations maintain one accumulator per agent.
     """
 
     def __init__(
@@ -108,14 +88,12 @@ class VectorEnvNormObs(VectorEnvWrapper):
         self.obs_rms = NumpyRMS(clip_max=clip_max)
 
     def _to_batch(self, obs) -> "np.ndarray":
-        """将 obs 展平为 2D batch 供 RMS 更新。"""
         if isinstance(obs, dict):
-            # PettingZoo: {agent: (num_envs, obs_dim)} → (num_envs * num_agents, obs_dim)
+            # PettingZoo: {agent: (num_envs, obs_dim)} -> (num_envs * num_agents, obs_dim).
             return np.concatenate(list(obs.values()), axis=0)
         return obs
 
     def _norm_obs(self, obs):
-        """归一化 obs，保持输入结构不变（dict 或 ndarray）。"""
         if isinstance(obs, dict):
             return {k: self.obs_rms.norm(v) for k, v in obs.items()}
         return self.obs_rms.norm(obs)
@@ -133,25 +111,13 @@ class VectorEnvNormObs(VectorEnvWrapper):
         return self._norm_obs(obs), rew, term, trunc, info
 
     def set_obs_rms(self, obs_rms: NumpyRMS) -> None:
-        """设置观测统计量（用于加载已保存的统计）。"""
         self.obs_rms = obs_rms
 
     def get_obs_rms(self) -> NumpyRMS:
-        """获取观测统计量（用于保存）。"""
         return self.obs_rms
 
-
 class VectorEnvNormReward(VectorEnvWrapper):
-    """
-    奖励标准差缩放包装器。
-
-    只除以运行标准差，不减均值，保留 MDP 核心逻辑（生存惩罚等绝对语义）。
-
-    Args:
-        venv: 被包装的向量化环境
-        update_rew_rms: 是否在 step 时更新统计量
-        clip_max: 缩放后裁剪范围，None 表示不裁剪
-    """
+    """Scale rewards by running standard deviation without subtracting the mean."""
 
     def __init__(
         self,
@@ -161,11 +127,10 @@ class VectorEnvNormReward(VectorEnvWrapper):
     ):
         super().__init__(venv)
         self.update_rew_rms = update_rew_rms
-        # clip_max=None 不裁剪；初始 std=1 保证启动时无缩放
+
         self.rew_rms = NumpyRMS(clip_max=clip_max)
 
     def _collect_reward_batch(self, rew):
-        """将不同结构的 reward 展平为 1D batch，用于更新 RMS。"""
         if isinstance(rew, dict):
             parts = []
             for value in rew.values():
@@ -178,7 +143,6 @@ class VectorEnvNormReward(VectorEnvWrapper):
         return np.asarray(rew, dtype=np.float32).reshape(-1)
 
     def _normalize_reward(self, rew, scale: float):
-        """按相同标准差缩放 reward，保持输入结构不变（dict 或 ndarray）。"""
         if isinstance(rew, dict):
             return {k: np.asarray(v, dtype=np.float32) / scale for k, v in rew.items()}
         return np.asarray(rew, dtype=np.float32) / scale
@@ -193,9 +157,7 @@ class VectorEnvNormReward(VectorEnvWrapper):
         return obs, normed, term, trunc, info
 
     def set_reward_rms(self, rms: NumpyRMS) -> None:
-        """设置奖励统计量（用于加载已保存的统计）。"""
         self.rew_rms = rms
 
     def get_reward_rms(self) -> NumpyRMS:
-        """获取奖励统计量（用于保存）。"""
         return self.rew_rms

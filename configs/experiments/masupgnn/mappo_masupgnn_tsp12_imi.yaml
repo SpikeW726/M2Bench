@@ -1,13 +1,9 @@
 # MAPPO + MASUPGraphEnv (masup_gnn) + MPNN Actor + MLP Critic
-# 用法: python train.py configs/experiments/mappo_masupgnn_tsp12_imi.yaml
-
-# ---- 分发字段 ----
 algo_name: mappo
 env_type: masup_gnn
 actor_type: mpnn
 critic_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: mappo-masupgnn-imi
 graph_name: TSP12
 track_wandb: true
@@ -16,7 +12,6 @@ seed: 42
 actor_path:
 critic_path:
 
-# ---- 环境 ----
 env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: true
@@ -36,7 +31,6 @@ env:
     edge_feat_dim: 1
     global_feat_dim: 2
 
-# ---- 算法 (自动映射到 MAPPOParams) ----
 algo:
   use_active_mask: true
   actor_lr: 3.0e-5
@@ -55,7 +49,6 @@ algo:
   critic_lr_end_factor: 0.1
   critic_lr_decay_ratio: 0.8
 
-# ---- 训练 (自动映射到 OnPolicyTrainerConfig) ----
 training:
   num_envs: 4
   use_subproc: true
@@ -66,7 +59,6 @@ training:
   update_epochs: 10
   eval_interval: 10
 
-# ---- 网络 ----
 actor:
   graph_path: graphs/simple_TSP_12.json
   agent_num: 3
@@ -75,9 +67,9 @@ actor:
   gnn_layers: 2
   actor_mlp_layers: 1
   gnn_mlp_layers: 2
-  node_feat_dim: 2   # 须与 env.custom_configs.node_feat_dim 一致
-  edge_feat_dim: 1   # 须与 env.custom_configs.edge_feat_dim 一致
-  global_feat_dim: 2 # 须与 env.custom_configs.global_feat_dim 一致
+  node_feat_dim: 2
+  edge_feat_dim: 1
+  global_feat_dim: 2
 
 critic:
   hidden: [256, 256]

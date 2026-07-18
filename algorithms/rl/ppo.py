@@ -1,12 +1,8 @@
-"""PPO 家族算法。
+"""PPO-family specializations of the shared actor-critic update template.
 
-PPOBase(A2CBase)
-    PPO 家族共享的 hook overrides: clipped surrogate, value clipping, KL early stopping。
-    update 骨架继承自 A2CBase，不创建 optimizer。
-
-PPOAlgo(PPOBase)
-    单智能体 PPO，单优化器。
-    继承 PPOBase 的 hook + A2CBase 的 update + ActorCriticOnPolicyAlgo 的 prepare_batch。
+``PPOBase`` overrides A2C hooks with clipped policy and value losses plus optional
+KL early stopping. ``PPOAlgo`` provides the single-agent optimizer and reuses the
+base update and rollout-preparation implementations.
 """
 
 from typing import Dict, List, Optional
@@ -20,20 +16,7 @@ from configs.algo_configs import PPOParams, IPPOParams
 from policies.rl.rl_base import ActorPolicy
 from data.batch import RolloutBatch
 
-
-# =============================================================================
-#                          PPOBase — PPO 家族中间基类
-# =============================================================================
-
 class PPOBase(A2CBase):
-    """PPO 家族共享基类。
-
-    在 A2CBase（update 骨架 + hook methods）之上 override PPO 特有逻辑：
-    - _compute_policy_loss: clipped surrogate
-    - _compute_value_loss: optional value clipping
-    - _on_epoch_end: KL early stopping
-    """
-
     def __init__(self, policy, critic: nn.Module, params: PPOParams, num_envs: int = 1,
                  value_norm_config: Optional[Dict] = None):
         super().__init__(policy, critic, params, num_envs, value_norm_config=value_norm_config)
@@ -42,12 +25,10 @@ class PPOBase(A2CBase):
         self.clip_vloss = params.clip_vloss
         self.target_kl = params.target_kl
 
-    # ====================================================================
-    #                     PPO Hook Overrides
-    # ====================================================================
+    # PPO Hook Overrides.
 
     def _compute_policy_loss(self, new_log_prob, entropy, mb_adv, mb_log_prob, am, am_sum):
-        """Clipped surrogate policy loss。"""
+        """Compute the clipped surrogate policy loss."""
         logratio = new_log_prob - mb_log_prob
         ratio = logratio.exp()
 
@@ -69,7 +50,7 @@ class PPOBase(A2CBase):
         return pg_loss, ent_loss, {"clipfrac": clipfrac, "approx_kl": approx_kl}
 
     def _compute_value_loss(self, new_value, target, mb_value, am, am_sum):
-        """PPO2-style clipped value loss。"""
+        """Compute the PPO2-style clipped value loss."""
         if self.clip_vloss and mb_value is not None:
             v_loss_unclipped = (new_value - target) ** 2
             v_clipped = mb_value + torch.clamp(
@@ -85,7 +66,7 @@ class PPOBase(A2CBase):
         return v_loss_per_sample.mean()
 
     def _on_epoch_end(self, epoch_extra_list):
-        """KL early stopping。"""
+        """Apply optional KL-based early stopping."""
         kl_values = [e.get("approx_kl", 0.0) for e in epoch_extra_list if "approx_kl" in e]
         if kl_values and self.target_kl is not None:
             if isinstance(kl_values[0], torch.Tensor):
@@ -93,18 +74,7 @@ class PPOBase(A2CBase):
             return np.mean(kl_values) > self.target_kl
         return False
 
-
-# =============================================================================
-#                          PPOAlgo — 单智能体 PPO
-# =============================================================================
-
 class PPOAlgo(PPOBase):
-    """单智能体 PPO，单优化器。
-
-    继承 PPOBase 的 hook（clipped surrogate + KL early stopping）
-    和 ActorCriticOnPolicyAlgo.prepare_batch（向量化 GAE + truncation bootstrap）。
-    """
-
     def __init__(
         self,
         policy: ActorPolicy,

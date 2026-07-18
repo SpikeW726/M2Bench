@@ -1,7 +1,4 @@
 # IQL + S4R1Env @ chain10
-# 图统计: nodes=10, directed_edges=18, max_out_degree=2, avg_edge=1.111, max_edge=2.000
-# 物理时间截断: episode_len=100, total_steps=20000000
-
 algo_name: iql
 env_type: s4r1
 q_type: mlp

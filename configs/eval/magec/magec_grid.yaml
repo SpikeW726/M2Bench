@@ -1,7 +1,4 @@
-# MAGECEnv grid 评估配置（6 agents，GraphSageActor，EventDrivenEnv）
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/magec/magec_grid.yaml --model models/xxx/final
-
 env_type: magec
 
 env:

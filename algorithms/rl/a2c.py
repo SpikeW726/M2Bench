@@ -1,15 +1,9 @@
-"""A2C 家族算法。
+"""A2C-family update templates.
 
-A2CBase(ActorCriticOnPolicyAlgo)
-    Actor-Critic On-Policy update 骨架（Template Method 模式）。
-    通过 hook methods 支持 A2C / PPO 及其多智能体变体：
-    - _compute_policy_loss: vanilla PG (A2C) / clipped surrogate (PPO)
-    - _compute_value_loss:  MSE (A2C) / clipped value loss (PPO)
-    - _do_optimizer_step:   单优化器 / 双优化器
-    - _on_epoch_end:        无 early stopping (A2C) / KL early stopping (PPO)
-
-A2CAlgo(A2CBase)
-    单智能体 A2C，单优化器。继承 A2CBase 默认 hook + prepare_batch。
+``A2CBase`` implements the actor-critic update skeleton. Hooks specialize policy
+and value losses, optimizer steps, and epoch termination for A2C, PPO, and their
+multi-agent variants. ``A2CAlgo`` supplies the single-agent, single-optimizer
+configuration while reusing rollout preparation from the shared on-policy base.
 """
 
 from typing import Dict, List, Optional
@@ -22,27 +16,9 @@ from configs.algo_configs import OnPolicyParams, A2CParams
 from policies.rl.rl_base import ActorPolicy
 from data.batch import RolloutBatch
 
-
-# =============================================================================
-#                          A2CBase — AC On-Policy 中间基类
-# =============================================================================
+# A2CBase - AC On-Policy.
 
 class A2CBase(ActorCriticOnPolicyAlgo):
-    """Actor-Critic On-Policy update 骨架（Template Method）。
-
-    在 ActorCriticOnPolicyAlgo（GAE, prepare_batch）之上提供完整 update() 实现，
-    通过 hook methods 支持 A2C / PPO 差异化，同时复用全部公共逻辑：
-    - minibatch splitting (RNN chunk_split / MLP split)
-    - active_mask 支持
-    - advantage normalization
-    - value normalization
-    - 统计量收集
-    """
-
-    # ====================================================================
-    #                     Hook Methods（子类 override）
-    # ====================================================================
-
     def _compute_policy_loss(
         self,
         new_log_prob: torch.Tensor,
@@ -52,12 +28,6 @@ class A2CBase(ActorCriticOnPolicyAlgo):
         am: Optional[torch.Tensor],
         am_sum: Optional[torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-        """计算 policy loss + entropy loss。
-
-        Returns:
-            (pg_loss, ent_loss, extra_dict)
-            extra_dict 可包含子类特有统计量（如 PPO 的 clipfrac/approx_kl）
-        """
         pg_loss_per_sample = -(mb_adv * new_log_prob)
         if am is not None:
             pg_loss = (pg_loss_per_sample * am).sum() / am_sum
@@ -75,7 +45,6 @@ class A2CBase(ActorCriticOnPolicyAlgo):
         am: Optional[torch.Tensor],
         am_sum: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        """计算 value loss（默认 MSE）。"""
         v_loss_per_sample = 0.5 * (new_value - target) ** 2
         if am is not None:
             return (v_loss_per_sample * am).sum() / am_sum
@@ -88,7 +57,6 @@ class A2CBase(ActorCriticOnPolicyAlgo):
         v_loss: torch.Tensor,
         update_actor: bool = True,
     ) -> dict:
-        """优化器 step（默认：单优化器）。返回 grad_norm dict。"""
         loss = pg_loss + self.vf_coef * v_loss - self.ent_coef * ent_loss
 
         self.optimizer.zero_grad()
@@ -105,23 +73,13 @@ class A2CBase(ActorCriticOnPolicyAlgo):
         return {"grad_norm": grad_norm.detach()}
 
     def _on_epoch_end(self, epoch_extra_list: List[dict]) -> bool:
-        """每个 epoch 结束后调用。返回 True 触发 early stopping。"""
         return False
-
-    # ====================================================================
-    #                     Policy / Critic 评估辅助
-    # ====================================================================
 
     def _eval_policy(
         self,
         mb: RolloutBatch,
         _any_rnn: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """统一 RNN/MLP policy forward，返回 (new_log_prob, entropy)。
-
-        单智能体使用 evaluate_actions / evaluate_actions_sequence。
-        MAA2CAlgo / MAPPOAlgo override 为 _flat 变体。
-        """
         if self.is_recurrent:
             new_log_prob, entropy = self.policy.evaluate_actions_sequence(
                 mb.obs, mb.act, mb.rnn_hidden,
@@ -147,7 +105,6 @@ class A2CBase(ActorCriticOnPolicyAlgo):
         mb: RolloutBatch,
         _any_rnn: bool,
     ) -> torch.Tensor:
-        """统一 RNN/MLP critic forward，返回 new_value (flat)。"""
         critic_input = mb.global_state if mb.global_state is not None else mb.obs
         if self.is_critic_recurrent:
             new_value_seq, _ = self.critic.forward_sequence(
@@ -157,10 +114,6 @@ class A2CBase(ActorCriticOnPolicyAlgo):
         if _any_rnn:
             critic_input = critic_input.reshape(-1, critic_input.shape[-1])
         return self.critic(critic_input).squeeze(-1)
-
-    # ====================================================================
-    #                     Template Update（核心骨架）
-    # ====================================================================
 
     def update(
         self,
@@ -172,10 +125,6 @@ class A2CBase(ActorCriticOnPolicyAlgo):
         num_agents: int = 1,
         update_actor: bool = True,
     ) -> TrainingStats:
-        """Actor-Critic on-policy update 骨架。
-
-        A2C/PPO/MAPPO/MAA2C 共用此循环，差异通过 hook methods 实现。
-        """
         batch = batch.to_tensor(self.device)
 
         all_pg_loss: List[float] = []
@@ -208,7 +157,7 @@ class A2CBase(ActorCriticOnPolicyAlgo):
                 )
 
             for mb in mb_iter:
-                # ---- active mask ----
+                # active mask.
                 if mb.active_mask is not None:
                     am = mb.active_mask.float()
                     if _any_rnn:
@@ -218,7 +167,7 @@ class A2CBase(ActorCriticOnPolicyAlgo):
                     am = None
                     am_sum = None
 
-                # ---- advantage normalization ----
+                # advantage normalization.
                 mb_adv = mb.adv.reshape(-1) if _any_rnn else mb.adv
                 if self.normalize_advantage:
                     if am is not None:
@@ -228,19 +177,19 @@ class A2CBase(ActorCriticOnPolicyAlgo):
                     elif mb_adv.numel() > 1:
                         mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
-                # ---- policy forward ----
+                # policy forward.
                 new_log_prob, entropy = self._eval_policy(mb, _any_rnn)
                 mb_log_prob = mb.log_prob.reshape(-1) if _any_rnn else mb.log_prob
 
-                # ---- policy loss (hook) ----
+                # policy loss (hook).
                 pg_loss, ent_loss, pg_extra = self._compute_policy_loss(
                     new_log_prob, entropy, mb_adv, mb_log_prob, am, am_sum,
                 )
 
-                # ---- critic forward ----
+                # critic forward.
                 new_value = self._eval_critic(mb, _any_rnn)
 
-                # ---- value target ----
+                # value target.
                 mb_ret = mb.ret.reshape(-1) if _any_rnn else mb.ret
                 mb_value = (
                     mb.value.reshape(-1)
@@ -251,29 +200,29 @@ class A2CBase(ActorCriticOnPolicyAlgo):
                 else:
                     target = mb_ret
 
-                # ---- value loss (hook) ----
+                # value loss (hook).
                 v_loss = self._compute_value_loss(
                     new_value, target, mb_value, am, am_sum,
                 )
 
-                # ---- optimizer step (hook) ----
+                # optimizer step (hook).
                 grad_info = self._do_optimizer_step(
                     pg_loss, ent_loss, v_loss, update_actor,
                 )
 
-                # ---- collect stats ----
+                # collect stats.
                 all_pg_loss.append(pg_loss.detach())
                 all_v_loss.append(v_loss.detach())
                 all_entropy.append(ent_loss.detach())
                 epoch_extra.append(pg_extra)
                 all_grad.append(grad_info)
 
-            # ---- epoch end (hook) ----
+            # epoch end (hook).
             all_extra.extend(epoch_extra)
             if self._on_epoch_end(epoch_extra):
                 break
 
-        # ---- aggregate stats ----
+        # aggregate stats.
         def _mean_stat(vals) -> float:
             if vals and isinstance(vals[0], torch.Tensor):
                 return float(torch.stack([v.detach() for v in vals]).mean().item())
@@ -301,18 +250,7 @@ class A2CBase(ActorCriticOnPolicyAlgo):
             extra=extra,
         )
 
-
-# =============================================================================
-#                          A2CAlgo — 单智能体 A2C
-# =============================================================================
-
 class A2CAlgo(A2CBase):
-    """单智能体 A2C，单优化器。
-
-    继承 A2CBase 默认 hook（vanilla PG + MSE + 无 KL stopping）
-    和 ActorCriticOnPolicyAlgo.prepare_batch。
-    """
-
     def __init__(
         self,
         policy: ActorPolicy,

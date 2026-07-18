@@ -1,27 +1,25 @@
 from dataclasses import dataclass, field, fields
 from typing import Dict, Iterator, List, Union
 try:
-    from typing import Self  # Python 3.11+
+    from typing import Self  # Python 3.11+.
 except ImportError:
-    from typing_extensions import Self  # Python 3.10 兼容
+    from typing_extensions import Self  # Python 3.10 compatibility.
 import math
 import numpy as np
 import torch
 
-
 @dataclass
 class BaseBatch:
     """Base batch with common utilities."""
-    
+
     def to_tensor(self, device: torch.device) -> Self:
-        """Convert all numpy arrays to tensors on device."""
         kwargs = {}
         for f in fields(self):
             val = getattr(self, f.name)
             if val is None:
                 kwargs[f.name] = None
             elif isinstance(val, np.ndarray):
-                # 根据 dtype 选择合适的 torch dtype
+                # Select the matching PyTorch dtype.
                 if val.dtype == np.bool_:
                     dtype = torch.bool
                 elif val.dtype in [np.float32, np.float64]:
@@ -34,15 +32,14 @@ class BaseBatch:
             else:
                 kwargs[f.name] = val
         return self.__class__(**kwargs)
-    
+
     def __len__(self) -> int:
-        """Return batch size (first dimension)."""
         for f in fields(self):
             val = getattr(self, f.name)
             if val is not None and hasattr(val, '__len__'):
                 return len(val)
         return 0
-    
+
     def __getitem__(self, indices) -> Self:
         """Index/slice the batch. Supports int, slice, or array indices."""
         kwargs = {}
@@ -55,7 +52,7 @@ class BaseBatch:
             else:
                 kwargs[f.name] = val
         return self.__class__(**kwargs)
-    
+
     def split(
         self,
         size: int,
@@ -64,23 +61,23 @@ class BaseBatch:
     ) -> Iterator[Self]:
         """
         Split batch into minibatches.
-        
+
         Args:
             size: minibatch size. -1 means no split (return whole batch).
             shuffle: randomly shuffle indices before splitting.
             merge_last: merge last small batch into previous one.
-        
+
         Yields:
             Minibatch of the same type.
         """
         length = len(self)
         if length == 0:
             return
-        
+
         if size == -1 or size >= length:
             yield self
             return
-        
+
         # Generate indices on the same device as tensor batches to avoid CPU index hops.
         index_device = None
         for f in fields(self):
@@ -96,52 +93,49 @@ class BaseBatch:
             )
         else:
             indices = np.random.permutation(length) if shuffle else np.arange(length)
-        
-        # Check if we need to merge last batch
+
+        # Check if we need to merge last batch.
         merge_last = merge_last and (length % size > 0)
-        
+
         for start in range(0, length, size):
             end = start + size
-            # Merge last small batch
+            # Merge last small batch.
             if merge_last and end + size > length:
                 yield self[indices[start:]]
                 break
             yield self[indices[start:end]]
 
-
 @dataclass
 class RolloutBatch(BaseBatch):
     """Batch for on-policy algorithms (PPO, A2C, etc.)."""
-    obs: torch.Tensor | np.ndarray = None          # (batch, *obs_shape)
-    act: torch.Tensor | np.ndarray = None          # (batch,) or (batch, act_dim)
-    rew: torch.Tensor | np.ndarray = None          # (batch,)
-    done: torch.Tensor | np.ndarray = None         # (batch,) termination | truncation
-    truncated: torch.Tensor | np.ndarray = None    # (batch,) 是否为时间截断（用于正确的 value bootstrap）
-    log_prob: torch.Tensor | np.ndarray = None     # (batch,) old log_prob from collection
-    value: torch.Tensor | np.ndarray = None        # (batch,) value estimate
-    adv: torch.Tensor | np.ndarray = None          # (batch,) advantage
-    ret: torch.Tensor | np.ndarray = None          # (batch,) return (adv + value)
-    # For MARL centralized critic
-    global_state: torch.Tensor | np.ndarray = None # (batch, global_state_dim)
-    # For action masking
-    action_mask: torch.Tensor | np.ndarray = None  # (batch, num_actions)
-    # For active agent masking (1=READY 需要决策, 0=ON_EDGE 跳过)
-    active_mask: torch.Tensor | np.ndarray = None  # (batch,)
-    # For truncation value bootstrap (List[List[ndarray or None]]，不转为 tensor)
+    obs: torch.Tensor | np.ndarray = None          # (batch, *obs_shape).
+    act: torch.Tensor | np.ndarray = None          # (batch,) or (batch, act_dim).
+    rew: torch.Tensor | np.ndarray = None          # (batch,).
+    done: torch.Tensor | np.ndarray = None         # (batch,) termination | truncation.
+    truncated: torch.Tensor | np.ndarray = None
+    log_prob: torch.Tensor | np.ndarray = None     # (batch,) old log_prob from collection.
+    value: torch.Tensor | np.ndarray = None        # (batch,) value estimate.
+    adv: torch.Tensor | np.ndarray = None          # (batch,) advantage.
+    ret: torch.Tensor | np.ndarray = None          # (batch,) return (adv + value).
+
+    global_state: torch.Tensor | np.ndarray = None # (batch, global_state_dim).
+
+    action_mask: torch.Tensor | np.ndarray = None  # (batch, num_actions).
+    # For active agent masking.
+    active_mask: torch.Tensor | np.ndarray = None  # (batch,).
+    # For truncation value bootstrap.
     final_global_state: list = None
-    # IPPO 用 per-agent final obs 做 truncation bootstrap（结构同 final_global_state）
+
     final_obs: list = None
-    # VDPPO rollout 边界处的全局 state (num_envs, state_dim)，用于修正末尾步 next_state。
-    # 由 MAOnPolicyCollector 在每次 collect 结束后采集，不转为 tensor（保持 ndarray 或 None）。
+
     boundary_global_state: np.ndarray = None
-    # Actor RNN hidden state at each step (batch, recurrent_N, hidden_size)。MLP 时为 None。
+    # Actor RNN hidden state at each step (batch, recurrent_N, hidden_size); None for MLP policies.
     rnn_hidden: torch.Tensor | np.ndarray = None
-    # Critic RNN hidden state at each step (batch, recurrent_N, hidden_size)。MLP critic 时为 None。
-    # 由 prepare_batch 在处理 RNN critic 序列时填充。
+    # Critic RNN hidden state at each step (batch, recurrent_N, hidden_size); None for MLP critics.
+    # Filled by prepare_batch when processing critic RNN sequences.
     critic_rnn_hidden: torch.Tensor | np.ndarray = None
 
     def __getitem__(self, indices) -> Self:
-        """按 transition 索引 batch；boundary_global_state 为 (N, *) 非 (T*N, *)，不参与切片。"""
         kwargs = {}
         for f in fields(self):
             val = getattr(self, f.name)
@@ -155,9 +149,7 @@ class RolloutBatch(BaseBatch):
                 kwargs[f.name] = val
         return self.__class__(**kwargs)
 
-    # -----------------------------------------------------------------
-    #  chunk_split: RNN chunk-based minibatch splitting
-    # -----------------------------------------------------------------
+    # chunk_split: RNN chunk-based minibatch splitting.
 
     def chunk_split(
         self,
@@ -167,24 +159,16 @@ class RolloutBatch(BaseBatch):
         num_agents: int = 1,
         minibatch_size: int = -1,
     ) -> Iterator[Self]:
+        """Split a flattened rollout into shuffled recurrent minibatches.
+
+        Input layout is ``(M * T * N, ...)``, where ``M`` is the number of
+        agents and ``N`` the number of environments. Time is padded to a multiple
+        of ``chunk_len`` and split into sequences. Yielded tensors use layout
+        ``(L, minibatch_sequences * N, ...)``. Recurrent states contain only each
+        chunk's initial state with shape ``(recurrent_N, minibatch_sequences * N,
+        hidden_dim)``. Padded steps receive a zero ``active_mask``.
         """
-        RNN chunk-based splitting。
 
-        数据布局假设: flat batch = (M*T*N, ...) 其中 M=num_agents。
-
-        步骤:
-        1. reshape → (M, T, N, ...)
-        2. T 轴 pad 到 chunk_len 的整数倍并切 chunk → (M, num_chunks, L, N, ...)
-        3. (M, num_chunks) 展平为 S，对 S 维 shuffle
-        4. 按 minibatch_size 切分（单位=序列条数，每条包含 L*N 步）
-        5. yield 的 minibatch 布局: 各字段 (L, mb_S*N, ...) — 时间维在前
-
-        rnn_hidden 特殊处理：只取每个 chunk 的首步 hidden 作为 h0，
-        yield 时形状 (recurrent_N, mb_S*N, hidden_dim)。
-
-        padding 保护：当 T 不是 chunk_len 整数倍时，填充步的 active_mask 为 0，
-        若原始 active_mask 为 None 则自动合成。
-        """
         M = num_agents
         L = chunk_len
         total = M * T * N
@@ -192,8 +176,6 @@ class RolloutBatch(BaseBatch):
         num_chunks = math.ceil(T / L)
         T_padded = num_chunks * L
 
-        # 当需要 padding 且 active_mask 不存在时，合成一个全 1 mask；
-        # _reshape_and_chunk 的零填充会自动使 padding 位置变为 0。
         _val_overrides: dict = {}
         if T_padded > T and self.active_mask is None:
             ref = self.obs
@@ -202,7 +184,6 @@ class RolloutBatch(BaseBatch):
             )
 
         def _reshape_and_chunk(x: torch.Tensor, is_hidden: bool = False):
-            """(total, *feat) -> (M, num_chunks, L, N, *feat)，hidden 只取首步"""
             feat = x.shape[1:]
             v = x.view(M, T, N, *feat)
 
@@ -238,7 +219,7 @@ class RolloutBatch(BaseBatch):
                     kwargs[f.name] = None
                     continue
 
-                # (N, state_dim)，与 T*N 步不对齐；各 minibatch 原样携带即可（如 VDPPO）
+                # Shape: (N, state_dim).
                 if f.name == "boundary_global_state":
                     kwargs[f.name] = val
                     continue
@@ -267,54 +248,51 @@ class RolloutBatch(BaseBatch):
 
             yield self.__class__(**kwargs)
 
-
-@dataclass 
+@dataclass
 class TransitionBatch(BaseBatch):
     """Batch for off-policy algorithms (DQN, SAC, etc.)."""
-    obs: torch.Tensor | np.ndarray = None          # (batch, *obs_shape)
-    act: torch.Tensor | np.ndarray = None          # (batch,) or (batch, act_dim)
-    rew: torch.Tensor | np.ndarray = None          # (batch,)
-    next_obs: torch.Tensor | np.ndarray = None     # (batch, *obs_shape)
-    done: torch.Tensor | np.ndarray = None         # (batch,)
-    # For action masking
-    action_mask: torch.Tensor | np.ndarray = None  # (batch, num_actions)
-    next_action_mask: torch.Tensor | np.ndarray = None
-    # For CTDE algorithms (VDN, QMIX) — global state
-    state: torch.Tensor | np.ndarray = None         # (batch, state_dim)
-    next_state: torch.Tensor | np.ndarray = None    # (batch, state_dim)
-    # For active agent masking (1=READY 决策步, 0=ON_EDGE 无效步)
-    active_mask: torch.Tensor | np.ndarray = None   # (batch,)
-    # 同步 transition 的 bootstrap 折扣 γ^k（sync_replay 模式）
-    gamma_power: torch.Tensor | np.ndarray = None   # (batch,)
+    obs: torch.Tensor | np.ndarray = None          # (batch, *obs_shape).
+    act: torch.Tensor | np.ndarray = None          # (batch,) or (batch, act_dim).
+    rew: torch.Tensor | np.ndarray = None          # (batch,).
+    next_obs: torch.Tensor | np.ndarray = None     # (batch, *obs_shape).
+    done: torch.Tensor | np.ndarray = None         # (batch,).
 
+    action_mask: torch.Tensor | np.ndarray = None  # (batch, num_actions).
+    next_action_mask: torch.Tensor | np.ndarray = None
+    # For CTDE algorithms (VDN, QMIX) - global state.
+    state: torch.Tensor | np.ndarray = None         # (batch, state_dim).
+    next_state: torch.Tensor | np.ndarray = None    # (batch, state_dim).
+    # For active agent masking.
+    active_mask: torch.Tensor | np.ndarray = None   # (batch,).
+
+    gamma_power: torch.Tensor | np.ndarray = None   # (batch,).
 
 @dataclass
 class SequenceBatch(BaseBatch):
-    """Off-policy RNN 训练用序列 batch，所有字段含 seq_len 维度。
+    """Sequence batch for recurrent off-policy training.
 
-    L = burn_in_len + seq_len（total_len）。
-    mask 语义: burn-in 区间=0, 训练有效步=1, padding=0。
+    The sequence length is ``burn_in_len + seq_len``. ``mask`` is zero during
+    burn-in and padding and one for valid optimization steps.
     """
-    obs: torch.Tensor | np.ndarray = None               # (B, L, obs_dim)
-    act: torch.Tensor | np.ndarray = None               # (B, L)
-    rew: torch.Tensor | np.ndarray = None               # (B, L)
-    next_obs: torch.Tensor | np.ndarray = None          # (B, L, obs_dim)
-    done: torch.Tensor | np.ndarray = None              # (B, L)
-    mask: torch.Tensor | np.ndarray = None              # (B, L) — 有效步=1, padding=0
-    action_mask: torch.Tensor | np.ndarray = None       # (B, L, act_dim)
-    next_action_mask: torch.Tensor | np.ndarray = None  # (B, L, act_dim)
-    active_mask: torch.Tensor | np.ndarray = None       # (B, L) 1=READY, 0=ON_EDGE
-    # CTDE 算法（QMIX）所需全局 state
-    state: torch.Tensor | np.ndarray = None             # (B, L, state_dim)
-    next_state: torch.Tensor | np.ndarray = None        # (B, L, state_dim)
-    burn_in_len: int = 0                                # burn-in 步数（标量元数据，不转 tensor）
 
+    obs: torch.Tensor | np.ndarray = None               # (B, L, obs_dim).
+    act: torch.Tensor | np.ndarray = None               # (B, L).
+    rew: torch.Tensor | np.ndarray = None               # (B, L).
+    next_obs: torch.Tensor | np.ndarray = None          # (B, L, obs_dim).
+    done: torch.Tensor | np.ndarray = None              # (B, L).
+    mask: torch.Tensor | np.ndarray = None              # Shape: (B, L).
+    action_mask: torch.Tensor | np.ndarray = None       # (B, L, act_dim).
+    next_action_mask: torch.Tensor | np.ndarray = None  # (B, L, act_dim).
+    active_mask: torch.Tensor | np.ndarray = None       # (B, L) 1=READY, 0=ON_EDGE.
+
+    state: torch.Tensor | np.ndarray = None             # (B, L, state_dim).
+    next_state: torch.Tensor | np.ndarray = None        # (B, L, state_dim).
+    burn_in_len: int = 0
 
 @dataclass
 class CollectResult:
-    """采集结果，包含 batch 数据和统计信息"""
-    batch: Union[RolloutBatch, Dict[str, RolloutBatch]]  # 采集的数据
-    n_steps: int = 0                                      # 总步数
-    n_episodes: int = 0                                   # 完成的 episode 数
-    episode_rewards: List[float] = field(default_factory=list)  # 每个完成 episode 的总奖励
-    episode_lengths: List[int] = field(default_factory=list)    # 每个完成 episode 的长度
+    batch: Union[RolloutBatch, Dict[str, RolloutBatch]]
+    n_steps: int = 0
+    n_episodes: int = 0
+    episode_rewards: List[float] = field(default_factory=list)  # Returns for completed episodes.
+    episode_lengths: List[int] = field(default_factory=list)    # Lengths of completed episodes.

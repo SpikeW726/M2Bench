@@ -1,8 +1,4 @@
 # QTable + BBLAEnv @ mapA
-# 图统计: nodes=50, directed_edges=210, max_out_degree=7, avg_edge=7.808, max_edge=22.000
-# 物理时间截断: episode_len=500, total_steps=40000000
-# Q-table 使用离散 obs 作为状态键，保持 norm_obs=false 以避免连续化状态。
-
 algo_name: qtable
 env_type: bbla
 exp_name: qtable-bbla-mapA

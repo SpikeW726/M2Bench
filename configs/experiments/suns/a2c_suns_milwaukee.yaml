@@ -1,8 +1,4 @@
 # A2C + SUNSGymEnv @ milwaukee
-# 图统计: nodes=40, directed_edges=112, max_out_degree=5, avg_edge=10.961, max_edge=14.14
-# 物理时间截断: episode_len=800, total_steps=50000000
-# SUNSGymEnv 训练管线仅支持 1 agent；多智能体评估见 eval 配置。
-
 algo_name: a2c
 env_type: suns_gym
 actor_type: sun

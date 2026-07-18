@@ -1,19 +1,14 @@
 # VDN + MASUPEnv (TSP12)
-# 用法: python train.py configs/experiments/vdn_masup_tsp12.yaml
-
-# ---- 分发字段 ----
 algo_name: vdn
 env_type: masup
 q_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: vdn-tsp12
 graph_name: TSP12
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/simple_TSP_12.json
   enable_wait: true
@@ -30,7 +25,6 @@ env:
     idi_scale: 0.05
     contribution_scale: 0.05
 
-# ---- 算法 ----
 algo:
   lr: 1.0e-4
   gamma: 0.99
@@ -44,7 +38,6 @@ algo:
   reward_global: true
   shared_sync: true
 
-# ---- 训练 ----
 training:
   num_envs: 12
   use_subproc: true

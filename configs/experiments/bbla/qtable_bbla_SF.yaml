@@ -1,14 +1,4 @@
 # QTable + BBLAEnv (SF / SFcrimemap)
-# 用法: python train.py configs/experiments/bbla/qtable_bbla_SF.yaml
-#
-# SF 图特性:
-#   12 节点，全连通（max_neighbors=11），边权 6.1~53.9
-#   obs_space: Box(int32, 4) → [cur_node, prev_node, target_neighbor, steps_on_edge]
-#   action_space: Discrete(max_neighbors+1=12)（含 no-op）
-#   Q-table 状态空间由 int32 obs 隐式离散化，约 12×12×12×(episode_len) → 实际有效状态远小于上界
-#
-# episode_len=10000：FixedStepEnv，与 TSP12 配置对齐（同为 12 节点图）
-
 algo_name: qtable
 env_type: bbla
 exp_name: qtable-bbla-SF
@@ -34,7 +24,6 @@ algo:
   epsilon_start: 0.2
   epsilon_end: 0.05
   sync_update: true
-  # SF 全连通图 action_space=12，适当放宽探索期（vs TSP12 的 40000）
   epsilon_decay_steps: 10000000
 
 training:

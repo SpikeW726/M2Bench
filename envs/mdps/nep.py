@@ -6,7 +6,7 @@ Venue: IEEE International Conference on Cognitive Informatics (ICCI)
 Link: https://ieeexplore.ieee.org/document/5599681
 
 Description:
-    This script implements the NEP(short for Node-Edge Position) mdp design 
+    This script implements the NEP(short for Node-Edge Position) mdp design
     described in Section 3.C of the paper.
 """
 
@@ -28,18 +28,18 @@ class NEPEnv(JointEventDrivenEnv):
         self.episode_len = config["episode_len"]
         self.truncate_by_time = kwargs.get("truncate_by_time", True)
         self.init_pos = config.get("init_positions", [])
-        self._current_decision_agent: int = -1  # 当前决策的 agent id
+        self._current_decision_agent: int = -1
         self._last_obs = None
-        # 评估时 reset(seed=...) 启用；训练不传 seed 则随机选决策智能体
+
         self._decision_rng: Optional[random.Random] = None
 
-        self.obs_size = 1 # 由 num_agent 维映射到 1 维
+        self.obs_size = 1
         edge_combinations_count = math.comb(self.world.num_edges, self.world.num_agents-1)
         max_combination = self.world.num_nodes * edge_combinations_count
-        
-        self.observation_space = Discrete(max_combination+2, start=-2) # -2: 有智能体未出发; -1: 多智能体在同一条边上
+
+        self.observation_space = Discrete(max_combination+2, start=-2)
         self.action_space = Discrete(self.world.max_neighbors)
-    
+
     def reset(self, seed: Optional[int] = None):
         if seed is not None:
             self._decision_rng = random.Random(seed)
@@ -56,13 +56,13 @@ class NEPEnv(JointEventDrivenEnv):
 
     def _dispatch_actions(self, action: int):
         if not isinstance(action, (int, np.integer)):
-            raise ValueError(f"action 必须是 int, 当前类型为 {type(action).__name__}。")
+            raise ValueError(f"action must be int, got {type(action).__name__}")
 
         cur_position = self.world.agents[self._current_decision_agent].position
         neighbors = self.world.get_neighbors(cur_position)
         if action < 0 or action >= len(neighbors):
             raise ValueError(
-                f"action 越界: action={action}, 可选范围=[0, {len(neighbors) - 1}], "
+                f"action out of range: action={action}, valid range=[0, {len(neighbors) - 1}], "
                 f"current_position={cur_position}。"
             )
         target = neighbors[action]

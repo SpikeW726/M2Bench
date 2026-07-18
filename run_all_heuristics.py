@@ -16,12 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 HEURISTIC_CONFIG_DIR = PROJECT_ROOT / "configs" / "heuristic"
 GRAPHS_DIR = PROJECT_ROOT / "graphs"
 EVALUATOR = PROJECT_ROOT / "evaluators" / "heuristic_evaluator.py"
-
 
 def resolve_graph_path(map_name: str) -> Path:
     raw = Path(map_name)
@@ -49,20 +47,17 @@ def resolve_graph_path(map_name: str) -> Path:
 
     raise FileNotFoundError(f"Graph {map_name!r} was not found under {GRAPHS_DIR}")
 
-
 def list_heuristic_policies() -> list[str]:
     policies = sorted(p.stem for p in HEURISTIC_CONFIG_DIR.glob("*.yaml"))
     if not policies:
         raise FileNotFoundError(f"No heuristic configs found in {HEURISTIC_CONFIG_DIR}")
     return policies
 
-
 def project_relative_or_absolute(path: Path) -> str:
     try:
         return str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
     except ValueError:
         return str(path)
-
 
 def run_policy(
     policy: str,
@@ -89,7 +84,6 @@ def run_policy(
     print(f"{'=' * 72}")
     result = subprocess.run(cmd, cwd=PROJECT_ROOT)
     return result.returncode
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -145,7 +139,6 @@ def main() -> int:
 
     print("\nAll heuristic policy evaluations completed.")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

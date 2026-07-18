@@ -42,7 +42,7 @@ parameters:
   tau:
     values: [0.01, 0.05, 0.1]
   target_update_freq:
-    values: [1, 5] 
+    values: [1, 5]
   mixer_embed_dim:
     value: 256
   data_chunk_length:

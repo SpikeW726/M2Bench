@@ -1,8 +1,4 @@
 # A2C + SUNSGymEnv @ cumberland
-# 图统计: nodes=40, directed_edges=88, max_out_degree=4, avg_edge=5.702, max_edge=13.275
-# 物理时间截断: episode_len=500, total_steps=40000000
-# SUNSGymEnv 训练管线仅支持 1 agent；多智能体评估见 eval 配置。
-
 algo_name: a2c
 env_type: suns_gym
 actor_type: sun

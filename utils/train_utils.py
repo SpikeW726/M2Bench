@@ -12,7 +12,7 @@ class RunningMeanStd(nn.Module):
         super().__init__()
         self.register_buffer("mean", torch.zeros(shape))
         self.register_buffer("var", torch.ones(shape))
-        self.register_buffer("count", torch.tensor(1e-4))  # Prevent initial division by zero
+        self.register_buffer("count", torch.tensor(1e-4))  # Prevent initial division by zero.
         self.epsilon = epsilon
         self.shape = shape
 
@@ -36,15 +36,14 @@ class RunningMeanStd(nn.Module):
         m_a = self.var * self.count
         m_b = batch_var * batch_count
         M2 = m_a + m_b + torch.square(delta) * self.count * batch_count / tot_count
-        
+
         new_var = M2 / tot_count
-        
+
         self.mean = new_mean
         self.var = new_var
         self.count = tot_count
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
-        """归一化：(x - mean) / std，供网络内 obs 字段预处理使用。"""
         return (x - self.mean) / torch.sqrt(self.var + self.epsilon)
 
     @property

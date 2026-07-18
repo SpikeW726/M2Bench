@@ -42,8 +42,6 @@ algo:
   mixer_embed_dim: 64
   data_chunk_length: 10
   reward_global: true
-  # 冻结 actor 前 N 次 update（Q-network 热身），避免随机 Q 值破坏预训练 actor
-  # grid: 1024 steps×24 envs=24576 steps/iter，200 iters ≈ 4.9M steps 热身
   freeze_actor_iters: 200
 
 training:

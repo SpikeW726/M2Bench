@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from policies.heuritic.heuristic_base import HeuriticBasePolicy
 
-
 class HPCCPolicy(HeuriticBasePolicy):
     """Heuristic Pathfinder Conscientious Cognitive policy."""
 

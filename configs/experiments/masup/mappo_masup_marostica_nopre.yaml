@@ -1,15 +1,6 @@
-# MAPPO + MASUPEnv @ marostica — 标准 MLP（无 MASUP 预处理）+ 模仿学习预训练初始化
-# 图统计: nodes=41, directed_edges=106, max_out_degree=4, avg_edge=2.49, max_edge=4.0
-# 物理时间截断: episode_len=500, total_steps=50000000
-#
-# 用法:
-#   1) 先运行模仿学习预训练:
 #      python trainers/imitator/imitation_trainer.py \
 #          --config configs/imitator/mappo_masup_marostica.yaml
-#   2) 将下方 actor_path / critic_path 中的 TIMESTAMP 替换为实际输出目录后缀
-#   3) 启动 RL 微调:
 #      python train.py configs/experiments/masup/mappo_masup_marostica_nopre.yaml
-
 algo_name: mappo
 env_type: masup
 actor_type: mlp

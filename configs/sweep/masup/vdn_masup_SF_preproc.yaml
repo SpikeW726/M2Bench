@@ -1,15 +1,9 @@
-# VDN + MASUPEnv(SF) + MASUP 异构预处理 超参数搜索
-#
-# 用法:
 #   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF_preproc.yaml \
 #                   --sweep-config configs/sweep/masup/vdn_masup_SF_preproc.yaml --count 32
-#
-# 并行（先 create-only 再多机跑）:
 #   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF_preproc.yaml \
 #                   --sweep-config configs/sweep/masup/vdn_masup_SF_preproc.yaml --create-only
 #   python sweep.py --base-config configs/experiments/masup/vdn_masup_SF_preproc.yaml \
 #                   --sweep-id <ID> --count 32
-
 method: random
 
 metric:
@@ -78,7 +72,6 @@ parameters:
   save_interval:
     value: 500
 
-# ---- 自定义早停 ----
 early_terminate:
   min_trial: 6
   min_steps: 10000000

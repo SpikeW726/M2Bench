@@ -1,6 +1,3 @@
-# IPPO + MASUPEnv (SF / SFcrimemap) + MASUP 异构预处理（与 vdn_masup_SF_preproc / vdppo_masup_SF 对齐）
-# 用法: python train.py configs/experiments/masup/ippo_masup_SF.yaml
-
 algo_name: ippo
 env_type: masup
 actor_type: masup_mlp

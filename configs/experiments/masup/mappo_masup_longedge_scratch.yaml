@@ -1,20 +1,14 @@
-# MAPPO + MASUPEnv (TSP12) — 从零训练 (无预训练)
-# 用法: python train.py configs/experiments/mappo_tsp12_scratch.yaml
-
-# ---- 分发字段 ----
 algo_name: mappo
 env_type: masup
 actor_type: mlp
 critic_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: mappo-scratch
 graph_name: long_edge
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/long_edge.json
   enable_wait: true
@@ -31,7 +25,6 @@ env:
     idi_scale: 0.05
     contribution_scale: 0.05
 
-# ---- 算法 ----
 algo:
   use_active_mask: True
   actor_lr: 0.000042275431686468945
@@ -42,7 +35,6 @@ algo:
   vf_coef: 1.1085035143266433
   ent_coef: 0.08350742025925834
 
-# ---- 训练 ----
 training:
   num_envs: 12
   use_subproc: true
@@ -53,7 +45,6 @@ training:
   update_epochs: 10
   eval_interval: 50
 
-# ---- 网络 ----
 actor:
   hidden: [256, 256]
 critic:

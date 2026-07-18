@@ -1,8 +1,4 @@
 # A2C + SUNSGymEnv @ marostica
-# 图统计: nodes=41, directed_edges=106, max_out_degree=4, avg_edge=2.49, max_edge=4.0
-# 物理时间截断: episode_len=500, total_steps=50000000
-# SUNSGymEnv 训练管线仅支持 1 agent；多智能体评估见 eval 配置。
-
 algo_name: a2c
 env_type: suns_gym
 actor_type: sun

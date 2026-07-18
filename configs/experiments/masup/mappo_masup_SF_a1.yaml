@@ -1,7 +1,4 @@
 # MAPPO + MASUPEnv @ SF (1 agent)
-# 图统计: nodes=12, star-like SF crime map
-# 物理时间截断: episode_len=3000, total_steps=50000000
-
 algo_name: mappo
 env_type: masup
 actor_type: masup_mlp

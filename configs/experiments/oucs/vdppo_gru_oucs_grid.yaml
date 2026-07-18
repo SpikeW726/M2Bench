@@ -1,20 +1,14 @@
-# VDPPO + GRU Actor + OUCSEnv (TSP12) — 3 agents
-# 用法: python train.py configs/experiments/vdppo_gru_oucs_tsp12.yaml
-
-# ---- 分发字段 ----
 algo_name: vdppo
 env_type: oucs
 actor_type: rnn
 q_type: rnn
 
-# ---- 实验元信息 ----
 exp_name: vdppo-gru-oucs
 graph_name: grid
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/grid.json
   enable_wait: false
@@ -27,7 +21,6 @@ env:
     truncate_by_time: true
     penalised_factor: 1.5
 
-# ---- 算法 ----
 algo:
   use_active_mask: true
   actor_lr: 0.0007060824869158372
@@ -45,7 +38,6 @@ algo:
   data_chunk_length: 10
   reward_global: false
 
-# ---- 训练 ----
 training:
   num_envs: 96
   use_subproc: true
@@ -56,12 +48,11 @@ training:
   update_epochs: 10
   eval_interval: 10
 
-# ---- 网络 ----
 actor:
   rnn_type: gru
   hidden_size: 256
   num_layers: 1
-  fc_hidden: [256, 256]   # GRU 前编码层
+  fc_hidden: [256, 256]
 
 q_network:
   rnn_type: gru

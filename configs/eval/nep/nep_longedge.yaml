@@ -1,10 +1,6 @@
-# NEP Q-table 评估配置 (LongEdge)
-# long_edge.json: 4 节点，4 agent 各驻一节点
-# 用法:
 #   python evaluators/test.py \
 #     --env_config configs/eval/nep/nep_longedge.yaml \
 #     --model models/qtable-nep-longedge/iter_500
-
 algo_name: qtable
 env_type: nep
 

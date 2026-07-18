@@ -1,7 +1,4 @@
-# MAGECEnv SF 评估配置
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/magec/magec_SF.yaml --model models/xxx/final
-
 env_type: magec
 
 env:

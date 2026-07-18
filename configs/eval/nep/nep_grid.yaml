@@ -1,10 +1,4 @@
-# NEPEnv grid 评估配置（3 agents，联合 Q-table，FixedStepEnv）
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/nep/nep_grid.yaml --model models/xxx/final
-#
-# 注意：NEP 状态空间在 grid（50 节点）上较大（≈ 50 × C(182,2) ≈ 820K），
-# Q-table 需要充足步数探索，训练预算需相应增大。
-
 algo_name: qtable
 env_type: nep
 
@@ -20,7 +14,7 @@ env:
     truncate_by_time: true
 
 eval:
-  seed: 42              # 评估固定随机性；训练仍随机
+  seed: 42
   num_episodes: 10
   save_plot: evaluators/results/grid/qtable_nep/best_eval.png
   show_plot: false

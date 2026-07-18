@@ -1,6 +1,4 @@
 # QMIX + MASUPEnv (SF / SFcrimemap)
-# 用法: python train.py configs/experiments/masup/qmix_masup_SF.yaml
-
 algo_name: qmix
 env_type: masup
 q_type: rnn
@@ -34,7 +32,6 @@ algo:
   target_update_freq: 200
   epsilon_start: 1.0
   epsilon_end: 0.05
-  # global env step 线性衰减至 epsilon_end（非 iteration / 非 per-update）
   epsilon_decay_steps: 2500000
   use_double_dqn: true
   shared_policy: true

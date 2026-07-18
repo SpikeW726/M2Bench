@@ -1,8 +1,4 @@
 # A2C + SUNSGymEnv @ chain10
-# 图统计: nodes=10, directed_edges=18, max_out_degree=2, avg_edge=1.111, max_edge=2.000
-# 物理时间截断: episode_len=100, total_steps=20000000
-# SUNSGymEnv 训练管线仅支持 1 agent；多智能体评估见 eval 配置。
-
 algo_name: a2c
 env_type: suns_gym
 actor_type: sun

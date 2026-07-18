@@ -1,7 +1,4 @@
-# OUCSEnv SF 评估配置（与 masup_SF 中 num_agents / init_positions / episode_len 一致）
-# 用法:
 #   python evaluators/test.py --env_config configs/eval/oucs/oucs_SF.yaml --model models/xxx/final
-
 env_type: oucs
 
 env:

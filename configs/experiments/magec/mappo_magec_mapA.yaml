@@ -1,8 +1,4 @@
 # MAPPO + MAGECEnv @ mapA
-# 图统计: nodes=50, directed_edges=210, max_out_degree=7, avg_edge=7.808, max_edge=22.000
-# 物理时间截断: episode_len=500, total_steps=40000000
-# MAGEC 图观测含 edge_src/edge_dst 索引，使用环境内部特征归一化，不叠加 VectorEnvNormObs。
-
 algo_name: mappo
 env_type: magec
 actor_type: sage

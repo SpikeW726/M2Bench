@@ -1,13 +1,4 @@
-# QTable + GBLAEnv (grid) — 含邻居意图扩展观测
-# 用法: python train.py configs/experiments/gbla/qtable_gbla_grid.yaml
-#
-# grid 图特性:
-#   50 节点，max_degree=7，边权 2~6（均值≈2.2），FixedStepEnv (dt=1)
-#   obs_space: Box(int32, 4+max_neighbors=11) → BBLA obs + 邻居意图向量
 #   action_space: Discrete(max_degree=7)
-#   GBLA 在 BBLA 基础上加入邻居 intention，grid 图下每 agent 最多 7 个邻居
-#   obs_dim=11，状态空间比 SF (obs_dim=15) 略小
-
 algo_name: qtable
 env_type: gbla
 exp_name: qtable-gbla-grid

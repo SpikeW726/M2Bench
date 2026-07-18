@@ -1,9 +1,6 @@
-# BBLA Q-table 评估配置 (LongEdge)
-# 用法:
 #   python evaluators/test.py \
 #     --env_config configs/eval/bbla/bbla_longedge.yaml \
 #     --model models/qtable-bbla-longedge/iter_500
-
 algo_name: qtable
 env_type: bbla
 

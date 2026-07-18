@@ -1,10 +1,3 @@
-# MAPPO + MASUPEnv (grid) — 纯 MLP，无 masup 预处理网络
-# 用法: python train.py configs/experiments/masup/mappo_masup_grid_nopre.yaml
-#
-# 预训练: 先用 configs/imitator/mappo_masup_grid.yaml 做模仿学习，
-#         再将下方 actor_path / critic_path 中的 <timestamp> 替换为实际 run 目录。
-# grid: 50 节点，6 agents，与 graphs/grid.json / masup_grid.yaml 一致
-
 algo_name: mappo
 env_type: masup
 actor_type: mlp

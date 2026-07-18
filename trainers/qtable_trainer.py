@@ -1,7 +1,8 @@
-"""Q-table Trainer：纯 numpy 在线 Q-learning 训练循环。
+"""NumPy online Q-learning training loops.
 
-不继承 BaseTrainer（避免 nn.Module / Collector 依赖），
-但复用 SimpleLogger、VectorEnv 等外围设施。
+These trainers intentionally avoid ``BaseTrainer`` and neural-network collector
+dependencies while reusing vector environments, logging, evaluation, and
+checkpoint facilities.
 """
 
 import time
@@ -14,12 +15,10 @@ import yaml
 from algorithms.tabular.qtable import QTableAlgo
 from configs.training_configs import TrainerConfig
 
-
 def _build_qtable_yaml_extra(
     vec_env: Any,
     base_extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """合并训练元数据与向量环境上的观测/回报 RMS（与 deep RL checkpoint 同级字段）。"""
     from envs.venv_wrappers import VectorEnvNormObs, VectorEnvNormReward, find_vec_wrapper
     from utils.model_io import running_mean_std_to_yaml_dict
 
@@ -32,7 +31,6 @@ def _build_qtable_yaml_extra(
         extra["reward_rms_state"] = running_mean_std_to_yaml_dict(rew_w.get_reward_rms())
     return extra if extra else None
 
-
 def _metric_improved(
     value: float,
     best: Optional[float],
@@ -42,7 +40,6 @@ def _metric_improved(
     if best is None:
         return True
     return value < best if minimize else value > best
-
 
 def _save_qtable_checkpoint(
     algo: QTableAlgo,
@@ -57,7 +54,6 @@ def _save_qtable_checkpoint(
     best_metric_name: Optional[str] = None,
     best_metric_value: Optional[float] = None,
 ) -> Path:
-    """写入 save_dir/{checkpoint_name}/（Q-table 默认 best/）。"""
     ckpt_dir = Path(save_dir) / checkpoint_name
     algo.save(str(ckpt_dir))
     meta: Dict[str, Any] = {
@@ -84,11 +80,9 @@ def _save_qtable_checkpoint(
         print(f"[QTable] Saved best checkpoint to {ckpt_dir}{metric_msg}")
     return ckpt_dir
 
-
 def _log_metrics(logger, data: Dict[str, float], step: int) -> None:
     if logger is not None:
         logger.log(data, step=step)
-
 
 def _maybe_run_inline_eval(
     *,
@@ -102,7 +96,6 @@ def _maybe_run_inline_eval(
     on_eval_complete: Optional[Callable],
     save_best_fn: Optional[Callable[[Dict[str, float], int], bool]] = None,
 ) -> None:
-    """对齐 DRL trainer：每隔 eval_interval 个 iteration 执行一次 inline eval。"""
     if not eval_fn or eval_interval <= 0:
         return
     if iteration % eval_interval != 0:
@@ -127,28 +120,12 @@ def _maybe_run_inline_eval(
             parts = ", ".join(f"{k}={v:.4f}" for k, v in eval_metrics.items())
             print(f"[Eval] {parts}")
 
-
 class QTableTrainer:
-    """Q-table 训练器，按 episode 迭代。
+    """Online trainer for independent per-agent Q-tables.
 
-    每个 episode：
-        1. vec_env.reset()
-        2. 逐步选动作 → env.step → 对 active agent 做 Q-update
-        3. 所有 env 结束后 decay epsilon
-        4. 日志；inline eval 指标创新高时写入 save_dir/best/
-
-    停止条件（二选一）：
-        - total_steps 非 None：累计环境步数（与 _run_episode 返回的 steps 一致）>= total_steps 后停止；
-          每 episode 仍完整跑完再判停，故实际总步数可能略超预算。
-        - total_steps 为 None：跑满 max_iterations 个 episode（与旧行为一致）。
-
-    Args:
-        algo: QTableAlgo 实例
-        vec_env: 向量化环境（DummyVectorEnv 即可）
-        config: TrainerConfig
-        save_dir: 模型保存根目录
-        logger: SimpleLogger 实例
-        log_extra_fn: 获取环境指标的回调
+    Training uses vectorized environment transitions, periodic evaluation, best
+    and final checkpoints, optional normalization wrappers, and callback hooks
+    shared with the neural training pipeline.
     """
 
     def __init__(
@@ -250,7 +227,6 @@ class QTableTrainer:
         }
 
     def maybe_save_best_checkpoint(self, metrics: Dict[str, float], episode: int) -> bool:
-        """inline eval 指标创新高时覆盖写入 save_dir/best/。"""
         val = metrics.get(self.best_metric_name)
         if val is None:
             return False
@@ -278,7 +254,6 @@ class QTableTrainer:
         return self._best_saved
 
     def _run_episode(self) -> Dict[str, Any]:
-        """运行一个 episode（所有 vec_env 并行），返回统计量。"""
         obs_dict, info_dict = self.vec_env.reset()
         done_flags = np.zeros(self.num_envs, dtype=bool)
         ep_rewards = np.zeros(self.num_envs)
@@ -327,7 +302,6 @@ class QTableTrainer:
         obs_dict: Dict[str, np.ndarray],
         info_dict: Dict[str, np.ndarray],
     ) -> Dict[str, np.ndarray]:
-        """为所有 agent 的所有 env 选择动作。"""
         actions = {}
         for agent in self.agents:
             agent_actions = np.zeros(self.num_envs, dtype=np.int64)
@@ -354,12 +328,6 @@ class QTableTrainer:
         obs_dict, actions, rew, next_obs, term, trunc,
         info_dict, next_info, done_flags,
     ):
-        """对每个 agent 做 Q-learning 更新。
-
-        sync_mode=False: 仅 active 步逐步更新（原始逻辑）。
-        sync_mode=True:  决策→到达折叠为一次 Q-update，
-                         中间累积折扣 reward，到达时用 γ^(K+1) 做 bootstrap。
-        """
         if self._sync_mode:
             self._update_qtables_sync(
                 obs_dict, actions, rew, next_obs, term, trunc,
@@ -376,7 +344,6 @@ class QTableTrainer:
         obs_dict, actions, rew, next_obs, term, trunc,
         info_dict, next_info, done_flags,
     ):
-        """非同步：仅 active 步做单步 Q-update。"""
         for agent in self.agents:
             for i in range(self.num_envs):
                 if done_flags[i]:
@@ -406,13 +373,6 @@ class QTableTrainer:
         obs_dict, actions, rew, next_obs, term, trunc,
         info_dict, next_info, done_flags,
     ):
-        """同步更新：决策→到达折叠为一次 Q-update。
-
-        per agent per env 维护 pending:
-          决策点(active): 记录 (s, a), 重置累积器
-          每步: acc_reward += γ^k * r_k, gamma_power *= γ
-          到达(next_active) 或 done: flush 一次 Q-update
-        """
         gamma = self._gamma
         for agent in self.agents:
             for i in range(self.num_envs):
@@ -490,26 +450,12 @@ class QTableTrainer:
                 f"steps={self.total_steps}, SPS={sps}"
             )
 
+# JointQTableTrainer - Gymnasium Env.
 
-# =============================================================================
-#                     JointQTableTrainer — Gymnasium Env 版本
-#
-#  与 QTableTrainer 对称，但对接 gymnasium.Env 格式：
-#  - obs/rew/term/trunc 均为 ndarray，无 agent 维度
-#  - 使用虚拟 key "agent_0" 访问 algo.policies
-# =============================================================================
+# obs/rew/term/trunc.
 
 class JointQTableTrainer:
-    """Gymnasium 格式的 Q-table 训练器（对应 JointBaseEnv 系列环境）。
-
-    每个 episode：
-        1. vec_env.reset()
-        2. 逐步选动作 → env.step → Q-update
-        3. 所有 env 结束后 decay epsilon
-        4. 日志；inline eval 指标创新高时写入 save_dir/best/
-
-    停止条件与 QTableTrainer 相同：total_steps 预算 或 max_iterations 个 episode。
-    """
+    """Online trainer for one joint Q-table over all agent actions."""
 
     POLICY_KEY = "agent_0"
 
@@ -636,7 +582,7 @@ class JointQTableTrainer:
         return self._best_saved
 
     def _run_episode(self) -> Dict[str, Any]:
-        obs, info = self.vec_env.reset()   # obs: (num_envs, *obs_shape)
+        obs, info = self.vec_env.reset()   # obs: (num_envs, *obs_shape).
         done_flags = np.zeros(self.num_envs, dtype=bool)
         ep_rewards = np.zeros(self.num_envs)
         ep_steps = 0
@@ -662,7 +608,6 @@ class JointQTableTrainer:
         }
 
     def _select_actions(self, obs: np.ndarray, info: np.ndarray) -> np.ndarray:
-        """为所有 env 选动作，返回 (num_envs,) int 数组。"""
         policy = self.algo.policies[self.POLICY_KEY]
         actions = np.zeros(self.num_envs, dtype=np.int64)
         for i in range(self.num_envs):
@@ -681,7 +626,6 @@ class JointQTableTrainer:
         obs, actions, rew, next_obs, term, trunc,
         info, next_info, done_flags,
     ):
-        """对每个未结束的 env 做单步 Q-update。"""
         policy_key = self.POLICY_KEY
         for i in range(self.num_envs):
             if done_flags[i]:

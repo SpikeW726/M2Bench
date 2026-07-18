@@ -1,16 +1,13 @@
-# ---- 分发字段 ----
 algo_name: iql
 env_type: s4r1
 q_type: mlp
 
-# ---- 实验元信息 ----
 exp_name: iql-s4r1
 graph_name: long_edge
 track_wandb: true
 wandb_project: MAP-RL
 seed: 42
 
-# ---- 环境 ----
 env:
   graph_path: graphs/long_edge.json
   enable_wait: false
@@ -23,9 +20,8 @@ env:
     truncate_by_time: true
     penalised_factor: 1.5
 
-# ---- 算法 ----
 algo:
-  sync_replay: true    # 启用经验回放同步
+  sync_replay: true
   lr: 0.00075
   gamma: 0.95
   tau: 0.001
@@ -36,7 +32,6 @@ algo:
   use_double_dqn: true
   shared_policy: false
 
-# ---- 训练 ----
 training:
   num_envs: 4
   use_subproc: true

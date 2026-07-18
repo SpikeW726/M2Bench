@@ -1,6 +1,3 @@
-# BEAU / LongEdge — 与 configs/experiments/beau/happo_beau_longedge.yaml 对齐
-# 用法: python evaluators/test.py --model <run>/final --env_config configs/eval/beau/beau_longedge.yaml
-
 env_type: beau
 
 env:

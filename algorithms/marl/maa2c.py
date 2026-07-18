@@ -10,17 +10,11 @@ from configs.algo_configs import MAA2CParams
 from policies.marl.marl_base import MultiAgentPolicy
 from data.batch import RolloutBatch
 
-
 class MAA2CAlgo(A2CBase, CentralizedCriticMixin):
-    """MAA2C: 参数共享 + Centralized Critic + 双优化器。
+    """Multi-agent A2C with shared actors and a centralized critic.
 
-    继承 A2CBase 的默认 hook（vanilla PG + MSE + 无 KL stopping），
-    通过 CentralizedCriticMixin 获得 CTDE prepare_batch。
-
-    override:
-    - prepare_batch → _prepare_batch_ctde (CTDE)
-    - _eval_policy → evaluate_actions_flat (参数共享)
-    - _do_optimizer_step → 双优化器
+    Actor and critic use separate optimizers. The CTDE mixin appends agent
+    identity to centralized state and prepares one merged training batch.
     """
 
     def __init__(
@@ -57,19 +51,14 @@ class MAA2CAlgo(A2CBase, CentralizedCriticMixin):
                 total_iters=critic_decay,
             )
 
-    # ====================================================================
-    #                     CTDE prepare_batch
-    # ====================================================================
+    # CTDE prepare_batch.
 
     def prepare_batch(self, batch_dict: Dict[str, RolloutBatch]) -> RolloutBatch:
         return self._prepare_batch_ctde(batch_dict)
 
-    # ====================================================================
-    #                     Hook Overrides
-    # ====================================================================
+    # Hook Overrides.
 
     def _eval_policy(self, mb, _any_rnn):
-        """参数共享 policy，使用 _flat 变体。"""
         if self.is_recurrent:
             new_log_prob, entropy = self.policy.evaluate_actions_sequence_flat(
                 mb.obs, mb.act, mb.rnn_hidden,
@@ -91,7 +80,6 @@ class MAA2CAlgo(A2CBase, CentralizedCriticMixin):
         return new_log_prob, entropy
 
     def _do_optimizer_step(self, pg_loss, ent_loss, v_loss, update_actor=True):
-        """双优化器 step。"""
         actor_loss = pg_loss - self.ent_coef * ent_loss
         grad_info = {}
 

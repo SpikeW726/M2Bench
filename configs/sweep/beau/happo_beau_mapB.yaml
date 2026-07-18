@@ -1,6 +1,3 @@
-# WandB sweep：happo + BEAU @ grid（6 agents）
-# 建议:  --eval-config configs/eval/beau/beau_grid.yaml
-
 method: bayes
 
 metric:
